@@ -33,6 +33,7 @@ Node.js (ESM) gateway that connects a WhatsApp account via Baileys v7 and forwar
     "timestampMs": 1738560000000,
     "messageType": "extendedTextMessage",
     "text": "Hello world",
+    "mentionedJids": ["123@s.whatsapp.net"],
     "quoted": {
       "messageId": "wamid-quoted",
       "senderId": "555@s.whatsapp.net",

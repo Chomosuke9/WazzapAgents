@@ -19,6 +19,7 @@ import json
 from typing import Any, Dict
 
 import websockets
+from websockets.legacy.auth import WebSocketServerProtocol
 from pydantic import BaseModel
 
 
@@ -37,7 +38,7 @@ class IncomingMessage(BaseModel):
     attachments: list[Dict[str, Any]] = []
 
 
-async def handler(websocket: websockets.WebSocketServerProtocol):
+async def handler(websocket:WebSocketServerProtocol):
     async for raw in websocket:
         try:
             event = json.loads(raw)
