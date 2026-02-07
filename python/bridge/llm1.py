@@ -59,6 +59,7 @@ def _truncate_message(msg: WhatsAppMessage, max_chars: int) -> WhatsAppMessage:
     sender=msg.sender,
     text=_truncate_text(msg.text, max_chars),
     media=msg.media,
+    message_id=msg.message_id,
     role=msg.role,
   )
 

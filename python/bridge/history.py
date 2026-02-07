@@ -11,6 +11,7 @@ class WhatsAppMessage:
   sender: str  # display name or phone
   text: Optional[str] = None
   media: Optional[str] = None  # e.g., "media", "sticker", "image", "video"
+  message_id: Optional[str] = None
   role: str = "user"  # "user" | "assistant"
 
 
