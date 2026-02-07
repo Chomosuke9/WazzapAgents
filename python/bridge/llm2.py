@@ -9,13 +9,13 @@ from langchain_openai import ChatOpenAI
 
 try:
   from .history import WhatsAppMessage, format_history
-  from .log import setup_logging, trunc, dump_json
+  from .log import setup_logging, trunc, dump_json, env_flag
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
   sys.path.append(str(Path(__file__).resolve().parent.parent))
   from bridge.history import WhatsAppMessage, format_history  # type: ignore
-  from bridge.log import setup_logging, trunc, dump_json  # type: ignore
+  from bridge.log import setup_logging, trunc, dump_json, env_flag  # type: ignore
 
 logger = setup_logging()
 SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent.parent / "systemprompt.txt"
@@ -105,26 +105,37 @@ async def generate_reply(
   llm = get_llm2()
   base_system = (system or _load_system_prompt()).strip()
   rendered_system = _render_system_prompt(base_system, reply_candidates)
-  msgs = [SystemMessage(content=rendered_system)]
-  hist_text = format_history(history)
+  history_list = list(history)
+  hist_text = format_history(history_list)
   current_line = format_history([current])
-  msgs.append(
-    HumanMessage(
-      content=(
-        "WhatsApp context (latest last):\n"
-        f"{hist_text}\n"
-        "Current WhatsApp message:\n"
-        f"{current_line}"
-      )
-    )
+  user_content = (
+    "WhatsApp context (latest last):\n"
+    f"{hist_text}\n"
+    "Current WhatsApp message:\n"
+    f"{current_line}"
   )
+  msgs = [SystemMessage(content=rendered_system)]
+  msgs.append(HumanMessage(content=user_content))
   if tools:
     llm = llm.bind_tools(tools)
+  if env_flag("BRIDGE_LOG_PROMPT_FULL"):
+    logger.info(
+      "LLM2 prompt full",
+      extra={
+        "chat_id": current.sender,
+        "model": os.getenv("LLM2_MODEL", "gpt-4.1"),
+        "messages": [
+          {"role": "system", "content": rendered_system},
+          {"role": "user", "content": user_content},
+        ],
+        "reply_candidates": reply_candidates or [],
+      },
+    )
   logger.debug(
     "LLM2 invoke",
     extra={
       "chat_id": current.sender,
-      "history_len": len(list(history)),
+      "history_len": len(history_list),
       "reply_candidates_count": len(reply_candidates or []),
       "system_chars": len(rendered_system),
       "prompt_preview": trunc(hist_text + '\n' + current_line, 800),

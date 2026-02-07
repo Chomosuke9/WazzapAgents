@@ -178,8 +178,13 @@ async def handle_socket(ws):
         )
         burst_messages = [_payload_to_message(payload) for payload in payloads]
         current = _build_burst_current(payloads)
+        llm1_history = list(history)
+        llm1_current = burst_messages[-1]
+        if len(burst_messages) > 1:
+          # Let LLM1 see burst context as individual messages so char limit applies per message.
+          llm1_history.extend(burst_messages[:-1])
 
-        decision = await call_llm1(history, current)
+        decision = await call_llm1(llm1_history, llm1_current)
         for msg in burst_messages:
           _append_history(history, msg)
         if not decision.should_response:

@@ -33,10 +33,35 @@ LOG_RECORD_BUILTINS = {
 }
 
 
+def _parse_positive_int(raw: str | None, default: int) -> int:
+  if raw is None:
+    return default
+  try:
+    parsed = int(raw)
+  except (TypeError, ValueError):
+    return default
+  return parsed if parsed > 0 else default
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+  raw = os.getenv(name)
+  if raw is None:
+    return default
+  return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _level_from_env() -> int:
   load_dotenv()
   level = os.getenv("BRIDGE_LOG_LEVEL", "INFO").upper()
   return getattr(logging, level, logging.INFO)
+
+
+def _extras_limit_from_env() -> int:
+  load_dotenv()
+  return _parse_positive_int(os.getenv("BRIDGE_LOG_EXTRAS_LIMIT"), 4000)
+
+
+EXTRAS_JSON_LIMIT = _extras_limit_from_env()
 
 
 class ExtraFormatter(logging.Formatter):
@@ -48,7 +73,7 @@ class ExtraFormatter(logging.Formatter):
     if record.levelno <= logging.INFO:
       extras = {k: v for k, v in record.__dict__.items() if k not in LOG_RECORD_BUILTINS}
       if extras:
-        base = f"{base} | extras={dump_json(extras, limit=4000)}"
+        base = f"{base} | extras={dump_json(extras, limit=EXTRAS_JSON_LIMIT)}"
     return base
 
 

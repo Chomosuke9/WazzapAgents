@@ -12,13 +12,13 @@ from pydantic import BaseModel, Field, ValidationError
 
 try:
   from .history import WhatsAppMessage, format_history
-  from .log import setup_logging, trunc, dump_json
+  from .log import setup_logging, trunc, dump_json, env_flag
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
   sys.path.append(str(Path(__file__).resolve().parent.parent))
   from bridge.history import WhatsAppMessage, format_history  # type: ignore
-  from bridge.log import setup_logging, trunc, dump_json  # type: ignore
+  from bridge.log import setup_logging, trunc, dump_json, env_flag  # type: ignore
 
 logger = setup_logging()
 
@@ -313,6 +313,19 @@ async def call_llm1(
     headers = {"Content-Type": "application/json"}
     if api_key:
       headers["Authorization"] = f"Bearer {api_key}"
+
+    if env_flag("BRIDGE_LOG_PROMPT_FULL"):
+      logger.info(
+        "LLM1 prompt full",
+        extra={
+          **ctx,
+          "history_limit": history_limit,
+          "history_used": len(prompt_history),
+          "message_max_chars": message_max_chars,
+          "base_url": _chat_base_url(),
+          "request_payload": payload,
+        },
+      )
 
     logger.debug(
       "LLM1 request start",
