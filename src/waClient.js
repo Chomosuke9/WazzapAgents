@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs-extra';
+import { spawn } from 'child_process';
 import makeWASocket, {
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
@@ -63,6 +64,23 @@ function mapMediaKind(contentType) {
   if (contentType === 'documentMessage') return 'document';
   if (contentType === 'stickerMessage') return 'sticker';
   return 'unknown';
+}
+
+function printQrInTerminal(qr) {
+  try {
+    const proc = spawn('qrencode', ['-t', 'ANSIUTF8', '-o', '-']);
+    proc.stdin.write(qr);
+    proc.stdin.end();
+    proc.stdout.on('data', (chunk) => process.stdout.write(chunk.toString()));
+    proc.stderr.on('data', (chunk) => logger.debug({ qrErr: chunk.toString() }, 'qrencode stderr'));
+    proc.on('error', (err) => {
+      logger.warn({ err }, 'qrencode not available; showing raw QR string');
+      console.log('QR:', qr);
+    });
+  } catch (err) {
+    logger.warn({ err }, 'failed to render QR; showing raw');
+    console.log('QR:', qr);
+  }
 }
 
 function unwrapMessage(message) {
@@ -346,7 +364,6 @@ async function startWhatsApp() {
   sock = makeWASocket({
     version,
     auth: state,
-    printQRInTerminal: true,
     syncFullHistory: false,
     browser: ['WazzapAgents', 'Chrome', '1.0'],
     markOnlineOnConnect: false,
@@ -359,6 +376,7 @@ async function startWhatsApp() {
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
       logger.info('Scan QR to authenticate (valid for 20 seconds)');
+      printQrInTerminal(qr);
     }
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
