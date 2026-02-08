@@ -13,12 +13,14 @@ from pydantic import BaseModel, Field, ValidationError
 try:
   from .history import WhatsAppMessage, format_history
   from .log import setup_logging, trunc, dump_json, env_flag
+  from .media import build_visual_parts, llm1_media_enabled, redact_multimodal_content
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
   sys.path.append(str(Path(__file__).resolve().parent.parent))
   from bridge.history import WhatsAppMessage, format_history  # type: ignore
   from bridge.log import setup_logging, trunc, dump_json, env_flag  # type: ignore
+  from bridge.media import build_visual_parts, llm1_media_enabled, redact_multimodal_content  # type: ignore
 
 logger = setup_logging()
 
@@ -114,17 +116,27 @@ def build_llm1_prompt(
   *,
   history_limit: int,
   message_max_chars: int,
+  current_media_parts: Optional[list[dict]] = None,
+  current_media_notes: Optional[list[str]] = None,
 ):
   history_list = list(history)[-history_limit:]
   prompt_history = [_truncate_message(msg, message_max_chars) for msg in history_list]
   current_prompt_msg = _truncate_message(current, message_max_chars)
   hist_text = format_history(prompt_history) or "(no history)"
   current_line = format_history([current_prompt_msg])
+  current_content: str | list[dict] = f"Current message:\n{current_line}\n"
+  if current_media_notes:
+    current_content += "\nVisual attachments:\n" + "\n".join(
+      f"- {note}" for note in current_media_notes
+    )
+  if current_media_parts:
+    current_content = [{"type": "text", "text": current_content}]
+    current_content.extend(current_media_parts)
   return [
     {
       "role": "system",
       "content": f"""
-You are a WhatsApp triage agent. Decide if we should respond.
+You are a WhatsApp router agent. Decide if we should respond.
 Your name is Vivy. Sometimes people will refer you as Vy, Ivy, Vivi, etc.
 Call the tool `llm_should_response` exactly once with your decision.
 Do not write any other text outside the tool call.
@@ -149,10 +161,11 @@ Stay silent when:
 The human rule: Humans in group chats don’t respond to every single message. Neither should you.
 Quality > quantity. If you wouldn’t send it in a real group chat with friends, don’t send it.
 Participate, don’t dominate.
+Note: if you saw a chat from "Vivy" or "~Vivy", it's most likely you.
       """.strip(),
     },
     {"role": "user", "content": f"Older message:\n{hist_text}"},
-    {"role": "user", "content": f"Current message:\n{current_line}\n"},
+    {"role": "user", "content": current_content},
   ]
 
 
@@ -259,12 +272,44 @@ def _extract_tool_args(tool_call) -> dict:
   return raw_args or {}
 
 
+def _content_to_text(content) -> str:
+  if isinstance(content, str):
+    return content
+  if isinstance(content, list):
+    parts: list[str] = []
+    for item in content:
+      if not isinstance(item, dict):
+        parts.append(str(item))
+        continue
+      if item.get("type") == "text":
+        parts.append(str(item.get("text") or ""))
+        continue
+      if item.get("type") == "image_url":
+        parts.append("[image]")
+        continue
+      parts.append(f"[{item.get('type') or 'part'}]")
+    return "\n".join(parts)
+  return str(content)
+
+
+def _redact_messages_for_log(messages: list[dict]) -> list[dict]:
+  redacted: list[dict] = []
+  for msg in messages:
+    if not isinstance(msg, dict):
+      continue
+    copied = dict(msg)
+    copied["content"] = redact_multimodal_content(copied.get("content"))
+    redacted.append(copied)
+  return redacted
+
+
 async def call_llm1(
   history: Iterable[WhatsAppMessage],
   current: WhatsAppMessage,
   *,
   timeout: float = 8.0,
   client: Optional[httpx.AsyncClient] = None,
+  current_payload: dict | None = None,
 ) -> LLM1Decision:
   # If LLM1 is not configured, allow responding by default.
   if not os.getenv("LLM1_ENDPOINT"):
@@ -275,11 +320,17 @@ async def call_llm1(
   message_max_chars = _llm1_message_max_chars()
   history_list = list(history)
   prompt_history = history_list[-history_limit:]
+  current_media_parts: list[dict] = []
+  current_media_notes: list[str] = []
+  if llm1_media_enabled():
+    current_media_parts, current_media_notes = build_visual_parts(current_payload)
   prompt = build_llm1_prompt(
     prompt_history,
     current,
     history_limit=history_limit,
     message_max_chars=message_max_chars,
+    current_media_parts=current_media_parts,
+    current_media_notes=current_media_notes,
   )
   model_name = os.getenv("LLM1_MODEL", "gpt-4o-mini")
   api_key = os.getenv("LLM1_API_KEY") or os.getenv("OPENAI_API_KEY")
@@ -298,7 +349,9 @@ async def call_llm1(
   ctx = _llm1_ctx(current, model=model_name, url=url)
 
   try:
-    prompt_text = "\n".join([m.get("content", "") for m in prompt if isinstance(m, dict)])
+    prompt_text = "\n".join(
+      [_content_to_text(m.get("content", "")) for m in prompt if isinstance(m, dict)]
+    )
 
     payload = {
       "model": model_name,
@@ -315,6 +368,8 @@ async def call_llm1(
       headers["Authorization"] = f"Bearer {api_key}"
 
     if env_flag("BRIDGE_LOG_PROMPT_FULL"):
+      log_payload = dict(payload)
+      log_payload["messages"] = _redact_messages_for_log(prompt)
       logger.info(
         "LLM1 prompt full",
         extra={
@@ -323,7 +378,8 @@ async def call_llm1(
           "history_used": len(prompt_history),
           "message_max_chars": message_max_chars,
           "base_url": _chat_base_url(),
-          "request_payload": payload,
+          "media_parts": len(current_media_parts),
+          "request_payload": log_payload,
         },
       )
 
@@ -337,6 +393,7 @@ async def call_llm1(
         "timeout_s": timeout,
         "prompt_chars": len(prompt_text),
         "prompt_preview": trunc(prompt_text, 300),
+        "media_parts": len(current_media_parts),
         "base_url": _chat_base_url(),
         "tool_name": LLM1_TOOL["function"]["name"],
       },

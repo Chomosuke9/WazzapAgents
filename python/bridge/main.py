@@ -184,7 +184,11 @@ async def handle_socket(ws):
           # Let LLM1 see burst context as individual messages so char limit applies per message.
           llm1_history.extend(burst_messages[:-1])
 
-        decision = await call_llm1(llm1_history, llm1_current)
+        decision = await call_llm1(
+          llm1_history,
+          llm1_current,
+          current_payload=last_payload,
+        )
         for msg in burst_messages:
           _append_history(history, msg)
         if not decision.should_response:
@@ -206,6 +210,7 @@ async def handle_socket(ws):
           history,
           current,
           reply_candidates=reply_candidates if reply_candidates else None,
+          current_payload=last_payload,
         )
         reply_choices = _extract_reply_choices(
           reply_msg,
