@@ -61,6 +61,10 @@ def _truncate_message(msg: WhatsAppMessage, max_chars: int) -> WhatsAppMessage:
     sender=msg.sender,
     text=_truncate_text(msg.text, max_chars),
     media=msg.media,
+    quoted_message_id=msg.quoted_message_id,
+    quoted_sender=msg.quoted_sender,
+    quoted_text=_truncate_text(msg.quoted_text, max_chars),
+    quoted_media=msg.quoted_media,
     message_id=msg.message_id,
     role=msg.role,
   )
@@ -161,7 +165,7 @@ Stay silent when:
 The human rule: Humans in group chats don’t respond to every single message. Neither should you.
 Quality > quantity. If you wouldn’t send it in a real group chat with friends, don’t send it.
 Participate, don’t dominate.
-If you have not sent any message for past 20-30 message, it's fine to participate without any context.
+If you have not sent any message for past around 20(30 if most of messages is short) message, it's fine to participate without any context.
 Note: if you saw a chat from "Vivy" or "~Vivy", it's most likely you.
       """.strip(),
     },

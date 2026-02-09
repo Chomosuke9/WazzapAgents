@@ -19,6 +19,8 @@ let sock;
 const messageCache = new Map(); // simple in-memory store for quoting outbound
 const MAX_CACHE = 200;
 const groupNameCache = new Map();
+const participantNameCache = new Map();
+const groupParticipantNameCache = new Map();
 
 function rememberMessage(msg) {
   if (!msg?.key?.id) return;
@@ -27,6 +29,99 @@ function rememberMessage(msg) {
     const firstKey = messageCache.keys().next().value;
     messageCache.delete(firstKey);
   }
+}
+
+function cacheSetBounded(map, key, value, maxSize = 5000) {
+  map.set(key, value);
+  if (map.size > maxSize) {
+    const firstKey = map.keys().next().value;
+    map.delete(firstKey);
+  }
+}
+
+function normalizeJid(jid) {
+  if (!jid || typeof jid !== 'string') return null;
+  try {
+    return jidNormalizedUser(jid);
+  } catch {
+    return jid;
+  }
+}
+
+function rememberParticipantName(jid, name) {
+  if (!jid || typeof jid !== 'string') return;
+  if (!name || typeof name !== 'string') return;
+  const cleaned = name.trim();
+  if (!cleaned) return;
+
+  cacheSetBounded(participantNameCache, jid, cleaned);
+  const normalized = normalizeJid(jid);
+  if (normalized) cacheSetBounded(participantNameCache, normalized, cleaned);
+}
+
+function lookupParticipantName(jid) {
+  if (!jid || typeof jid !== 'string') return null;
+  const direct = participantNameCache.get(jid);
+  if (direct) return direct;
+  const normalized = normalizeJid(jid);
+  if (!normalized) return null;
+  return participantNameCache.get(normalized) || null;
+}
+
+function groupParticipantKey(chatId, participantJid) {
+  const normalized = normalizeJid(participantJid) || participantJid;
+  return `${chatId}::${normalized}`;
+}
+
+function participantDisplayName(participant) {
+  if (!participant || typeof participant !== 'object') return null;
+  const candidates = [
+    participant.name,
+    participant.notify,
+    participant.pushName,
+    participant.verifiedName,
+    participant.vname,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    const cleaned = candidate.trim();
+    if (cleaned) return cleaned;
+  }
+  return null;
+}
+
+async function getGroupParticipantName(chatId, participantJid) {
+  if (!sock || !chatId || !participantJid) return null;
+  const key = groupParticipantKey(chatId, participantJid);
+  const cached = groupParticipantNameCache.get(key);
+  if (cached) return cached;
+
+  const fallback = lookupParticipantName(participantJid);
+  if (fallback) {
+    cacheSetBounded(groupParticipantNameCache, key, fallback);
+    return fallback;
+  }
+
+  try {
+    const meta = await sock.groupMetadata(chatId);
+    const participants = meta?.participants || [];
+    for (const participant of participants) {
+      const pid = participant?.id;
+      if (!pid) continue;
+      const name = participantDisplayName(participant);
+      if (!name) continue;
+      rememberParticipantName(pid, name);
+      cacheSetBounded(groupParticipantNameCache, groupParticipantKey(chatId, pid), name);
+    }
+  } catch (err) {
+    logger.debug({ err, chatId, participantJid }, 'failed resolving group participant name');
+  }
+
+  const resolved = lookupParticipantName(participantJid);
+  if (resolved) {
+    cacheSetBounded(groupParticipantNameCache, key, resolved);
+  }
+  return resolved || null;
 }
 
 function inferExtension(mime) {
@@ -279,7 +374,7 @@ async function saveMedia(contentType, content, messageId) {
   };
 }
 
-function extractQuoted(messageOrContent) {
+async function extractQuoted(messageOrContent, chatId) {
   const ctx = extractContextInfo(messageOrContent);
   if (!ctx || !ctx.quotedMessage) return null;
   const { contentType: qType, message: qMsg } = unwrapMessage(ctx.quotedMessage);
@@ -288,9 +383,33 @@ function extractQuoted(messageOrContent) {
   const locationText = location ? formatLocationText(location) : null;
   const qText = extractText(qMsg);
   const text = [qText, locationText].filter(Boolean).join('\n') || null;
+  let senderId = ctx.participant ? normalizeJid(ctx.participant) : null;
+  let senderName = null;
+  const quotedMsg = ctx.stanzaId ? messageCache.get(ctx.stanzaId) : null;
+
+  if (quotedMsg) {
+    const quotedFromId = quotedMsg.key?.participant || quotedMsg.key?.remoteJid;
+    if (!senderId && quotedFromId) {
+      senderId = normalizeJid(quotedFromId);
+    }
+    const quotedPushName = quotedMsg.pushName;
+    if (typeof quotedPushName === 'string' && quotedPushName.trim()) {
+      senderName = quotedPushName.trim();
+      if (senderId) rememberParticipantName(senderId, senderName);
+      if (quotedFromId) rememberParticipantName(quotedFromId, senderName);
+    }
+  }
+
+  if (!senderName && senderId) senderName = lookupParticipantName(senderId);
+  if (!senderName && ctx.participant) senderName = lookupParticipantName(ctx.participant);
+  if (!senderName && chatId?.endsWith('@g.us') && senderId) {
+    senderName = await getGroupParticipantName(chatId, senderId);
+  }
+
   return {
     messageId: ctx.stanzaId,
-    senderId: ctx.participant,
+    senderId,
+    senderName: senderName || senderId,
     text,
     type: qType,
     location,
@@ -305,6 +424,9 @@ async function handleIncomingMessage(msg) {
 
   const fromId = msg.key.participant || msg.key.remoteJid;
   const senderId = jidNormalizedUser(fromId);
+  const senderName = msg.pushName || senderId;
+  rememberParticipantName(fromId, msg.pushName || '');
+  rememberParticipantName(senderId, senderName);
   const chatId = remoteJid;
   const isGroup = chatId.endsWith('@g.us');
   const chatName = isGroup ? await getGroupName(chatId) : (msg.pushName || chatId);
@@ -315,7 +437,7 @@ async function handleIncomingMessage(msg) {
   const locationText = location ? formatLocationText(location) : null;
   const baseText = extractText(innerMessage);
   const text = [baseText, locationText].filter(Boolean).join('\n') || null;
-  const quoted = extractQuoted(innerMessage);
+  const quoted = await extractQuoted(innerMessage, chatId);
   const mentionedJids = extractMentionedJids(innerMessage);
 
   const attachments = [];
@@ -341,7 +463,7 @@ async function handleIncomingMessage(msg) {
     chatId,
     chatName,
     senderId,
-    senderName: msg.pushName || senderId,
+    senderName,
     isGroup,
     timestampMs: Number(msg.messageTimestamp) * 1000,
     messageType: contentType,

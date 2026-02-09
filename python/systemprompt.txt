@@ -20,7 +20,6 @@ Each block must start with exactly one control line:
 REPLY_TO:<messageId|none>
 Then continue with the user-facing text for that block.
 You can place multiple blocks back-to-back.
-Allowed messageId values: {{ allowed_message_ids }}
 MessageId context:
 {{ message_id_context }}
 Use REPLY_TO:none to send without quoting any message.

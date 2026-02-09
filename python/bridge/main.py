@@ -63,12 +63,82 @@ def _append_history(buf: Deque[WhatsAppMessage], msg: WhatsAppMessage) -> None:
     buf.popleft()
 
 
+def _normalize_preview_text(value: str | None, limit: int = 220) -> str:
+  text = " ".join((value or "").split())
+  if len(text) <= limit:
+    return text
+  if limit <= 3:
+    return text[:limit]
+  return f"{text[:limit - 3]}..."
+
+
+def _quoted_from_payload(payload: dict) -> dict:
+  quoted = payload.get("quoted")
+  if isinstance(quoted, dict):
+    return quoted
+  return {}
+
+
+def _infer_quoted_media(quoted: dict) -> str | None:
+  q_type = str(quoted.get("type") or "").strip().lower()
+  if not q_type:
+    return None
+  if "sticker" in q_type:
+    return "sticker"
+  if "image" in q_type:
+    return "image"
+  if "video" in q_type:
+    return "video"
+  if "audio" in q_type:
+    return "audio"
+  if "document" in q_type:
+    return "document"
+  return None
+
+
+def _quoted_sender(quoted: dict) -> str | None:
+  sender = quoted.get("senderName") or quoted.get("senderId")
+  if not sender:
+    return None
+  return str(sender)
+
+
+def _quoted_preview(payload: dict) -> str | None:
+  quoted = _quoted_from_payload(payload)
+  if not quoted:
+    return None
+
+  parts: list[str] = []
+  sender = _quoted_sender(quoted)
+  quoted_id = quoted.get("messageId")
+  quoted_text = _normalize_preview_text(quoted.get("text"))
+  quoted_media = _infer_quoted_media(quoted)
+
+  if sender:
+    parts.append(f"from={sender}")
+  if quoted_id:
+    parts.append(f"id={quoted_id}")
+  if quoted_media:
+    parts.append(f"media={quoted_media}")
+  if quoted_text:
+    parts.append(f"text={quoted_text}")
+
+  if not parts:
+    return "reply_to:(present)"
+  return f"reply_to: {' | '.join(parts)}"
+
+
 def _payload_to_message(payload: dict) -> WhatsAppMessage:
+  quoted = _quoted_from_payload(payload)
   return WhatsAppMessage(
     timestamp_ms=int(payload["timestampMs"]),
     sender=payload.get("senderName") or payload.get("senderId") or payload.get("chatId"),
     text=payload.get("text"),
     media=_infer_media(payload),
+    quoted_message_id=str(quoted.get("messageId")) if quoted.get("messageId") else None,
+    quoted_sender=_quoted_sender(quoted),
+    quoted_text=quoted.get("text"),
+    quoted_media=_infer_quoted_media(quoted),
     message_id=str(payload.get("messageId")) if payload.get("messageId") else None,
     role="user",
   )
@@ -83,18 +153,20 @@ def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
   for item in payloads:
     msg_id = str(item.get("messageId") or "unknown")
     sender = item.get("senderName") or item.get("senderId") or item.get("chatId") or "unknown"
-    text = (item.get("text") or "").strip()
+    text = _normalize_preview_text(item.get("text"))
     media = _infer_media(item)
+    quoted = _quoted_preview(item)
+    suffix = f" | {quoted}" if quoted else ""
     if text and media:
-      lines.append(f"- (id={msg_id}) {sender}: [{media}] {text}")
+      lines.append(f"- (id={msg_id}) {sender}: [{media}] {text}{suffix}")
       continue
     if text:
-      lines.append(f"- (id={msg_id}) {sender}: {text}")
+      lines.append(f"- (id={msg_id}) {sender}: {text}{suffix}")
       continue
     if media:
-      lines.append(f"- (id={msg_id}) {sender}: [{media}]")
+      lines.append(f"- (id={msg_id}) {sender}: [{media}]{suffix}")
       continue
-    lines.append(f"- (id={msg_id}) {sender}: (empty)")
+    lines.append(f"- (id={msg_id}) {sender}: (empty){suffix}")
 
   burst_text = (
     f"Burst messages ({len(payloads)} total, latest last):\n" + "\n".join(lines)
@@ -122,6 +194,8 @@ def _collect_reply_candidates(history: Deque[WhatsAppMessage]) -> list[dict[str,
     seen_ids.add(message_id)
     sender = (msg.sender or "unknown").strip() or "unknown"
     preview = " ".join((msg.text or "").split())
+    if not preview and msg.quoted_text:
+      preview = f"reply: {' '.join(msg.quoted_text.split())}"
     if not preview:
       preview = "(no text)"
     if len(preview) > 100:
@@ -136,6 +210,34 @@ def _collect_reply_candidates(history: Deque[WhatsAppMessage]) -> list[dict[str,
 
   candidates.reverse()
   return candidates
+
+
+def _build_reply_aliases(
+  reply_candidates: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], dict[str, str]]:
+  prompt_candidates: list[dict[str, str]] = []
+  alias_to_message_id: dict[str, str] = {}
+
+  for index, item in enumerate(reply_candidates, start=1):
+    message_id = (item.get("message_id") or "").strip()
+    if not message_id:
+      continue
+
+    alias = f"{index:02d}"
+    sender = item.get("sender", "unknown")
+    preview = item.get("preview", "(no text)")
+    prompt_candidates.append(
+      {
+        "message_id": alias,
+        "sender": sender,
+        "preview": preview,
+      }
+    )
+    alias_to_message_id[alias] = message_id
+    # Keep raw id as accepted token for backward compatibility.
+    alias_to_message_id[message_id] = message_id
+
+  return prompt_candidates, alias_to_message_id
 
 
 async def handle_socket(ws):
@@ -202,6 +304,7 @@ async def handle_socket(ws):
           return
 
         reply_candidates = _collect_reply_candidates(history)
+        prompt_reply_candidates, reply_alias_map = _build_reply_aliases(reply_candidates)
         reply_candidate_ids = [
           entry["message_id"] for entry in reply_candidates if entry.get("message_id")
         ]
@@ -209,13 +312,14 @@ async def handle_socket(ws):
         reply_msg = await generate_reply(
           history,
           current,
-          reply_candidates=reply_candidates if reply_candidates else None,
+          reply_candidates=prompt_reply_candidates if prompt_reply_candidates else None,
           current_payload=last_payload,
         )
         reply_choices = _extract_reply_choices(
           reply_msg,
           fallback_reply_to=fallback_reply_to,
           allowed_reply_ids=set(reply_candidate_ids),
+          reply_alias_map=reply_alias_map,
         )
         if not reply_choices:
           logger.warning("[%s] llm2 returned empty reply", chat_id)
@@ -364,10 +468,15 @@ def _resolve_reply_target(
   *,
   fallback_reply_to: str | None,
   allowed_reply_ids: set[str],
+  reply_alias_map: dict[str, str] | None = None,
 ) -> str | None:
   lowered = token.lower()
   if lowered in {"none", "null", "no", "nil", "-"}:
     return None
+  if reply_alias_map:
+    mapped = reply_alias_map.get(token)
+    if mapped:
+      return mapped
   if allowed_reply_ids and token in allowed_reply_ids:
     return token
   return fallback_reply_to
@@ -378,6 +487,7 @@ def _extract_reply_choices(
   *,
   fallback_reply_to: str | None,
   allowed_reply_ids: set[str],
+  reply_alias_map: dict[str, str] | None = None,
 ) -> list[tuple[str, str | None]]:
   text = _extract_reply_text(msg)
   if not text:
@@ -408,6 +518,7 @@ def _extract_reply_choices(
       m.group(1).strip(),
       fallback_reply_to=fallback_reply_to,
       allowed_reply_ids=allowed_reply_ids,
+      reply_alias_map=reply_alias_map,
     )
 
   flush_current()
