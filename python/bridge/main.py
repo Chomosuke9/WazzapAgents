@@ -45,6 +45,7 @@ INCOMING_DEBOUNCE_SECONDS = _parse_positive_float(
 )
 INCOMING_BURST_MAX_SECONDS = 20.0
 logger = setup_logging()
+PROMPT_OVERIDE_TAG = re.compile(r"<prompt_overide>([\s\S]*?)</prompt_overide>", re.IGNORECASE)
 
 
 @dataclass
@@ -130,6 +131,7 @@ def _quoted_preview(payload: dict) -> str | None:
 
 def _payload_to_message(payload: dict) -> WhatsAppMessage:
   quoted = _quoted_from_payload(payload)
+  is_context_only = bool(payload.get("contextOnly"))
   return WhatsAppMessage(
     timestamp_ms=int(payload["timestampMs"]),
     sender=payload.get("senderName") or payload.get("senderId") or payload.get("chatId"),
@@ -139,7 +141,7 @@ def _payload_to_message(payload: dict) -> WhatsAppMessage:
     quoted_sender=_quoted_sender(quoted),
     quoted_text=quoted.get("text"),
     quoted_media=_infer_quoted_media(quoted),
-    message_id=str(payload.get("messageId")) if payload.get("messageId") else None,
+    message_id=None if is_context_only else (str(payload.get("messageId")) if payload.get("messageId") else None),
     role="user",
   )
 
@@ -240,6 +242,80 @@ def _build_reply_aliases(
   return prompt_candidates, alias_to_message_id
 
 
+def _clean_text(value) -> str:
+  if isinstance(value, str):
+    return value.strip()
+  return ""
+
+
+def _is_context_only_payload(payload: dict) -> bool:
+  return bool(payload.get("contextOnly"))
+
+
+def _payload_has_meaningful_content(payload: dict) -> bool:
+  if _is_context_only_payload(payload):
+    return True
+
+  text = _clean_text(payload.get("text"))
+  if text:
+    return True
+
+  attachments = payload.get("attachments") or []
+  if attachments:
+    return True
+
+  if payload.get("location"):
+    return True
+
+  quoted = payload.get("quoted")
+  if isinstance(quoted, dict):
+    if _clean_text(quoted.get("text")):
+      return True
+    if quoted.get("messageId") or quoted.get("type") or quoted.get("senderName") or quoted.get("senderId"):
+      return True
+
+  return False
+
+
+def _extract_prompt_overide(raw_description: str | None) -> tuple[str | None, str | None]:
+  text = raw_description if isinstance(raw_description, str) else ""
+  if not text.strip():
+    return None, None
+
+  prompt_blocks: list[str] = []
+
+  def _capture(match: re.Match) -> str:
+    block = _clean_text(match.group(1))
+    if block:
+      prompt_blocks.append(block)
+    return ""
+
+  cleaned = PROMPT_OVERIDE_TAG.sub(_capture, text)
+  cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+  prompt_overide = "\n\n".join(prompt_blocks) if prompt_blocks else None
+  return (cleaned or None), prompt_overide
+
+
+def _resolve_group_prompt_context(payload: dict) -> tuple[str | None, str | None]:
+  raw_description = payload.get("groupDescription")
+  cleaned_description, extracted_overide = _extract_prompt_overide(raw_description if isinstance(raw_description, str) else None)
+
+  payload_overide_raw = payload.get("groupPromptOveride")
+  if not payload_overide_raw:
+    payload_overide_raw = payload.get("groupPromptOverride")
+  payload_overide = _clean_text(payload_overide_raw) or None
+
+  if payload_overide and extracted_overide:
+    if payload_overide == extracted_overide:
+      merged_overide = payload_overide
+    else:
+      merged_overide = f"{payload_overide}\n\n{extracted_overide}"
+  else:
+    merged_overide = payload_overide or extracted_overide
+
+  return cleaned_description, merged_overide
+
+
 async def handle_socket(ws):
   per_chat: Dict[str, Deque[WhatsAppMessage]] = defaultdict(deque)
   per_chat_lock: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -255,7 +331,20 @@ async def handle_socket(ws):
     if not payloads:
       return
 
-    last_payload = payloads[-1]
+    non_empty_payloads = [payload for payload in payloads if _payload_has_meaningful_content(payload)]
+    if not non_empty_payloads:
+      chat_id = payloads[-1].get("chatId") if payloads else "unknown"
+      logger.debug(
+        "[%s] skipped empty batch",
+        chat_id,
+        extra={"batch_size": len(payloads), "message_ids": [p.get("messageId") for p in payloads]},
+      )
+      return
+
+    context_only_payloads = [payload for payload in non_empty_payloads if _is_context_only_payload(payload)]
+    actionable_payloads = [payload for payload in non_empty_payloads if not _is_context_only_payload(payload)]
+
+    last_payload = actionable_payloads[-1] if actionable_payloads else non_empty_payloads[-1]
     chat_id = last_payload["chatId"]
     history = per_chat[chat_id]
     lock = per_chat_lock[chat_id]
@@ -266,7 +355,10 @@ async def handle_socket(ws):
           chat_id,
           extra={
             "batch_size": len(payloads),
-            "message_ids": [p.get("messageId") for p in payloads],
+            "non_empty_batch_size": len(non_empty_payloads),
+            "actionable_batch_size": len(actionable_payloads),
+            "context_only_batch_size": len(context_only_payloads),
+            "message_ids": [p.get("messageId") for p in non_empty_payloads],
             "last_message_id": last_payload.get("messageId"),
             "type": last_payload.get("messageType"),
             "text": last_payload.get("text"),
@@ -278,10 +370,18 @@ async def handle_socket(ws):
             "raw_payload": last_payload,
           },
         )
-        burst_messages = [_payload_to_message(payload) for payload in payloads]
-        current = _build_burst_current(payloads)
+        for payload in context_only_payloads:
+          _append_history(history, _payload_to_message(payload))
+
+        if not actionable_payloads:
+          logger.debug("[%s] stored context-only updates", chat_id)
+          return
+
+        burst_messages = [_payload_to_message(payload) for payload in actionable_payloads]
+        current = _build_burst_current(actionable_payloads)
         llm1_history = list(history)
         llm1_current = burst_messages[-1]
+        group_description, prompt_overide = _resolve_group_prompt_context(last_payload)
         if len(burst_messages) > 1:
           # Let LLM1 see burst context as individual messages so char limit applies per message.
           llm1_history.extend(burst_messages[:-1])
@@ -290,6 +390,8 @@ async def handle_socket(ws):
           llm1_history,
           llm1_current,
           current_payload=last_payload,
+          group_description=group_description,
+          prompt_overide=prompt_overide,
         )
         for msg in burst_messages:
           _append_history(history, msg)
@@ -299,7 +401,7 @@ async def handle_socket(ws):
             chat_id,
             decision.reason,
             decision.confidence,
-            len(payloads),
+            len(actionable_payloads),
           )
           return
 
@@ -314,6 +416,8 @@ async def handle_socket(ws):
           current,
           reply_candidates=prompt_reply_candidates if prompt_reply_candidates else None,
           current_payload=last_payload,
+          group_description=group_description,
+          prompt_overide=prompt_overide,
         )
         reply_choices = _extract_reply_choices(
           reply_msg,
@@ -341,7 +445,7 @@ async def handle_socket(ws):
           chat_id,
           extra={
             "reply_preview": reply_choices[0][0][:120],
-            "batch_size": len(payloads),
+            "batch_size": len(actionable_payloads),
             "reply_count": len(reply_choices),
           },
         )

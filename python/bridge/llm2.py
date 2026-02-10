@@ -29,12 +29,15 @@ def _load_system_prompt() -> str:
   if _SYSTEM_PROMPT_CACHE is not None:
     return _SYSTEM_PROMPT_CACHE
   text = SYSTEM_PROMPT_PATH.read_text(encoding="utf-8").strip()
-  return text
+  _SYSTEM_PROMPT_CACHE = text
+  return _SYSTEM_PROMPT_CACHE
 
 
 def _render_system_prompt(
   base_system: str,
   reply_candidates: Optional[list[dict[str, str]]],
+  *,
+  prompt_overide: str | None = None,
 ) -> str:
   if reply_candidates:
     candidate_ids = [x.get("message_id", "") for x in reply_candidates if x.get("message_id")]
@@ -52,11 +55,21 @@ def _render_system_prompt(
     allowed_ids = "(none)"
     context = "(no candidate context)"
 
+  overide_text = (prompt_overide or "").strip()
   return (
     base_system
     .replace("{{ allowed_message_ids }}", allowed_ids)
     .replace("{{ message_id_context }}", context)
+    .replace("{{prompt_overide}}", overide_text)
+    .replace("{{ prompt_overide }}", overide_text)
   )
+
+
+def _group_description_block(group_description: str | None) -> str:
+  cleaned = (group_description or "").strip()
+  if cleaned:
+    return cleaned
+  return "(none)"
 
 
 def get_llm2() -> ChatOpenAI:
@@ -83,37 +96,42 @@ async def generate_reply(
   tools: Optional[list] = None,
   reply_candidates: Optional[list[dict[str, str]]] = None,
   current_payload: dict | None = None,
+  group_description: str | None = None,
+  prompt_overide: str | None = None,
 ):
   llm = get_llm2()
   base_system = (system or _load_system_prompt()).strip()
-  rendered_system = _render_system_prompt(base_system, reply_candidates)
-  history_list = list(history)
-  hist_text = format_history(history_list)
-  current_line = format_history([current])
-  user_content_text = (
-    "WhatsApp context (latest last):\n"
-    f"{hist_text}\n"
-    "Current WhatsApp message:\n"
-    f"{current_line}"
+  rendered_system = _render_system_prompt(
+    base_system,
+    reply_candidates,
+    prompt_overide=prompt_overide,
   )
+  history_list = list(history)
+  hist_text = format_history(history_list) or "(no history)"
+  current_line = format_history([current])
+  group_text = _group_description_block(group_description)
+  older_messages_content = f"Older messages:\n{hist_text}"
+  current_content_text = f"Current messages:\n{current_line}"
   media_parts: list[dict] = []
   media_notes: list[str] = []
   if llm2_media_enabled():
     media_parts, media_notes = build_visual_parts(current_payload)
   if media_notes:
-    user_content_text += "\n\nVisual attachments:\n" + "\n".join(
+    current_content_text += "\n\nVisual attachments:\n" + "\n".join(
       f"- {note}" for note in media_notes
     )
 
-  user_content: str | list[dict]
+  current_content: str | list[dict]
   if media_parts:
-    user_content = [{"type": "text", "text": user_content_text}]
-    user_content.extend(media_parts)
+    current_content = [{"type": "text", "text": current_content_text}]
+    current_content.extend(media_parts)
   else:
-    user_content = user_content_text
+    current_content = current_content_text
 
   msgs = [SystemMessage(content=rendered_system)]
-  msgs.append(HumanMessage(content=user_content))
+  msgs.append(HumanMessage(content=f"Group description:\n{group_text}"))
+  msgs.append(HumanMessage(content=older_messages_content))
+  msgs.append(HumanMessage(content=current_content))
   if tools:
     llm = llm.bind_tools(tools)
   if env_flag("BRIDGE_LOG_PROMPT_FULL"):
@@ -124,7 +142,9 @@ async def generate_reply(
         "model": os.getenv("LLM2_MODEL", "gpt-4.1"),
         "messages": [
           {"role": "system", "content": rendered_system},
-          {"role": "user", "content": redact_multimodal_content(user_content)},
+          {"role": "user", "content": f"Group description:\n{group_text}"},
+          {"role": "user", "content": older_messages_content},
+          {"role": "user", "content": redact_multimodal_content(current_content)},
         ],
         "reply_candidates": reply_candidates or [],
       },
@@ -137,7 +157,7 @@ async def generate_reply(
       "reply_candidates_count": len(reply_candidates or []),
       "system_chars": len(rendered_system),
       "prompt_preview": trunc(
-        hist_text + '\n' + current_line + f"\n[visual_attachments={len(media_parts)}]",
+        group_text + '\n' + hist_text + '\n' + current_line + f"\n[visual_attachments={len(media_parts)}]",
         800,
       ),
       "model": os.getenv("LLM2_MODEL", "gpt-4.1"),
@@ -158,7 +178,12 @@ async def generate_reply(
       )
       try:
         result = await llm.ainvoke(
-          [SystemMessage(content=rendered_system), HumanMessage(content=user_content_text)]
+          [
+            SystemMessage(content=rendered_system),
+            HumanMessage(content=f"Group description:\n{group_text}"),
+            HumanMessage(content=older_messages_content),
+            HumanMessage(content=current_content_text),
+          ]
         )
       except Exception as retry_err:
         logger.warning(

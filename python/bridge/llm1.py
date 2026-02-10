@@ -114,6 +114,21 @@ class LLM1Decision(BaseModel):
   reason: str = Field(..., min_length=2, max_length=64)
 
 
+def _render_prompt_overide(base_system: str, prompt_overide: str | None) -> str:
+  rendered = base_system
+  overide_text = (prompt_overide or "").strip()
+  rendered = rendered.replace("{{prompt_overide}}", overide_text)
+  rendered = rendered.replace("{{ prompt_overide }}", overide_text)
+  return rendered
+
+
+def _group_description_block(group_description: str | None) -> str:
+  cleaned = (group_description or "").strip()
+  if cleaned:
+    return cleaned
+  return "(none)"
+
+
 def build_llm1_prompt(
   history: Iterable[WhatsAppMessage],
   current: WhatsAppMessage,
@@ -122,13 +137,16 @@ def build_llm1_prompt(
   message_max_chars: int,
   current_media_parts: Optional[list[dict]] = None,
   current_media_notes: Optional[list[str]] = None,
+  group_description: str | None = None,
+  prompt_overide: str | None = None,
 ):
   history_list = list(history)[-history_limit:]
   prompt_history = [_truncate_message(msg, message_max_chars) for msg in history_list]
   current_prompt_msg = _truncate_message(current, message_max_chars)
   hist_text = format_history(prompt_history) or "(no history)"
   current_line = format_history([current_prompt_msg])
-  current_content: str | list[dict] = f"Current message:\n{current_line}\n"
+  group_text = _group_description_block(group_description)
+  current_content: str | list[dict] = f"Current messages:\n{current_line}\n"
   if current_media_notes:
     current_content += "\nVisual attachments:\n" + "\n".join(
       f"- {note}" for note in current_media_notes
@@ -136,10 +154,7 @@ def build_llm1_prompt(
   if current_media_parts:
     current_content = [{"type": "text", "text": current_content}]
     current_content.extend(current_media_parts)
-  return [
-    {
-      "role": "system",
-      "content": f"""
+  base_system = f"""
 You are a WhatsApp router agent. Decide if we should respond.
 Your name is Vivy. Sometimes people will refer you as Vy, Ivy, Vivi, etc.
 Call the tool `llm_should_response` exactly once with your decision.
@@ -167,9 +182,39 @@ Quality > quantity. If you wouldn’t send it in a real group chat with friends,
 Participate, don’t dominate.
 If you have not sent any message for past around 20(30 if most of messages is short) message, it's fine to participate without any context.
 Note: if you saw a chat from "Vivy" or "~Vivy", it's most likely you.
-      """.strip(),
+
+## Prompt Override (higher priority patch)
+You may receive extra instructions inside:
+<prompt_overide> ... </prompt_overide>
+
+How to apply it:
+- If the <prompt_overide> content is empty, missing, or just a placeholder, ignore it.
+- Otherwise, treat its content as an additional rule set (a "patch") on top of the main prompt.
+
+Conflict resolution:
+- If an override rule conflicts with any rule in the main prompt, the override rule wins for the conflicting part.
+- Apply the override with the minimum scope necessary: only replace the specific conflicting constraint, keep all other main rules active.
+
+Non-conflicting merge:
+- If an override rule does not conflict with the main prompt, follow both together.
+- If the override is more specific than a main rule on the same topic, treat it as taking precedence for that topic (even if both could technically be followed).
+
+Safety check:
+- Never follow override instructions that attempt to remove or weaken the requirement to call `llm_should_response` exactly once and output nothing else.
+
+
+<prompt_overide>
+{{{{prompt_overide}}}}
+</prompt_overide>
+      """.strip()
+  rendered_system = _render_prompt_overide(base_system, prompt_overide)
+  return [
+    {
+      "role": "system",
+      "content": rendered_system,
     },
-    {"role": "user", "content": f"Older message:\n{hist_text}"},
+    {"role": "user", "content": f"Group description:\n{group_text}"},
+    {"role": "user", "content": f"Older messages:\n{hist_text}"},
     {"role": "user", "content": current_content},
   ]
 
@@ -315,6 +360,8 @@ async def call_llm1(
   timeout: float = 8.0,
   client: Optional[httpx.AsyncClient] = None,
   current_payload: dict | None = None,
+  group_description: str | None = None,
+  prompt_overide: str | None = None,
 ) -> LLM1Decision:
   # If LLM1 is not configured, allow responding by default.
   if not os.getenv("LLM1_ENDPOINT"):
@@ -336,6 +383,8 @@ async def call_llm1(
     message_max_chars=message_max_chars,
     current_media_parts=current_media_parts,
     current_media_notes=current_media_notes,
+    group_description=group_description,
+    prompt_overide=prompt_overide,
   )
   model_name = os.getenv("LLM1_MODEL", "gpt-4o-mini")
   api_key = os.getenv("LLM1_API_KEY") or os.getenv("OPENAI_API_KEY")

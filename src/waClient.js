@@ -18,7 +18,8 @@ import wsClient from './wsClient.js';
 let sock;
 const messageCache = new Map(); // simple in-memory store for quoting outbound
 const MAX_CACHE = 200;
-const groupNameCache = new Map();
+const GROUP_METADATA_TTL_MS = 60_000;
+const groupMetadataCache = new Map();
 const participantNameCache = new Map();
 const groupParticipantNameCache = new Map();
 
@@ -90,6 +91,95 @@ function participantDisplayName(participant) {
   return null;
 }
 
+function parseGroupDescription(rawDescription) {
+  if (typeof rawDescription !== 'string' || !rawDescription.trim()) {
+    return { description: null, promptOveride: null };
+  }
+  const blocks = [];
+  const cleaned = rawDescription
+    .replace(/<prompt_overide>([\s\S]*?)<\/prompt_overide>/gi, (_, block) => {
+      const trimmed = typeof block === 'string' ? block.trim() : '';
+      if (trimmed) blocks.push(trimmed);
+      return '';
+    })
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return {
+    description: cleaned || null,
+    promptOveride: blocks.length > 0 ? blocks.join('\n\n') : null,
+  };
+}
+
+function pickGroupDescription(meta) {
+  const candidates = [
+    meta?.desc,
+    meta?.description,
+    meta?.descText,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') continue;
+    const trimmed = candidate.trim();
+    if (trimmed) return trimmed;
+  }
+  return null;
+}
+
+function normalizeGroupMetadata(meta, jid) {
+  const name = meta?.subject || jid;
+  const rawDescription = pickGroupDescription(meta);
+  const { description, promptOveride } = parseGroupDescription(rawDescription || '');
+  return {
+    name,
+    description,
+    promptOveride,
+  };
+}
+
+function getCachedGroupMetadata(jid) {
+  const cached = groupMetadataCache.get(jid);
+  if (!cached) return null;
+  if (Date.now() - cached.fetchedAt > GROUP_METADATA_TTL_MS) {
+    groupMetadataCache.delete(jid);
+    return null;
+  }
+  return cached.value;
+}
+
+function rememberGroupMetadata(jid, value) {
+  cacheSetBounded(groupMetadataCache, jid, {
+    fetchedAt: Date.now(),
+    value,
+  }, 2000);
+}
+
+function invalidateGroupMetadata(jid) {
+  if (!jid) return;
+  groupMetadataCache.delete(jid);
+}
+
+async function getGroupContext(jid, { forceRefresh = false } = {}) {
+  if (!jid) return { name: jid, description: null, promptOveride: null };
+  if (!sock) return { name: jid, description: null, promptOveride: null };
+
+  if (!forceRefresh) {
+    const cached = getCachedGroupMetadata(jid);
+    if (cached) return cached;
+  }
+
+  try {
+    const meta = await sock.groupMetadata(jid);
+    const normalized = normalizeGroupMetadata(meta, jid);
+    rememberGroupMetadata(jid, normalized);
+    return normalized;
+  } catch (err) {
+    logger.warn({ err, jid }, 'failed to fetch group metadata');
+    const cached = getCachedGroupMetadata(jid);
+    if (cached) return cached;
+    return { name: jid, description: null, promptOveride: null };
+  }
+}
+
 async function getGroupParticipantName(chatId, participantJid) {
   if (!sock || !chatId || !participantJid) return null;
   const key = groupParticipantKey(chatId, participantJid);
@@ -136,20 +226,6 @@ function inferExtension(mime) {
   if (mime.includes('pdf')) return 'pdf';
   if (mime.includes('zip')) return 'zip';
   return mime.split('/').pop();
-}
-
-async function getGroupName(jid) {
-  if (!sock) return jid;
-  if (groupNameCache.has(jid)) return groupNameCache.get(jid);
-  try {
-    const meta = await sock.groupMetadata(jid);
-    const name = meta?.subject || jid;
-    groupNameCache.set(jid, name);
-    return name;
-  } catch (err) {
-    logger.warn({ err, jid }, 'failed to fetch group metadata');
-    return jid;
-  }
 }
 
 function mapMediaKind(contentType) {
@@ -416,6 +492,92 @@ async function extractQuoted(messageOrContent, chatId) {
   };
 }
 
+function fallbackParticipantLabel(jid) {
+  if (!jid || typeof jid !== 'string') return 'unknown';
+  const local = jid.split('@')[0] || jid;
+  if (!local) return 'unknown';
+  const digits = local.replace(/\D/g, '');
+  if (digits.length >= 4) return digits.slice(-4);
+  return local;
+}
+
+async function resolveParticipantLabel(chatId, participantJid) {
+  const normalized = normalizeJid(participantJid) || participantJid;
+  if (!normalized) return 'unknown';
+  const fromCache = lookupParticipantName(normalized);
+  if (fromCache) return fromCache;
+  if (chatId?.endsWith('@g.us')) {
+    const fromGroup = await getGroupParticipantName(chatId, normalized);
+    if (fromGroup) return fromGroup;
+  }
+  return fallbackParticipantLabel(normalized);
+}
+
+function makeEventMessageId(prefix) {
+  const stamp = Date.now();
+  const rand = Math.random().toString(36).slice(2, 8);
+  return `${prefix}_${stamp}_${rand}`;
+}
+
+async function handleGroupParticipantsUpdate(update) {
+  if (!sock) return;
+  const chatId = update?.id;
+  if (!chatId || !chatId.endsWith('@g.us')) return;
+
+  const action = typeof update?.action === 'string' ? update.action.toLowerCase() : '';
+  const joinActions = new Set(['add', 'invite', 'join', 'approve']);
+  if (!joinActions.has(action)) return;
+
+  const participants = Array.isArray(update?.participants)
+    ? update.participants.filter((jid) => typeof jid === 'string' && jid.trim())
+    : [];
+  if (participants.length === 0) return;
+
+  const group = await getGroupContext(chatId, { forceRefresh: true });
+  const labels = [];
+  for (const participantJid of participants) {
+    const label = await resolveParticipantLabel(chatId, participantJid);
+    labels.push(label);
+  }
+  const uniqueLabels = Array.from(new Set(labels.filter(Boolean)));
+  const actorId = normalizeJid(update?.author) || null;
+  const actorName = actorId ? await resolveParticipantLabel(chatId, actorId) : null;
+
+  const joinedText = uniqueLabels.length === 1
+    ? `${uniqueLabels[0]} joined the group.`
+    : `New members joined the group: ${uniqueLabels.join(', ')}.`;
+  const byText = actorName ? ` Added by ${actorName}.` : '';
+  const text = `Group update: ${joinedText}${byText}`;
+
+  const payload = {
+    messageId: makeEventMessageId('group_join'),
+    instanceId: config.instanceId,
+    chatId,
+    chatName: group.name || chatId,
+    senderId: actorId || 'group-system@wazzap.local',
+    senderName: actorName || 'Group System',
+    isGroup: true,
+    timestampMs: Date.now(),
+    messageType: 'groupParticipantsUpdate',
+    text,
+    quoted: null,
+    attachments: [],
+    mentionedJids: participants.map((jid) => normalizeJid(jid) || jid),
+    location: null,
+    contextOnly: true,
+    groupDescription: group.description,
+    groupPromptOveride: group.promptOveride,
+    groupEvent: {
+      action,
+      participants: participants.map((jid) => normalizeJid(jid) || jid),
+      actorId,
+      actorName,
+    },
+  };
+
+  wsClient.send({ type: 'incoming_message', payload });
+}
+
 async function handleIncomingMessage(msg) {
   if (!msg.message) return;
   if (!sock) return;
@@ -429,7 +591,8 @@ async function handleIncomingMessage(msg) {
   rememberParticipantName(senderId, senderName);
   const chatId = remoteJid;
   const isGroup = chatId.endsWith('@g.us');
-  const chatName = isGroup ? await getGroupName(chatId) : (msg.pushName || chatId);
+  const group = isGroup ? await getGroupContext(chatId) : null;
+  const chatName = isGroup ? (group?.name || chatId) : (msg.pushName || chatId);
   const { contentType, message: innerMessage } = unwrapMessage(msg.message);
   if (!contentType || !innerMessage) return;
   const content = innerMessage[contentType];
@@ -472,6 +635,8 @@ async function handleIncomingMessage(msg) {
     attachments,
     mentionedJids,
     location,
+    groupDescription: group?.description || null,
+    groupPromptOveride: group?.promptOveride || null,
   };
 
   wsClient.send({ type: 'incoming_message', payload });
@@ -513,6 +678,23 @@ async function startWhatsApp() {
     } else if (connection === 'open') {
       logger.info('WhatsApp socket connected');
       wsClient.send({ type: 'whatsapp_status', payload: { status: 'open', instanceId: config.instanceId } });
+    }
+  });
+
+  sock.ev.on('groups.update', (updates) => {
+    if (!Array.isArray(updates)) return;
+    for (const update of updates) {
+      const jid = update?.id;
+      if (!jid) continue;
+      invalidateGroupMetadata(jid);
+    }
+  });
+
+  sock.ev.on('group-participants.update', async (update) => {
+    try {
+      await handleGroupParticipantsUpdate(update);
+    } catch (err) {
+      logger.error({ err, update }, 'failed handling group participants update');
     }
   });
 
