@@ -535,20 +535,79 @@ function makeEventMessageId(prefix) {
   return `${prefix}_${stamp}_${rand}`;
 }
 
+function toJidCandidate(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('@')) return trimmed;
+
+  const digits = trimmed.replace(/\D/g, '');
+  if (digits.length >= 5) return `${digits}@s.whatsapp.net`;
+  return null;
+}
+
+function extractParticipantJids(value) {
+  if (!value) return [];
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return extractParticipantJids(JSON.parse(trimmed));
+      } catch {
+        return [];
+      }
+    }
+    const parsed = toJidCandidate(trimmed);
+    return parsed ? [parsed] : [];
+  }
+
+  if (typeof value !== 'object') return [];
+  const candidates = [
+    value.id,
+    value.phoneNumber,
+    value.lid,
+    value.jid,
+    value.participant,
+    value.pn,
+  ];
+
+  const normalized = [];
+  for (const candidate of candidates) {
+    const parsed = toJidCandidate(candidate);
+    if (parsed) normalized.push(parsed);
+  }
+  return normalized;
+}
+
 function compactParticipantJids(participants) {
   if (!Array.isArray(participants)) return [];
   const normalized = [];
-  for (const jid of participants) {
-    if (typeof jid !== 'string' || !jid.trim()) continue;
-    const cleaned = normalizeJid(jid) || jid;
-    normalized.push(cleaned);
+  for (const participant of participants) {
+    const candidates = extractParticipantJids(participant);
+    for (const jid of candidates) {
+      const cleaned = normalizeJid(jid) || jid;
+      normalized.push(cleaned);
+    }
   }
   return Array.from(new Set(normalized));
 }
 
+function normalizeGroupJoinAction(action) {
+  const normalized = typeof action === 'string' ? action.toLowerCase() : '';
+  if (!normalized) return 'join';
+  if (normalized === 'add' || normalized.includes('_add')) return 'add';
+  if (normalized === 'invite' || normalized.includes('invite')) return 'invite';
+  if (normalized === 'approve' || normalized === 'accept' || normalized.includes('approve') || normalized.includes('accept')) {
+    return 'approve';
+  }
+  if (normalized === 'join' || normalized.includes('join')) return 'join';
+  return normalized;
+}
+
 function dedupeGroupJoinEvent(chatId, participants, action, timestampMs) {
   const ts = Number(timestampMs) || Date.now();
-  const normalizedAction = typeof action === 'string' ? action : 'join';
+  const normalizedAction = normalizeGroupJoinAction(action);
   const normalizedParticipants = compactParticipantJids(participants).sort();
   const key = `${chatId}::${normalizedAction}::${normalizedParticipants.join(',')}`;
   const lastSeen = groupJoinDedupCache.get(key);
@@ -575,21 +634,21 @@ function parseGroupJoinStub(msg) {
   const rawParams = Array.isArray(msg?.messageStubParameters)
     ? msg.messageStubParameters
     : [];
-  const params = rawParams.filter((value) => typeof value === 'string' && value.includes('@'));
-  const participants = params.length > 0
-    ? params
-    : [msg?.participant].filter((value) => typeof value === 'string');
+  const parsedFromParams = compactParticipantJids(rawParams);
+  const participants = parsedFromParams.length > 0
+    ? parsedFromParams
+    : compactParticipantJids([msg?.participant]);
 
   if (participants.length === 0) return null;
 
-  const actorId = normalizeJid(msg?.key?.participant || msg?.participant) || null;
+  const actorId = compactParticipantJids([msg?.key?.participant, msg?.participant])[0] || null;
   const timestampMs = Number(msg?.messageTimestamp) > 0
     ? Number(msg.messageTimestamp) * 1000
     : Date.now();
   return {
     chatId,
-    action: stubActionName(stubType),
-    participants: compactParticipantJids(participants),
+    action: normalizeGroupJoinAction(stubActionName(stubType)),
+    participants,
     actorId,
     timestampMs,
     messageId: msg?.key?.id ? `${msg.key.id}_join_ctx` : null,
@@ -664,15 +723,13 @@ async function handleGroupParticipantsUpdate(update) {
   const chatId = update?.id;
   if (!chatId || !chatId.endsWith('@g.us')) return;
 
-  const action = typeof update?.action === 'string' ? update.action.toLowerCase() : '';
+  const action = normalizeGroupJoinAction(update?.action);
   const joinActions = new Set(['add', 'invite', 'join', 'approve']);
   if (!joinActions.has(action)) return;
 
-  const participants = Array.isArray(update?.participants)
-    ? update.participants.filter((jid) => typeof jid === 'string' && jid.trim())
-    : [];
+  const participants = compactParticipantJids(Array.isArray(update?.participants) ? update.participants : []);
   if (participants.length === 0) return;
-  const actorId = normalizeJid(update?.author) || null;
+  const actorId = compactParticipantJids([update?.author, update?.authorPn])[0] || null;
   await emitGroupJoinContextEvent({
     chatId,
     action,
@@ -810,9 +867,16 @@ async function startWhatsApp() {
   });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
+    const isNotify = type === 'notify';
     for (const msg of messages) {
       try {
+        if (!isNotify) {
+          const stubEvent = parseGroupJoinStub(msg);
+          if (stubEvent) {
+            await emitGroupJoinContextEvent(stubEvent);
+          }
+          continue;
+        }
         await handleIncomingMessage(msg);
       } catch (err) {
         logger.error({ err }, 'failed handling message');
