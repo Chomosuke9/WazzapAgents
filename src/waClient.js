@@ -69,6 +69,7 @@ function rememberParticipantName(jid, name) {
   if (!jid || typeof jid !== 'string') return;
   if (!name || typeof name !== 'string') return;
   const cleaned = name.trim();
+  if (!/[\p{L}\p{N}]/u.test(cleaned)) return;
   if (!cleaned) return;
 
   cacheSetBounded(participantNameCache, jid, cleaned);
@@ -102,6 +103,7 @@ function participantDisplayName(participant) {
   for (const candidate of candidates) {
     if (typeof candidate !== 'string') continue;
     const cleaned = candidate.trim();
+    if (!/[\p{L}\p{N}]/u.test(cleaned)) continue;
     if (cleaned) return cleaned;
   }
   return null;
@@ -212,12 +214,13 @@ async function getGroupParticipantName(chatId, participantJid) {
     const meta = await sock.groupMetadata(chatId);
     const participants = meta?.participants || [];
     for (const participant of participants) {
-      const pid = participant?.id;
-      if (!pid) continue;
       const name = participantDisplayName(participant);
       if (!name) continue;
-      rememberParticipantName(pid, name);
-      cacheSetBounded(groupParticipantNameCache, groupParticipantKey(chatId, pid), name);
+      const aliases = extractParticipantAliases(participant);
+      for (const alias of aliases) {
+        rememberParticipantName(alias, name);
+        cacheSetBounded(groupParticipantNameCache, groupParticipantKey(chatId, alias), name);
+      }
     }
   } catch (err) {
     logger.debug({ err, chatId, participantJid }, 'failed resolving group participant name');
@@ -513,18 +516,23 @@ function fallbackParticipantLabel(jid) {
   const local = jid.split('@')[0] || jid;
   if (!local) return 'unknown';
   const digits = local.replace(/\D/g, '');
-  if (digits.length >= 4) return digits.slice(-4);
+  if (digits.length >= 5) return digits;
   return local;
 }
 
 async function resolveParticipantLabel(chatId, participantJid) {
   const normalized = normalizeJid(participantJid) || participantJid;
   if (!normalized) return 'unknown';
-  const fromCache = lookupParticipantName(normalized);
-  if (fromCache) return fromCache;
+  const candidates = Array.from(new Set([participantJid, normalized].filter(Boolean)));
+  for (const candidate of candidates) {
+    const fromCache = lookupParticipantName(candidate);
+    if (fromCache) return fromCache;
+  }
   if (chatId?.endsWith('@g.us')) {
-    const fromGroup = await getGroupParticipantName(chatId, normalized);
-    if (fromGroup) return fromGroup;
+    for (const candidate of candidates) {
+      const fromGroup = await getGroupParticipantName(chatId, candidate);
+      if (fromGroup) return fromGroup;
+    }
   }
   return fallbackParticipantLabel(normalized);
 }
@@ -546,8 +554,72 @@ function toJidCandidate(value) {
   return null;
 }
 
+function choosePreferredParticipantJid(jids) {
+  if (!Array.isArray(jids) || jids.length === 0) return null;
+  const unique = Array.from(new Set(jids.filter((jid) => typeof jid === 'string' && jid.trim())));
+  if (unique.length === 0) return null;
+  const pn = unique.find((jid) => jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us'));
+  return pn || unique[0];
+}
+
+function extractParticipantAliases(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    const normalized = [];
+    for (const item of value) {
+      const aliases = extractParticipantAliases(item);
+      normalized.push(...aliases);
+    }
+    return Array.from(new Set(normalized));
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        return extractParticipantAliases(JSON.parse(trimmed));
+      } catch {
+        return [];
+      }
+    }
+    const parsed = toJidCandidate(trimmed);
+    if (!parsed) return [];
+    const cleaned = normalizeJid(parsed) || parsed;
+    return [cleaned];
+  }
+
+  if (typeof value !== 'object') return [];
+  const candidates = [
+    value.phoneNumber,
+    value.pn,
+    value.id,
+    value.jid,
+    value.lid,
+    value.participant,
+  ];
+
+  const normalized = [];
+  for (const candidate of candidates) {
+    const parsed = toJidCandidate(candidate);
+    if (!parsed) continue;
+    normalized.push(normalizeJid(parsed) || parsed);
+  }
+  return Array.from(new Set(normalized));
+}
+
 function extractParticipantJids(value) {
   if (!value) return [];
+  if (Array.isArray(value)) {
+    const normalized = [];
+    for (const item of value) {
+      const aliases = extractParticipantAliases(item);
+      const preferred = choosePreferredParticipantJid(aliases);
+      if (preferred) normalized.push(preferred);
+    }
+    return Array.from(new Set(normalized));
+  }
+
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (!trimmed) return [];
@@ -558,26 +630,14 @@ function extractParticipantJids(value) {
         return [];
       }
     }
-    const parsed = toJidCandidate(trimmed);
-    return parsed ? [parsed] : [];
+    const aliases = extractParticipantAliases(trimmed);
+    const preferred = choosePreferredParticipantJid(aliases);
+    return preferred ? [preferred] : [];
   }
 
-  if (typeof value !== 'object') return [];
-  const candidates = [
-    value.id,
-    value.phoneNumber,
-    value.lid,
-    value.jid,
-    value.participant,
-    value.pn,
-  ];
-
-  const normalized = [];
-  for (const candidate of candidates) {
-    const parsed = toJidCandidate(candidate);
-    if (parsed) normalized.push(parsed);
-  }
-  return normalized;
+  const aliases = extractParticipantAliases(value);
+  const preferred = choosePreferredParticipantJid(aliases);
+  return preferred ? [preferred] : [];
 }
 
 function compactParticipantJids(participants) {
@@ -641,7 +701,12 @@ function parseGroupJoinStub(msg) {
 
   if (participants.length === 0) return null;
 
-  const actorId = compactParticipantJids([msg?.key?.participant, msg?.participant])[0] || null;
+  const actorId = compactParticipantJids([
+    msg?.key?.participantAlt,
+    msg?.participantPn,
+    msg?.key?.participant,
+    msg?.participant,
+  ])[0] || null;
   const timestampMs = Number(msg?.messageTimestamp) > 0
     ? Number(msg.messageTimestamp) * 1000
     : Date.now();
@@ -729,7 +794,7 @@ async function handleGroupParticipantsUpdate(update) {
 
   const participants = compactParticipantJids(Array.isArray(update?.participants) ? update.participants : []);
   if (participants.length === 0) return;
-  const actorId = compactParticipantJids([update?.author, update?.authorPn])[0] || null;
+  const actorId = compactParticipantJids([update?.authorPn, update?.author])[0] || null;
   await emitGroupJoinContextEvent({
     chatId,
     action,
