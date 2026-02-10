@@ -170,6 +170,7 @@ Respond when:
 - Correcting important misinformation
 - Summarizing when asked
 - Someone needs help or clarification
+- Sometimes it's okay to respond even you're not mentioned or asked a question
 
 Stay silent when:
 - It’s just casual banter between humans
