@@ -252,6 +252,12 @@ def _is_context_only_payload(payload: dict) -> bool:
   return bool(payload.get("contextOnly"))
 
 
+def _payload_triggers_llm1(payload: dict) -> bool:
+  if not _is_context_only_payload(payload):
+    return True
+  return bool(payload.get("triggerLlm1"))
+
+
 def _payload_has_meaningful_content(payload: dict) -> bool:
   if _is_context_only_payload(payload):
     return True
@@ -342,9 +348,12 @@ async def handle_socket(ws):
       return
 
     context_only_payloads = [payload for payload in non_empty_payloads if _is_context_only_payload(payload)]
-    actionable_payloads = [payload for payload in non_empty_payloads if not _is_context_only_payload(payload)]
+    llm1_trigger_payloads = [payload for payload in non_empty_payloads if _payload_triggers_llm1(payload)]
+    passive_context_payloads = [
+      payload for payload in context_only_payloads if not _payload_triggers_llm1(payload)
+    ]
 
-    last_payload = actionable_payloads[-1] if actionable_payloads else non_empty_payloads[-1]
+    last_payload = llm1_trigger_payloads[-1] if llm1_trigger_payloads else non_empty_payloads[-1]
     chat_id = last_payload["chatId"]
     history = per_chat[chat_id]
     lock = per_chat_lock[chat_id]
@@ -356,8 +365,9 @@ async def handle_socket(ws):
           extra={
             "batch_size": len(payloads),
             "non_empty_batch_size": len(non_empty_payloads),
-            "actionable_batch_size": len(actionable_payloads),
+            "llm1_trigger_batch_size": len(llm1_trigger_payloads),
             "context_only_batch_size": len(context_only_payloads),
+            "passive_context_batch_size": len(passive_context_payloads),
             "message_ids": [p.get("messageId") for p in non_empty_payloads],
             "last_message_id": last_payload.get("messageId"),
             "type": last_payload.get("messageType"),
@@ -370,16 +380,17 @@ async def handle_socket(ws):
             "raw_payload": last_payload,
           },
         )
-        for payload in context_only_payloads:
+        for payload in passive_context_payloads:
           _append_history(history, _payload_to_message(payload))
 
-        if not actionable_payloads:
+        if not llm1_trigger_payloads:
           logger.debug("[%s] stored context-only updates", chat_id)
           return
 
-        burst_messages = [_payload_to_message(payload) for payload in actionable_payloads]
-        current = _build_burst_current(actionable_payloads)
-        llm1_history = list(history)
+        history_before_current = list(history)
+        burst_messages = [_payload_to_message(payload) for payload in llm1_trigger_payloads]
+        current = _build_burst_current(llm1_trigger_payloads)
+        llm1_history = list(history_before_current)
         llm1_current = burst_messages[-1]
         group_description, prompt_overide = _resolve_group_prompt_context(last_payload)
         if len(burst_messages) > 1:
@@ -401,7 +412,7 @@ async def handle_socket(ws):
             chat_id,
             decision.reason,
             decision.confidence,
-            len(actionable_payloads),
+            len(llm1_trigger_payloads),
           )
           return
 
@@ -412,7 +423,7 @@ async def handle_socket(ws):
         ]
         fallback_reply_to = str(last_payload.get("messageId")) if last_payload.get("messageId") else None
         reply_msg = await generate_reply(
-          history,
+          history_before_current,
           current,
           reply_candidates=prompt_reply_candidates if prompt_reply_candidates else None,
           current_payload=last_payload,
@@ -445,7 +456,7 @@ async def handle_socket(ws):
           chat_id,
           extra={
             "reply_preview": reply_choices[0][0][:120],
-            "batch_size": len(actionable_payloads),
+            "batch_size": len(llm1_trigger_payloads),
             "reply_count": len(reply_choices),
           },
         )

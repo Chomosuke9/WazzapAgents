@@ -9,6 +9,7 @@ import makeWASocket, {
   downloadContentFromMessage,
   jidNormalizedUser,
   normalizeMessageContent,
+  WAMessageStubType,
 } from 'baileys';
 import logger from './logger.js';
 import config from './config.js';
@@ -19,9 +20,24 @@ let sock;
 const messageCache = new Map(); // simple in-memory store for quoting outbound
 const MAX_CACHE = 200;
 const GROUP_METADATA_TTL_MS = 60_000;
+const GROUP_JOIN_DEDUP_TTL_MS = 15_000;
 const groupMetadataCache = new Map();
 const participantNameCache = new Map();
 const groupParticipantNameCache = new Map();
+const groupJoinDedupCache = new Map();
+const GROUP_JOIN_STUB_TYPES = new Set([
+  WAMessageStubType.GROUP_PARTICIPANT_ADD,
+  WAMessageStubType.GROUP_PARTICIPANT_INVITE,
+  WAMessageStubType.GROUP_PARTICIPANT_ADD_REQUEST_JOIN,
+  WAMessageStubType.GROUP_PARTICIPANT_ACCEPT,
+  WAMessageStubType.GROUP_PARTICIPANT_LINKED_GROUP_JOIN,
+  WAMessageStubType.GROUP_PARTICIPANT_JOINED_GROUP_AND_PARENT_GROUP,
+  WAMessageStubType.CAG_INVITE_AUTO_ADD,
+  WAMessageStubType.CAG_INVITE_AUTO_JOINED,
+  WAMessageStubType.SUB_GROUP_PARTICIPANT_ADD_RICH,
+  WAMessageStubType.COMMUNITY_PARTICIPANT_ADD_RICH,
+  WAMessageStubType.SUBGROUP_ADMIN_TRIGGERED_AUTO_ADD_RICH,
+].filter((value) => Number.isInteger(value)));
 
 function rememberMessage(msg) {
   if (!msg?.key?.id) return;
@@ -519,6 +535,130 @@ function makeEventMessageId(prefix) {
   return `${prefix}_${stamp}_${rand}`;
 }
 
+function compactParticipantJids(participants) {
+  if (!Array.isArray(participants)) return [];
+  const normalized = [];
+  for (const jid of participants) {
+    if (typeof jid !== 'string' || !jid.trim()) continue;
+    const cleaned = normalizeJid(jid) || jid;
+    normalized.push(cleaned);
+  }
+  return Array.from(new Set(normalized));
+}
+
+function dedupeGroupJoinEvent(chatId, participants, action, timestampMs) {
+  const ts = Number(timestampMs) || Date.now();
+  const normalizedAction = typeof action === 'string' ? action : 'join';
+  const normalizedParticipants = compactParticipantJids(participants).sort();
+  const key = `${chatId}::${normalizedAction}::${normalizedParticipants.join(',')}`;
+  const lastSeen = groupJoinDedupCache.get(key);
+  if (lastSeen && ts - lastSeen < GROUP_JOIN_DEDUP_TTL_MS) {
+    return false;
+  }
+  cacheSetBounded(groupJoinDedupCache, key, ts, 2000);
+  return true;
+}
+
+function stubActionName(stubType) {
+  if (typeof stubType !== 'number') return 'join';
+  const enumName = WAMessageStubType[stubType];
+  if (typeof enumName !== 'string' || !enumName) return 'join';
+  return enumName.toLowerCase();
+}
+
+function parseGroupJoinStub(msg) {
+  const chatId = msg?.key?.remoteJid;
+  if (!chatId || !chatId.endsWith('@g.us')) return null;
+  const stubType = msg?.messageStubType;
+  if (!GROUP_JOIN_STUB_TYPES.has(stubType)) return null;
+
+  const rawParams = Array.isArray(msg?.messageStubParameters)
+    ? msg.messageStubParameters
+    : [];
+  const params = rawParams.filter((value) => typeof value === 'string' && value.includes('@'));
+  const participants = params.length > 0
+    ? params
+    : [msg?.participant].filter((value) => typeof value === 'string');
+
+  if (participants.length === 0) return null;
+
+  const actorId = normalizeJid(msg?.key?.participant || msg?.participant) || null;
+  const timestampMs = Number(msg?.messageTimestamp) > 0
+    ? Number(msg.messageTimestamp) * 1000
+    : Date.now();
+  return {
+    chatId,
+    action: stubActionName(stubType),
+    participants: compactParticipantJids(participants),
+    actorId,
+    timestampMs,
+    messageId: msg?.key?.id ? `${msg.key.id}_join_ctx` : null,
+    source: 'messages.upsert.stub',
+  };
+}
+
+async function emitGroupJoinContextEvent({
+  chatId,
+  action,
+  participants,
+  actorId = null,
+  timestampMs = Date.now(),
+  messageId = null,
+  source = 'group-participants.update',
+}) {
+  const normalizedParticipants = compactParticipantJids(participants);
+  if (!chatId || !chatId.endsWith('@g.us') || normalizedParticipants.length === 0) return;
+  if (!dedupeGroupJoinEvent(chatId, normalizedParticipants, action, timestampMs)) return;
+
+  const group = await getGroupContext(chatId, { forceRefresh: true });
+  const labels = [];
+  for (const participantJid of normalizedParticipants) {
+    const label = await resolveParticipantLabel(chatId, participantJid);
+    labels.push(label);
+  }
+  const uniqueLabels = Array.from(new Set(labels.filter(Boolean)));
+  const normalizedActorId = normalizeJid(actorId) || null;
+  const actorName = normalizedActorId
+    ? await resolveParticipantLabel(chatId, normalizedActorId)
+    : null;
+
+  const joinedText = uniqueLabels.length === 1
+    ? `${uniqueLabels[0]} joined the group.`
+    : `New members joined the group: ${uniqueLabels.join(', ')}.`;
+  const byText = actorName ? ` Added by ${actorName}.` : '';
+  const text = `Group update: ${joinedText}${byText}`;
+
+  const payload = {
+    messageId: messageId || makeEventMessageId('group_join'),
+    instanceId: config.instanceId,
+    chatId,
+    chatName: group.name || chatId,
+    senderId: normalizedActorId || 'group-system@wazzap.local',
+    senderName: actorName || 'Group System',
+    isGroup: true,
+    timestampMs: Number(timestampMs) || Date.now(),
+    messageType: 'groupParticipantsUpdate',
+    text,
+    quoted: null,
+    attachments: [],
+    mentionedJids: normalizedParticipants,
+    location: null,
+    contextOnly: true,
+    triggerLlm1: true,
+    groupDescription: group.description,
+    groupPromptOveride: group.promptOveride,
+    groupEvent: {
+      action: action || 'join',
+      participants: normalizedParticipants,
+      actorId: normalizedActorId,
+      actorName,
+      source,
+    },
+  };
+
+  wsClient.send({ type: 'incoming_message', payload });
+}
+
 async function handleGroupParticipantsUpdate(update) {
   if (!sock) return;
   const chatId = update?.id;
@@ -532,55 +672,26 @@ async function handleGroupParticipantsUpdate(update) {
     ? update.participants.filter((jid) => typeof jid === 'string' && jid.trim())
     : [];
   if (participants.length === 0) return;
-
-  const group = await getGroupContext(chatId, { forceRefresh: true });
-  const labels = [];
-  for (const participantJid of participants) {
-    const label = await resolveParticipantLabel(chatId, participantJid);
-    labels.push(label);
-  }
-  const uniqueLabels = Array.from(new Set(labels.filter(Boolean)));
   const actorId = normalizeJid(update?.author) || null;
-  const actorName = actorId ? await resolveParticipantLabel(chatId, actorId) : null;
-
-  const joinedText = uniqueLabels.length === 1
-    ? `${uniqueLabels[0]} joined the group.`
-    : `New members joined the group: ${uniqueLabels.join(', ')}.`;
-  const byText = actorName ? ` Added by ${actorName}.` : '';
-  const text = `Group update: ${joinedText}${byText}`;
-
-  const payload = {
-    messageId: makeEventMessageId('group_join'),
-    instanceId: config.instanceId,
+  await emitGroupJoinContextEvent({
     chatId,
-    chatName: group.name || chatId,
-    senderId: actorId || 'group-system@wazzap.local',
-    senderName: actorName || 'Group System',
-    isGroup: true,
+    action,
+    participants,
+    actorId,
     timestampMs: Date.now(),
-    messageType: 'groupParticipantsUpdate',
-    text,
-    quoted: null,
-    attachments: [],
-    mentionedJids: participants.map((jid) => normalizeJid(jid) || jid),
-    location: null,
-    contextOnly: true,
-    groupDescription: group.description,
-    groupPromptOveride: group.promptOveride,
-    groupEvent: {
-      action,
-      participants: participants.map((jid) => normalizeJid(jid) || jid),
-      actorId,
-      actorName,
-    },
-  };
-
-  wsClient.send({ type: 'incoming_message', payload });
+    source: 'group-participants.update',
+  });
 }
 
 async function handleIncomingMessage(msg) {
-  if (!msg.message) return;
   if (!sock) return;
+  const stubEvent = parseGroupJoinStub(msg);
+  if (stubEvent) {
+    await emitGroupJoinContextEvent(stubEvent);
+    return;
+  }
+
+  if (!msg.message) return;
   const remoteJid = msg.key.remoteJid;
   if (!remoteJid || remoteJid === 'status@broadcast') return;
 

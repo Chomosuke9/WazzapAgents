@@ -33,6 +33,7 @@ Node.js (ESM) gateway that connects a WhatsApp account via Baileys v7 and forwar
     "groupDescription": "Rules and context for this group (without prompt_overide block)",
     "groupPromptOveride": "Extra instructions extracted from <prompt_overide>...</prompt_overide>",
     "contextOnly": false,
+    "triggerLlm1": false,
     "timestampMs": 1738560000000,
     "messageType": "extendedTextMessage",
     "text": "Hello world",
@@ -85,7 +86,7 @@ Node.js (ESM) gateway that connects a WhatsApp account via Baileys v7 and forwar
 ## Notes
 - Attachment paths are local; if your LLM service runs elsewhere, you’ll need a file-serving layer or shared volume.
 - Quoting outbound works only for messages still cached (in-memory ~200 messages).
-- Group participant join notifications are sent as `incoming_message` with `contextOnly: true` so they can enrich context without forcing a reply decision.
+- Group participant join notifications are sent as `incoming_message` with `contextOnly: true` and `triggerLlm1: true`, so they enrich context and still let LLM1 decide whether to respond.
 - If the WhatsApp session logs out, delete `data/auth` and re-run to re-pair.
 - Multi-account: run multiple gateway instances with different `INSTANCE_ID` and separate `DATA_DIR`/`MEDIA_DIR` to keep sessions isolated.
 - Baileys version pinned to `7.0.0-rc.9` (package name `baileys`); ensure Node 18+ with ESM support.
