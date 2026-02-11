@@ -37,7 +37,7 @@ def _render_system_prompt(
   base_system: str,
   reply_candidates: Optional[list[dict[str, str]]],
   *,
-  prompt_overide: str | None = None,
+  prompt_override: str | None = None,
 ) -> str:
   if reply_candidates:
     candidate_ids = [x.get("message_id", "") for x in reply_candidates if x.get("message_id")]
@@ -55,13 +55,13 @@ def _render_system_prompt(
     allowed_ids = "(none)"
     context = "(no candidate context)"
 
-  overide_text = (prompt_overide or "").strip()
+  overide_text = (prompt_override or "").strip()
   return (
     base_system
     .replace("{{ allowed_message_ids }}", allowed_ids)
     .replace("{{ message_id_context }}", context)
-    .replace("{{prompt_overide}}", overide_text)
-    .replace("{{ prompt_overide }}", overide_text)
+    .replace("{{prompt_override}}", overide_text)
+    .replace("{{ prompt_override }}", overide_text)
   )
 
 
@@ -97,14 +97,14 @@ async def generate_reply(
   reply_candidates: Optional[list[dict[str, str]]] = None,
   current_payload: dict | None = None,
   group_description: str | None = None,
-  prompt_overide: str | None = None,
+  prompt_override: str | None = None,
 ):
   llm = get_llm2()
   base_system = (system or _load_system_prompt()).strip()
   rendered_system = _render_system_prompt(
     base_system,
     reply_candidates,
-    prompt_overide=prompt_overide,
+    prompt_override=prompt_override,
   )
   history_list = list(history)
   hist_text = format_history(history_list) or "(no history)"

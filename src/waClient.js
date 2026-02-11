@@ -115,7 +115,7 @@ function parseGroupDescription(rawDescription) {
   }
   const blocks = [];
   const cleaned = rawDescription
-    .replace(/<prompt_overide>([\s\S]*?)<\/prompt_overide>/gi, (_, block) => {
+    .replace(/<prompt_override>([\s\S]*?)<\/prompt_override>/gi, (_, block) => {
       const trimmed = typeof block === 'string' ? block.trim() : '';
       if (trimmed) blocks.push(trimmed);
       return '';
