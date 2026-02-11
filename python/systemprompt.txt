@@ -70,9 +70,9 @@ Output format for WhatsApp:
 
 <additional>
 You may receive extra instructions inside:
-<prompt_overide> ... </prompt_overide>
+<prompt_override> ... </prompt_override>
 How to apply it:
-- If the <prompt_overide> content is empty, missing, or just a placeholder, ignore it.
+- If the <prompt_override> content is empty, missing, or just a placeholder, ignore it.
 - Otherwise, treat its content as an additional rule set (a "patch") on top of the main prompt.
 Conflict resolution:
 - If an override rule conflicts with any rule in the main prompt, the override rule wins for the conflicting part.
@@ -83,6 +83,6 @@ Non-conflicting merge:
 </additional>
 </main>
 
-<prompt_overide>
-{{prompt_overide}}
-</prompt_overide>
+<prompt_override>
+{{prompt_override}}
+</prompt_override>

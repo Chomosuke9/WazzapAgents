@@ -45,7 +45,7 @@ INCOMING_DEBOUNCE_SECONDS = _parse_positive_float(
 )
 INCOMING_BURST_MAX_SECONDS = 20.0
 logger = setup_logging()
-PROMPT_OVERIDE_TAG = re.compile(r"<prompt_overide>([\s\S]*?)</prompt_overide>", re.IGNORECASE)
+PROMPT_OVERIDE_TAG = re.compile(r"<prompt_override>([\s\S]*?)</prompt_override>", re.IGNORECASE)
 
 
 @dataclass
@@ -283,7 +283,7 @@ def _payload_has_meaningful_content(payload: dict) -> bool:
   return False
 
 
-def _extract_prompt_overide(raw_description: str | None) -> tuple[str | None, str | None]:
+def _extract_prompt_override(raw_description: str | None) -> tuple[str | None, str | None]:
   text = raw_description if isinstance(raw_description, str) else ""
   if not text.strip():
     return None, None
@@ -298,13 +298,13 @@ def _extract_prompt_overide(raw_description: str | None) -> tuple[str | None, st
 
   cleaned = PROMPT_OVERIDE_TAG.sub(_capture, text)
   cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-  prompt_overide = "\n\n".join(prompt_blocks) if prompt_blocks else None
-  return (cleaned or None), prompt_overide
+  prompt_override = "\n\n".join(prompt_blocks) if prompt_blocks else None
+  return (cleaned or None), prompt_override
 
 
 def _resolve_group_prompt_context(payload: dict) -> tuple[str | None, str | None]:
   raw_description = payload.get("groupDescription")
-  cleaned_description, extracted_overide = _extract_prompt_overide(raw_description if isinstance(raw_description, str) else None)
+  cleaned_description, extracted_overide = _extract_prompt_override(raw_description if isinstance(raw_description, str) else None)
 
   payload_overide_raw = payload.get("groupPromptOveride")
   if not payload_overide_raw:
@@ -392,7 +392,7 @@ async def handle_socket(ws):
         current = _build_burst_current(llm1_trigger_payloads)
         llm1_history = list(history_before_current)
         llm1_current = burst_messages[-1]
-        group_description, prompt_overide = _resolve_group_prompt_context(last_payload)
+        group_description, prompt_override = _resolve_group_prompt_context(last_payload)
         if len(burst_messages) > 1:
           # Let LLM1 see burst context as individual messages so char limit applies per message.
           llm1_history.extend(burst_messages[:-1])
@@ -402,7 +402,7 @@ async def handle_socket(ws):
           llm1_current,
           current_payload=last_payload,
           group_description=group_description,
-          prompt_overide=prompt_overide,
+          prompt_override=prompt_override,
         )
         for msg in burst_messages:
           _append_history(history, msg)
@@ -428,7 +428,7 @@ async def handle_socket(ws):
           reply_candidates=prompt_reply_candidates if prompt_reply_candidates else None,
           current_payload=last_payload,
           group_description=group_description,
-          prompt_overide=prompt_overide,
+          prompt_override=prompt_override,
         )
         reply_choices = _extract_reply_choices(
           reply_msg,
