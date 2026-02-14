@@ -35,31 +35,12 @@ def _load_system_prompt() -> str:
 
 def _render_system_prompt(
   base_system: str,
-  reply_candidates: Optional[list[dict[str, str]]],
   *,
   prompt_override: str | None = None,
 ) -> str:
-  if reply_candidates:
-    candidate_ids = [x.get("message_id", "") for x in reply_candidates if x.get("message_id")]
-    allowed_ids = ", ".join(candidate_ids) if candidate_ids else "(none)"
-    lines: list[str] = []
-    for item in reply_candidates:
-      message_id = item.get("message_id")
-      if not message_id:
-        continue
-      sender = item.get("sender", "unknown")
-      preview = item.get("preview", "(no text)")
-      lines.append(f"- {message_id} | {sender} | {preview}")
-    context = "\n".join(lines) if lines else "(no candidate context)"
-  else:
-    allowed_ids = "(none)"
-    context = "(no candidate context)"
-
   overide_text = (prompt_override or "").strip()
   return (
     base_system
-    .replace("{{ allowed_message_ids }}", allowed_ids)
-    .replace("{{ message_id_context }}", context)
     .replace("{{prompt_override}}", overide_text)
     .replace("{{ prompt_override }}", overide_text)
   )
@@ -70,6 +51,22 @@ def _group_description_block(group_description: str | None) -> str:
   if cleaned:
     return cleaned
   return "(none)"
+
+
+def _normalize_chat_type(chat_type: str | None) -> str:
+  lowered = (chat_type or "").strip().lower()
+  if lowered in {"private", "group"}:
+    return lowered
+  return "private"
+
+
+def _chat_state_header(chat_type: str, bot_is_admin: bool, bot_is_super_admin: bool) -> str:
+  normalized_type = _normalize_chat_type(chat_type)
+  return (
+    f"CHAT_TYPE: {normalized_type}\n"
+    f"BOT_ROLE: botIsAdmin={'true' if bot_is_admin else 'false'} "
+    f"botIsSuperAdmin={'true' if bot_is_super_admin else 'false'}"
+  )
 
 
 def get_llm2() -> ChatOpenAI:
@@ -94,24 +91,26 @@ async def generate_reply(
   *,
   system: str | None = None,
   tools: Optional[list] = None,
-  reply_candidates: Optional[list[dict[str, str]]] = None,
   current_payload: dict | None = None,
   group_description: str | None = None,
   prompt_override: str | None = None,
+  chat_type: str | None = None,
+  bot_is_admin: bool = False,
+  bot_is_super_admin: bool = False,
 ):
   llm = get_llm2()
   base_system = (system or _load_system_prompt()).strip()
   rendered_system = _render_system_prompt(
     base_system,
-    reply_candidates,
     prompt_override=prompt_override,
   )
   history_list = list(history)
   hist_text = format_history(history_list) or "(no history)"
   current_line = format_history([current])
   group_text = _group_description_block(group_description)
-  older_messages_content = f"Older messages:\n{hist_text}"
-  current_content_text = f"Current messages:\n{current_line}"
+  chat_state_text = _chat_state_header(chat_type or "private", bot_is_admin, bot_is_super_admin)
+  older_messages_content = f"Chat state:\n{chat_state_text}\n\nOlder messages:\n{hist_text}"
+  current_content_text = f"Chat state:\n{chat_state_text}\n\nCurrent messages:\n{current_line}"
   media_parts: list[dict] = []
   media_notes: list[str] = []
   if llm2_media_enabled():
@@ -146,7 +145,6 @@ async def generate_reply(
           {"role": "user", "content": older_messages_content},
           {"role": "user", "content": redact_multimodal_content(current_content)},
         ],
-        "reply_candidates": reply_candidates or [],
       },
     )
   logger.debug(
@@ -154,10 +152,9 @@ async def generate_reply(
     extra={
       "chat_id": current.sender,
       "history_len": len(history_list),
-      "reply_candidates_count": len(reply_candidates or []),
       "system_chars": len(rendered_system),
       "prompt_preview": trunc(
-        group_text + '\n' + hist_text + '\n' + current_line + f"\n[visual_attachments={len(media_parts)}]",
+        group_text + '\n' + chat_state_text + '\n' + hist_text + '\n' + current_line + f"\n[visual_attachments={len(media_parts)}]",
         800,
       ),
       "model": os.getenv("LLM2_MODEL", "gpt-4.1"),
