@@ -69,8 +69,8 @@ class ExtraFormatter(logging.Formatter):
 
   def format(self, record: logging.LogRecord) -> str:
     base = super().format(record)
-    # Append extras for INFO and below so structured context shows up in normal logs
-    if record.levelno <= logging.INFO:
+    # Append extras up to WARNING so operational/debug context is visible for failures.
+    if record.levelno <= logging.WARNING:
       extras = {k: v for k, v in record.__dict__.items() if k not in LOG_RECORD_BUILTINS}
       if extras:
         base = f"{base} | extras={dump_json(extras, limit=EXTRAS_JSON_LIMIT)}"

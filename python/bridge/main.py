@@ -40,11 +40,22 @@ def _parse_positive_float(raw: str | None, default: float) -> float:
   return parsed if parsed > 0 else default
 
 
+def _parse_non_negative_int(raw: str | None, default: int) -> int:
+  if raw is None:
+    return default
+  try:
+    parsed = int(raw)
+  except (TypeError, ValueError):
+    return default
+  return parsed if parsed >= 0 else default
+
+
 HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "20"))
 INCOMING_DEBOUNCE_SECONDS = _parse_positive_float(
   os.getenv("INCOMING_DEBOUNCE_SECONDS"), 5.0
 )
 INCOMING_BURST_MAX_SECONDS = 20.0
+SLOW_BATCH_LOG_MS = _parse_non_negative_int(os.getenv("BRIDGE_SLOW_BATCH_LOG_MS"), 2000)
 logger = setup_logging()
 PROMPT_OVERIDE_TAG = re.compile(r"<prompt_override>([\s\S]*?)</prompt_override>", re.IGNORECASE)
 ACTION_LINE_RE = re.compile(r"^\[?\s*(REPLY_TO|DELETE|KICK)\s*[:=]\s*(.*?)\s*\]?$", re.IGNORECASE)
@@ -237,6 +248,15 @@ def _chat_state_from_payload(payload: dict) -> tuple[str, bool, bool]:
   return raw_chat_type, bool(payload.get("botIsAdmin")), bool(payload.get("botIsSuperAdmin"))
 
 
+def _payload_timestamp_ms(payload: dict) -> int | None:
+  raw = payload.get("timestampMs")
+  try:
+    ts = int(raw)
+  except (TypeError, ValueError):
+    return None
+  return ts if ts > 0 else None
+
+
 def _make_request_id(action: str) -> str:
   return f"{action}-{int(time.time() * 1000)}-{next(REQUEST_COUNTER):06d}"
 
@@ -356,7 +376,47 @@ async def handle_socket(ws):
     chat_id = last_payload["chatId"]
     history = per_chat[chat_id]
     lock = per_chat_lock[chat_id]
+    batch_started = time.perf_counter()
+    last_payload_ts = _payload_timestamp_ms(last_payload)
+    lock_wait_started = time.perf_counter()
     async with lock:
+      lock_wait_ms = int((time.perf_counter() - lock_wait_started) * 1000)
+      llm1_ms = 0
+      llm2_ms = 0
+      action_send_ms = 0
+
+      def _log_slow_batch(outcome: str, *, action_counts: dict | None = None, action_total: int = 0):
+        total_ms = int((time.perf_counter() - batch_started) * 1000)
+        if total_ms < SLOW_BATCH_LOG_MS and lock_wait_ms < SLOW_BATCH_LOG_MS:
+          return
+        payload_age_ms = None
+        if last_payload_ts is not None:
+          payload_age_ms = max(0, int(time.time() * 1000) - last_payload_ts)
+        logger.info(
+          "[%s] slow batch observed",
+          chat_id,
+          extra={
+            "outcome": outcome,
+            "batch_size": len(payloads),
+            "non_empty_batch_size": len(non_empty_payloads),
+            "llm1_trigger_batch_size": len(llm1_trigger_payloads),
+            "context_only_batch_size": len(context_only_payloads),
+            "passive_context_batch_size": len(passive_context_payloads),
+            "lock_wait_ms": lock_wait_ms,
+            "llm1_ms": llm1_ms,
+            "llm2_ms": llm2_ms,
+            "action_send_ms": action_send_ms,
+            "total_ms": total_ms,
+            "payload_age_ms": payload_age_ms,
+            "history_len": len(history),
+            "last_message_id": last_payload.get("messageId"),
+            "last_type": last_payload.get("messageType"),
+            "last_sender": last_payload.get("senderName") or last_payload.get("senderId"),
+            "action_counts": action_counts,
+            "action_total": action_total,
+          },
+        )
+
       try:
         logger.debug(
           "[%s] incoming_batch",
@@ -384,6 +444,7 @@ async def handle_socket(ws):
 
         if not llm1_trigger_payloads:
           logger.debug("[%s] stored context-only updates", chat_id)
+          _log_slow_batch("context_only")
           return
 
         history_before_current = list(history)
@@ -396,6 +457,7 @@ async def handle_socket(ws):
           # Let LLM1 see burst context as individual messages so char limit applies per message.
           llm1_history.extend(burst_messages[:-1])
 
+        llm1_started = time.perf_counter()
         decision = await call_llm1(
           llm1_history,
           llm1_current,
@@ -403,6 +465,7 @@ async def handle_socket(ws):
           group_description=group_description,
           prompt_override=prompt_override,
         )
+        llm1_ms = int((time.perf_counter() - llm1_started) * 1000)
         for msg in burst_messages:
           _append_history(history, msg)
         if not decision.should_response:
@@ -413,11 +476,13 @@ async def handle_socket(ws):
             decision.confidence,
             len(llm1_trigger_payloads),
           )
+          _log_slow_batch("llm1_skip")
           return
 
         allowed_context_ids = _collect_context_ids(history)
         fallback_reply_to = _normalize_context_msg_id(last_payload.get("contextMsgId"))
         chat_type, bot_is_admin, bot_is_super_admin = _chat_state_from_payload(last_payload)
+        llm2_started = time.perf_counter()
         reply_msg = await generate_reply(
           history_before_current,
           current,
@@ -428,16 +493,27 @@ async def handle_socket(ws):
           bot_is_admin=bot_is_admin,
           bot_is_super_admin=bot_is_super_admin,
         )
+        llm2_ms = int((time.perf_counter() - llm2_started) * 1000)
+        if reply_msg is None:
+          logger.warning("[%s] llm2 failed to produce reply", chat_id)
+          _log_slow_batch("llm2_none")
+          return
         actions = _extract_actions(
           reply_msg,
           fallback_reply_to=fallback_reply_to,
           allowed_context_ids=allowed_context_ids,
         )
         if not actions:
-          logger.warning("[%s] llm2 returned no executable action", chat_id)
+          logger.warning(
+            "[%s] llm2 returned no executable action",
+            chat_id,
+            extra={"reply_preview": _extract_reply_text(reply_msg), "fallback_reply_to": fallback_reply_to},
+          )
+          _log_slow_batch("no_action")
           return
 
         action_counts: dict[str, int] = defaultdict(int)
+        action_send_started = time.perf_counter()
         for action in actions:
           action_type = action.get("type")
           if action_type == "send_message":
@@ -471,6 +547,7 @@ async def handle_socket(ws):
             action_counts[action_type] += 1
             continue
           logger.warning("[%s] unknown action type from parser: %s", chat_id, action_type)
+        action_send_ms = int((time.perf_counter() - action_send_started) * 1000)
         logger.info(
           "[%s] executed actions",
           chat_id,
@@ -480,7 +557,9 @@ async def handle_socket(ws):
             "action_total": len(actions),
           },
         )
+        _log_slow_batch("actions_executed", action_counts=action_counts, action_total=len(actions))
       except Exception as err:
+        _log_slow_batch("handler_error")
         logger.exception("[%s] handler error: %s", chat_id, err)
 
   async def flush_pending(chat_id: str):
@@ -511,11 +590,11 @@ async def handle_socket(ws):
         pending.payloads.clear()
         pending.burst_started_at = None
         pending.last_event_at = None
-        pending.task = None
 
       if payloads:
         await process_message_batch(payloads)
-      return
+      # Keep the same worker task alive so new payloads for the same chat
+      # are drained sequentially without spawning extra waiters.
 
   try:
     async for raw in ws:

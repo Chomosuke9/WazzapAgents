@@ -14,7 +14,7 @@ import makeWASocket, {
 } from 'baileys';
 import logger from './logger.js';
 import config from './config.js';
-import { streamToBuffer } from './utils.js';
+import { streamToFile } from './utils.js';
 import wsClient from './wsClient.js';
 
 let sock;
@@ -51,6 +51,27 @@ function cacheSetBounded(map, key, value, maxSize = 5000) {
     const firstKey = map.keys().next().value;
     map.delete(firstKey);
   }
+}
+
+async function runWithConcurrency(items, concurrency, worker) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  const limit = Math.max(1, Number(concurrency) || 1);
+  let cursor = 0;
+
+  async function consume() {
+    while (cursor < items.length) {
+      const idx = cursor;
+      cursor += 1;
+      await worker(items[idx], idx);
+    }
+  }
+
+  const workers = [];
+  const workerCount = Math.min(limit, items.length);
+  for (let i = 0; i < workerCount; i += 1) {
+    workers.push(consume());
+  }
+  await Promise.all(workers);
 }
 
 function normalizeContextMsgId(value) {
@@ -341,6 +362,19 @@ function participantDisplayName(participant) {
   return null;
 }
 
+function hydrateGroupParticipantCaches(chatId, participants) {
+  if (!chatId || !Array.isArray(participants)) return;
+  for (const participant of participants) {
+    const name = participantDisplayName(participant);
+    if (!name) continue;
+    const aliases = extractParticipantAliases(participant);
+    for (const alias of aliases) {
+      rememberParticipantName(alias, name);
+      cacheSetBounded(groupParticipantNameCache, groupParticipantKey(chatId, alias), name);
+    }
+  }
+}
+
 function parseGroupDescription(rawDescription) {
   if (typeof rawDescription !== 'string' || !rawDescription.trim()) {
     return { description: null, promptOveride: null };
@@ -479,6 +513,7 @@ async function getGroupContext(jid, { forceRefresh = false } = {}) {
 
   try {
     const meta = await sock.groupMetadata(jid);
+    hydrateGroupParticipantCaches(jid, meta?.participants);
     const normalized = normalizeGroupMetadata(meta, jid);
     rememberGroupMetadata(jid, normalized);
     return normalized;
@@ -502,23 +537,15 @@ async function getGroupParticipantName(chatId, participantJid) {
     return fallback;
   }
 
-  try {
-    const meta = await sock.groupMetadata(chatId);
-    const participants = meta?.participants || [];
-    for (const participant of participants) {
-      const name = participantDisplayName(participant);
-      if (!name) continue;
-      const aliases = extractParticipantAliases(participant);
-      for (const alias of aliases) {
-        rememberParticipantName(alias, name);
-        cacheSetBounded(groupParticipantNameCache, groupParticipantKey(chatId, alias), name);
-      }
-    }
-  } catch (err) {
-    logger.debug({ err, chatId, participantJid }, 'failed resolving group participant name');
+  const hadCachedMetadata = Boolean(getCachedGroupMetadata(chatId));
+  await getGroupContext(chatId);
+  let resolved = lookupParticipantName(participantJid);
+
+  if (!resolved && hadCachedMetadata) {
+    await getGroupContext(chatId, { forceRefresh: true });
+    resolved = lookupParticipantName(participantJid);
   }
 
-  const resolved = lookupParticipantName(participantJid);
   if (resolved) {
     cacheSetBounded(groupParticipantNameCache, key, resolved);
   }
@@ -748,14 +775,13 @@ async function saveMedia(contentType, content, messageId) {
   const filepath = path.join(config.mediaDir, filename);
 
   const stream = await downloadContentFromMessage(content, kind);
-  const buffer = await streamToBuffer(stream);
-  await fs.writeFile(filepath, buffer);
+  const size = await streamToFile(stream, filepath);
 
   return {
     kind,
     mime,
     fileName: filename,
-    size: buffer.length,
+    size,
     path: filepath,
     isAnimated: Boolean(content.isAnimated),
   };
@@ -1031,11 +1057,9 @@ async function emitGroupJoinContextEvent({
   if (!dedupeGroupJoinEvent(chatId, normalizedParticipants, action, timestampMs)) return;
 
   const group = await getGroupContext(chatId, { forceRefresh: true });
-  const labels = [];
-  for (const participantJid of normalizedParticipants) {
-    const label = await resolveParticipantLabel(chatId, participantJid);
-    labels.push(label);
-  }
+  const labels = await Promise.all(
+    normalizedParticipants.map((participantJid) => resolveParticipantLabel(chatId, participantJid))
+  );
   const uniqueLabels = Array.from(new Set(labels.filter(Boolean)));
   const normalizedActorId = normalizeJid(actorId) || null;
   const actorName = normalizedActorId
@@ -1129,8 +1153,15 @@ async function handleGroupParticipantsUpdate(update) {
   });
 }
 
-async function handleIncomingMessage(msg) {
+async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {}) {
   if (!sock) return;
+  const perfStartMs = Date.now();
+  const perf = {
+    groupMs: 0,
+    quotedMs: 0,
+    mediaMs: 0,
+  };
+
   const stubEvent = parseGroupJoinStub(msg);
   if (stubEvent) {
     await emitGroupJoinContextEvent(stubEvent);
@@ -1152,10 +1183,12 @@ async function handleIncomingMessage(msg) {
   rememberParticipantName(fromId, msg.pushName || '');
   rememberParticipantName(senderId, senderDisplay);
 
+  const groupStartMs = Date.now();
   const group = isGroup ? await getGroupContext(chatId) : null;
+  perf.groupMs = Date.now() - groupStartMs;
   const senderRole = isGroup ? roleFlagsForJid(group?.participantRoles, senderId) : { isAdmin: false, isSuperAdmin: false };
   const senderRef = rememberSenderRef(chatId, senderId, msg.key.participant || senderId) || 'unknown';
-  const contextMsgId = ensureContextMsgId(chatId, msg.key.id);
+  const contextMsgId = normalizeContextMsgId(precomputedContextMsgId) || ensureContextMsgId(chatId, msg.key.id);
   const chatName = isGroup ? (group?.name || chatId) : chatId;
 
   const { contentType, message: innerMessage } = unwrapMessage(msg.message);
@@ -1165,7 +1198,9 @@ async function handleIncomingMessage(msg) {
   const locationText = location ? formatLocationText(location) : null;
   const baseText = extractText(innerMessage);
   const text = [baseText, locationText].filter(Boolean).join('\n') || null;
+  const quotedStartMs = Date.now();
   const quoted = await extractQuoted(innerMessage, chatId);
+  perf.quotedMs = Date.now() - quotedStartMs;
   const mentionedJids = extractMentionedJids(innerMessage);
 
   const attachments = [];
@@ -1177,11 +1212,14 @@ async function handleIncomingMessage(msg) {
     'stickerMessage',
   ];
   if (mediaKinds.includes(contentType)) {
+    const mediaStartMs = Date.now();
     try {
       const mediaInfo = await saveMedia(contentType, content, msg.key.id);
       if (mediaInfo) attachments.push(mediaInfo);
     } catch (err) {
       logger.error({ err }, 'failed saving media');
+    } finally {
+      perf.mediaMs = Date.now() - mediaStartMs;
     }
   }
 
@@ -1223,6 +1261,22 @@ async function handleIncomingMessage(msg) {
     fromMe,
     timestampMs: payload.timestampMs,
   });
+
+  const totalMs = Date.now() - perfStartMs;
+  if (config.perfLogEnabled && totalMs >= config.perfLogThresholdMs) {
+    logger.info({
+      chatId,
+      messageId: msg.key.id,
+      messageType: contentType,
+      totalMs,
+      groupMs: perf.groupMs,
+      quotedMs: perf.quotedMs,
+      mediaMs: perf.mediaMs,
+      attachmentCount: attachments.length,
+      isGroup,
+      fromMe,
+    }, 'slow inbound message processing');
+  }
 }
 
 function actionError(code, message, detail = null) {
@@ -1541,20 +1595,51 @@ async function startWhatsApp() {
   });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (!Array.isArray(messages) || messages.length === 0) return;
+    const batchStartMs = Date.now();
     const isNotify = type === 'notify';
-    for (const msg of messages) {
+    const precomputedContextByMessage = new Map();
+
+    if (isNotify) {
+      for (const msg of messages) {
+        const chatId = msg?.key?.remoteJid;
+        const messageId = msg?.key?.id;
+        if (!chatId || !messageId || chatId === 'status@broadcast') continue;
+        if (GROUP_JOIN_STUB_TYPES.has(msg?.messageStubType) || !msg?.message) continue;
+        const contextMsgId = ensureContextMsgId(chatId, messageId);
+        precomputedContextByMessage.set(messageIdIndexKey(chatId, messageId), contextMsgId);
+      }
+    }
+
+    await runWithConcurrency(messages, config.upsertConcurrency, async (msg) => {
       try {
         if (!isNotify) {
           const stubEvent = parseGroupJoinStub(msg);
           if (stubEvent) {
             await emitGroupJoinContextEvent(stubEvent);
           }
-          continue;
+          return;
         }
-        await handleIncomingMessage(msg);
+
+        const chatId = msg?.key?.remoteJid;
+        const messageId = msg?.key?.id;
+        const precomputedContextMsgId = (chatId && messageId)
+          ? precomputedContextByMessage.get(messageIdIndexKey(chatId, messageId))
+          : null;
+        await handleIncomingMessage(msg, { precomputedContextMsgId });
       } catch (err) {
         logger.error({ err }, 'failed handling message');
       }
+    });
+
+    const batchTotalMs = Date.now() - batchStartMs;
+    if (config.perfLogEnabled && messages.length > 1 && batchTotalMs >= config.perfLogThresholdMs) {
+      logger.info({
+        type,
+        messageCount: messages.length,
+        upsertConcurrency: config.upsertConcurrency,
+        batchTotalMs,
+      }, 'slow messages.upsert batch');
     }
   });
 
