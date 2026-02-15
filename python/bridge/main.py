@@ -50,12 +50,33 @@ def _parse_non_negative_int(raw: str | None, default: int) -> int:
   return parsed if parsed >= 0 else default
 
 
+def _parse_bool(raw: str | None, default: bool) -> bool:
+  if raw is None:
+    return default
+  return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "20"))
 INCOMING_DEBOUNCE_SECONDS = _parse_positive_float(
   os.getenv("INCOMING_DEBOUNCE_SECONDS"), 5.0
 )
 INCOMING_BURST_MAX_SECONDS = 20.0
 SLOW_BATCH_LOG_MS = _parse_non_negative_int(os.getenv("BRIDGE_SLOW_BATCH_LOG_MS"), 2000)
+MAX_TRIGGER_BATCH_AGE_MS = _parse_non_negative_int(
+  os.getenv("BRIDGE_MAX_TRIGGER_BATCH_AGE_MS"), 45000
+)
+REPLY_DEDUP_WINDOW_MS = _parse_non_negative_int(
+  os.getenv("BRIDGE_REPLY_DEDUP_WINDOW_MS"), 120000
+)
+REPLY_DEDUP_MIN_CHARS = _parse_non_negative_int(
+  os.getenv("BRIDGE_REPLY_DEDUP_MIN_CHARS"), 24
+)
+DROP_REPLY_IF_NEWER_PENDING = _parse_bool(
+  os.getenv("BRIDGE_DROP_REPLY_IF_NEWER_PENDING"), True
+)
+ASSISTANT_ECHO_MERGE_WINDOW_MS = _parse_non_negative_int(
+  os.getenv("BRIDGE_ASSISTANT_ECHO_MERGE_WINDOW_MS"), 180000
+)
 logger = setup_logging()
 PROMPT_OVERIDE_TAG = re.compile(r"<prompt_override>([\s\S]*?)</prompt_override>", re.IGNORECASE)
 ACTION_LINE_RE = re.compile(r"^\[?\s*(REPLY_TO|DELETE|KICK)\s*[:=]\s*(.*?)\s*\]?$", re.IGNORECASE)
@@ -257,6 +278,70 @@ def _payload_timestamp_ms(payload: dict) -> int | None:
   return ts if ts > 0 else None
 
 
+def _reply_signature(text: str | None) -> str:
+  if not isinstance(text, str):
+    return ""
+  return " ".join(text.split()).strip().lower()
+
+
+def _merge_fromme_echo_into_provisional(
+  history: Deque[WhatsAppMessage],
+  echo_msg: WhatsAppMessage,
+) -> bool:
+  if ASSISTANT_ECHO_MERGE_WINDOW_MS <= 0:
+    return False
+  if echo_msg.role != "assistant":
+    return False
+
+  echo_sig = _reply_signature(echo_msg.text)
+  if not echo_sig:
+    return False
+
+  for idx in range(len(history) - 1, -1, -1):
+    candidate = history[idx]
+    if candidate.role != "assistant":
+      continue
+
+    candidate_id = candidate.message_id or ""
+    if not candidate_id.startswith("local-send-"):
+      continue
+
+    age_delta = echo_msg.timestamp_ms - candidate.timestamp_ms
+    if age_delta > ASSISTANT_ECHO_MERGE_WINDOW_MS:
+      break
+
+    candidate_sig = _reply_signature(candidate.text)
+    if not candidate_sig or candidate_sig != echo_sig:
+      continue
+
+    candidate.timestamp_ms = echo_msg.timestamp_ms
+    candidate.sender = echo_msg.sender
+    candidate.context_msg_id = echo_msg.context_msg_id
+    candidate.sender_ref = echo_msg.sender_ref
+    candidate.sender_is_admin = echo_msg.sender_is_admin
+    candidate.text = echo_msg.text
+    candidate.media = echo_msg.media
+    candidate.quoted_message_id = echo_msg.quoted_message_id
+    candidate.quoted_sender = echo_msg.quoted_sender
+    candidate.quoted_text = echo_msg.quoted_text
+    candidate.quoted_media = echo_msg.quoted_media
+    candidate.message_id = echo_msg.message_id
+    candidate.role = echo_msg.role
+    return True
+
+  return False
+
+
+def _append_or_merge_history_payload(
+  history: Deque[WhatsAppMessage],
+  payload: dict,
+) -> None:
+  msg = _payload_to_message(payload)
+  if bool(payload.get("fromMe")) and _merge_fromme_echo_into_provisional(history, msg):
+    return
+  _append_history(history, msg)
+
+
 def _make_request_id(action: str) -> str:
   return f"{action}-{int(time.time() * 1000)}-{next(REQUEST_COUNTER):06d}"
 
@@ -345,12 +430,35 @@ async def handle_socket(ws):
   per_chat: Dict[str, Deque[WhatsAppMessage]] = defaultdict(deque)
   per_chat_lock: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
   pending_by_chat: Dict[str, PendingChat] = defaultdict(PendingChat)
+  recent_reply_signatures_by_chat: Dict[str, Deque[tuple[int, str]]] = defaultdict(deque)
   tasks: Set[asyncio.Task] = set()
   logger.info("Gateway connected")
 
   def _track_task(task: asyncio.Task) -> None:
     tasks.add(task)
     task.add_done_callback(tasks.discard)
+
+  def _is_duplicate_reply(chat_id: str, text: str | None) -> bool:
+    if REPLY_DEDUP_WINDOW_MS <= 0:
+      return False
+
+    signature = _reply_signature(text)
+    if len(signature) < REPLY_DEDUP_MIN_CHARS:
+      return False
+
+    now_ms = int(time.time() * 1000)
+    cutoff = now_ms - REPLY_DEDUP_WINDOW_MS
+    items = recent_reply_signatures_by_chat[chat_id]
+    while items and items[0][0] < cutoff:
+      items.popleft()
+
+    if any(prev_sig == signature for _, prev_sig in items):
+      return True
+
+    items.append((now_ms, signature))
+    while len(items) > 24:
+      items.popleft()
+    return False
 
   async def process_message_batch(payloads: list[dict]):
     if not payloads:
@@ -377,6 +485,7 @@ async def handle_socket(ws):
     history = per_chat[chat_id]
     lock = per_chat_lock[chat_id]
     batch_started = time.perf_counter()
+    batch_started_monotonic = time.monotonic()
     last_payload_ts = _payload_timestamp_ms(last_payload)
     lock_wait_started = time.perf_counter()
     async with lock:
@@ -440,7 +549,7 @@ async def handle_socket(ws):
           },
         )
         for payload in passive_context_payloads:
-          _append_history(history, _payload_to_message(payload))
+          _append_or_merge_history_payload(history, payload)
 
         if not llm1_trigger_payloads:
           logger.debug("[%s] stored context-only updates", chat_id)
@@ -452,6 +561,27 @@ async def handle_socket(ws):
         current = _build_burst_current(llm1_trigger_payloads)
         llm1_history = list(history_before_current)
         llm1_current = burst_messages[-1]
+        batch_payload_age_ms = None
+        if last_payload_ts is not None:
+          batch_payload_age_ms = max(0, int(time.time() * 1000) - last_payload_ts)
+        if (
+          MAX_TRIGGER_BATCH_AGE_MS > 0
+          and batch_payload_age_ms is not None
+          and batch_payload_age_ms > MAX_TRIGGER_BATCH_AGE_MS
+        ):
+          for msg in burst_messages:
+            _append_history(history, msg)
+          logger.info(
+            "[%s] skipped stale trigger batch",
+            chat_id,
+            extra={
+              "payload_age_ms": batch_payload_age_ms,
+              "max_trigger_batch_age_ms": MAX_TRIGGER_BATCH_AGE_MS,
+              "trigger_batch_size": len(llm1_trigger_payloads),
+            },
+          )
+          _log_slow_batch("stale_skip")
+          return
         group_description, prompt_override = _resolve_group_prompt_context(last_payload)
         if len(burst_messages) > 1:
           # Let LLM1 see burst context as individual messages so char limit applies per message.
@@ -512,17 +642,77 @@ async def handle_socket(ws):
           _log_slow_batch("no_action")
           return
 
+        if DROP_REPLY_IF_NEWER_PENDING:
+          pending = pending_by_chat[chat_id]
+          async with pending.lock:
+            newer_pending_count = len(pending.payloads)
+            has_newer_pending = (
+              newer_pending_count > 0
+              and (pending.last_event_at or 0) >= batch_started_monotonic
+            )
+          if has_newer_pending:
+            send_action_count = sum(
+              1 for action in actions if action.get("type") == "send_message"
+            )
+            if send_action_count > 0:
+              actions = [
+                action for action in actions
+                if action.get("type") != "send_message"
+              ]
+              logger.info(
+                "[%s] dropped stale send actions due to newer pending payloads",
+                chat_id,
+                extra={
+                  "dropped_send_actions": send_action_count,
+                  "remaining_actions": len(actions),
+                  "pending_payloads": newer_pending_count,
+                },
+              )
+              if not actions:
+                _log_slow_batch("stale_send_drop")
+                return
+
         action_counts: dict[str, int] = defaultdict(int)
         action_send_started = time.perf_counter()
         for action in actions:
           action_type = action.get("type")
           if action_type == "send_message":
+            action_text = action.get("text") or ""
+            if _is_duplicate_reply(chat_id, action_text):
+              logger.info(
+                "[%s] dropped duplicate reply",
+                chat_id,
+                extra={
+                  "reply_preview": _normalize_preview_text(action_text, limit=180),
+                  "reply_dedup_window_ms": REPLY_DEDUP_WINDOW_MS,
+                },
+              )
+              continue
+            request_id = _make_request_id("send")
             await send_message(
               ws,
               chat_id,
-              action.get("text") or "",
+              action_text,
               action.get("replyTo"),
-              request_id=_make_request_id("send"),
+              request_id=request_id,
+            )
+            _append_history(
+              history,
+              WhatsAppMessage(
+                timestamp_ms=int(time.time() * 1000),
+                sender="LLM",
+                context_msg_id=None,
+                sender_ref="llm",
+                sender_is_admin=False,
+                text=action_text or None,
+                media=None,
+                quoted_message_id=_normalize_context_msg_id(action.get("replyTo")),
+                quoted_sender=None,
+                quoted_text=None,
+                quoted_media=None,
+                message_id=f"local-send-{request_id}",
+                role="assistant",
+              ),
             )
             action_counts[action_type] += 1
             continue

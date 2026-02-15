@@ -1600,37 +1600,48 @@ async function startWhatsApp() {
     const isNotify = type === 'notify';
     const precomputedContextByMessage = new Map();
 
-    if (isNotify) {
+    if (!isNotify) {
+      await runWithConcurrency(messages, config.upsertConcurrency, async (msg) => {
+        try {
+          const stubEvent = parseGroupJoinStub(msg);
+          if (stubEvent) {
+            await emitGroupJoinContextEvent(stubEvent);
+          }
+        } catch (err) {
+          logger.error({ err }, 'failed handling message');
+        }
+      });
+    } else {
+      const notifyGroups = new Map();
       for (const msg of messages) {
-        const chatId = msg?.key?.remoteJid;
+        const chatId = msg?.key?.remoteJid || '__unknown_chat__';
+        const bucket = notifyGroups.get(chatId) || [];
+        bucket.push(msg);
+        notifyGroups.set(chatId, bucket);
+
         const messageId = msg?.key?.id;
         if (!chatId || !messageId || chatId === 'status@broadcast') continue;
         if (GROUP_JOIN_STUB_TYPES.has(msg?.messageStubType) || !msg?.message) continue;
         const contextMsgId = ensureContextMsgId(chatId, messageId);
         precomputedContextByMessage.set(messageIdIndexKey(chatId, messageId), contextMsgId);
       }
-    }
 
-    await runWithConcurrency(messages, config.upsertConcurrency, async (msg) => {
-      try {
-        if (!isNotify) {
-          const stubEvent = parseGroupJoinStub(msg);
-          if (stubEvent) {
-            await emitGroupJoinContextEvent(stubEvent);
+      const groupedMessages = Array.from(notifyGroups.values());
+      await runWithConcurrency(groupedMessages, config.upsertConcurrency, async (groupMessages) => {
+        for (const msg of groupMessages) {
+          try {
+            const chatId = msg?.key?.remoteJid;
+            const messageId = msg?.key?.id;
+            const precomputedContextMsgId = (chatId && messageId)
+              ? precomputedContextByMessage.get(messageIdIndexKey(chatId, messageId))
+              : null;
+            await handleIncomingMessage(msg, { precomputedContextMsgId });
+          } catch (err) {
+            logger.error({ err }, 'failed handling message');
           }
-          return;
         }
-
-        const chatId = msg?.key?.remoteJid;
-        const messageId = msg?.key?.id;
-        const precomputedContextMsgId = (chatId && messageId)
-          ? precomputedContextByMessage.get(messageIdIndexKey(chatId, messageId))
-          : null;
-        await handleIncomingMessage(msg, { precomputedContextMsgId });
-      } catch (err) {
-        logger.error({ err }, 'failed handling message');
-      }
-    });
+      });
+    }
 
     const batchTotalMs = Date.now() - batchStartMs;
     if (config.perfLogEnabled && messages.length > 1 && batchTotalMs >= config.perfLogThresholdMs) {
@@ -1638,6 +1649,7 @@ async function startWhatsApp() {
         type,
         messageCount: messages.length,
         upsertConcurrency: config.upsertConcurrency,
+        chatGroups: isNotify ? new Set(messages.map((msg) => msg?.key?.remoteJid || '__unknown_chat__')).size : null,
         batchTotalMs,
       }, 'slow messages.upsert batch');
     }
