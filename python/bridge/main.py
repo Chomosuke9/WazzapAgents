@@ -417,6 +417,30 @@ def _resolve_group_prompt_context(payload: dict) -> tuple[str | None, str | None
   return cleaned_description, merged_overide
 
 
+def _merge_payload_attachments(payloads: list[dict], base_payload: dict) -> dict:
+  merged = dict(base_payload)
+  merged_attachments: list[dict] = []
+  seen_keys: set[str] = set()
+  for payload in payloads:
+    attachments = payload.get("attachments") or []
+    if not isinstance(attachments, list):
+      continue
+    for attachment in attachments:
+      if not isinstance(attachment, dict):
+        continue
+      path = str(attachment.get("path") or "").strip()
+      kind = str(attachment.get("kind") or "").strip().lower()
+      mime = str(attachment.get("mime") or "").strip().lower()
+      file_name = str(attachment.get("fileName") or "").strip().lower()
+      dedup_key = path or f"{kind}|{mime}|{file_name}"
+      if dedup_key in seen_keys:
+        continue
+      seen_keys.add(dedup_key)
+      merged_attachments.append(attachment)
+  merged["attachments"] = merged_attachments
+  return merged
+
+
 async def handle_socket(ws):
   per_chat: Dict[str, Deque[WhatsAppMessage]] = defaultdict(deque)
   per_chat_lock: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -558,8 +582,9 @@ async def handle_socket(ws):
         history_before_current = list(history)
         current = _build_burst_current(llm1_trigger_payloads)
         llm1_history = list(history_before_current)
-        llm1_history.extend(_payload_to_message(payload) for payload in prefix_payloads)
-        llm1_current = _payload_to_message(trigger_window_payloads[-1])
+        # LLM1 should evaluate the pending window as a single "current" burst
+        # so one trailing sticker does not overshadow earlier questions.
+        llm1_current = _build_burst_current(trigger_window_payloads)
         llm2_history = list(history_before_current)
         llm2_history.extend(_payload_to_message(payload) for payload in passive_prefix_payloads)
         batch_payload_age_ms = None
@@ -610,11 +635,12 @@ async def handle_socket(ws):
         allowed_context_ids = _collect_context_ids(history)
         fallback_reply_to = _normalize_context_msg_id(last_payload.get("contextMsgId"))
         chat_type, bot_is_admin, bot_is_super_admin = _chat_state_from_payload(last_payload)
+        llm2_payload = _merge_payload_attachments(trigger_window_payloads, last_payload)
         llm2_started = time.perf_counter()
         reply_msg = await generate_reply(
           llm2_history,
           current,
-          current_payload=last_payload,
+          current_payload=llm2_payload,
           group_description=group_description,
           prompt_override=prompt_override,
           chat_type=chat_type,

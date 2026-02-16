@@ -5,6 +5,7 @@ import json
 import os
 import time
 import logging
+import re
 from typing import Iterable, Optional
 
 import httpx
@@ -140,6 +141,7 @@ def build_llm1_prompt(
   message_max_chars: int,
   current_media_parts: Optional[list[dict]] = None,
   current_media_notes: Optional[list[str]] = None,
+  metadata_block: str | None = None,
   group_description: str | None = None,
   prompt_override: str | None = None,
 ):
@@ -149,7 +151,8 @@ def build_llm1_prompt(
   hist_text = format_history(prompt_history) or "(no history)"
   current_line = format_history([current_prompt_msg])
   group_text = _group_description_block(group_description)
-  current_content: str | list[dict] = f"Current messages:\n{current_line}\n"
+  merged_messages = f"Messages (older + current):\n{hist_text}\n{current_line}\n"
+  current_content: str | list[dict] = merged_messages
   if current_media_notes:
     current_content += "\nVisual attachments:\n" + "\n".join(
       f"- {note}" for note in current_media_notes
@@ -166,11 +169,21 @@ Do not write any other text outside the tool call.
 Your tag is @52416300998887, if someone mention it in the chat, respond to it.
 The tool must include all arguments: should_response (true/false), confidence (0-100), reason (2-8 words). You will be given up to {_llm1_history_limit()} last messages. Every message is capped at {_llm1_message_max_chars()} characters max.
 
+## Input format
+You will receive:
+- `Current message metadata` with fields like `messageType`, `botMentioned`, `repliedToBot`, and `mentionedCount`.
+- `Messages (older + current)` as one merged block.
+
+Important:
+- The merged block may contain a burst window (multiple recent messages combined).
+- Do not over-prioritize only the last line. Judge whether any message in the merged block deserves a reply.
+
 ## Know When to Speak!
 In group chats where you receive every message, be smart about when to contribute:
 Respond when:
 - Directly mentioned or asked a question. If someone mentioned your name, it most likely means you need to respond.
 - Someone tag @52416300998887 in their message.
+- Current message metadata says botMentioned=true or repliedToBot=true.
 - You can add genuine value (info, insight, help).
 - Something witty/funny fits naturally.
 - Correcting important misinformation.
@@ -191,7 +204,7 @@ Note: The chat will be referred to as "LLM".
 
 ## Burst messages
 When group chat is active, you may get a burst of messages. Please consider every single message in the burst. Sometimes when it's super busy, burst message get sent to older messages.
-Consider every single message in current messages. If one of those messages deserved to answered, answer it.
+Consider every single message in "Messages (older + current)". If one of those messages deserves an answer, answer it.
 
 ## Prompt Override (higher priority patch)
 You may receive extra instructions inside:
@@ -223,8 +236,8 @@ Safety check:
       "content": rendered_system,
     },
     {"role": "user", "content": f"Group description:\n{group_text}"},
-    {"role": "user", "content": f"Older messages:\n{hist_text}"},
-    {"role": "user", "content": f"Current messages:\n{current_content}"},
+    {"role": "user", "content": metadata_block or _metadata_block(None)},
+    {"role": "user", "content": current_content},
   ]
 
 
@@ -351,6 +364,49 @@ def _content_to_text(content) -> str:
   return str(content)
 
 
+def _extract_decision_from_content(content) -> dict:
+  text = _content_to_text(content).strip()
+  if not text:
+    return {}
+
+  candidates: list[str] = [text]
+  fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.IGNORECASE)
+  if fenced:
+    fenced_text = fenced.group(1).strip()
+    if fenced_text:
+      candidates.append(fenced_text)
+
+  first_brace = text.find("{")
+  last_brace = text.rfind("}")
+  if first_brace >= 0 and last_brace > first_brace:
+    candidates.append(text[first_brace : last_brace + 1].strip())
+
+  for candidate in candidates:
+    try:
+      parsed = json.loads(candidate)
+    except Exception:
+      continue
+    if isinstance(parsed, dict):
+      return parsed
+  return {}
+
+
+def _metadata_block(current_payload: dict | None) -> str:
+  payload = current_payload if isinstance(current_payload, dict) else {}
+  message_type = str(payload.get("messageType") or "unknown")
+  bot_mentioned = bool(payload.get("botMentioned"))
+  replied_to_bot = bool(payload.get("repliedToBot"))
+  mentioned = payload.get("mentionedJids")
+  mention_count = len(mentioned) if isinstance(mentioned, list) else 0
+  return (
+    "Current message metadata:\n"
+    f"- messageType: {message_type}\n"
+    f"- botMentioned: {'true' if bot_mentioned else 'false'}\n"
+    f"- repliedToBot: {'true' if replied_to_bot else 'false'}\n"
+    f"- mentionedCount: {mention_count}"
+  )
+
+
 def _redact_messages_for_log(messages: list[dict]) -> list[dict]:
   redacted: list[dict] = []
   for msg in messages:
@@ -392,6 +448,7 @@ async def call_llm1(
     message_max_chars=message_max_chars,
     current_media_parts=current_media_parts,
     current_media_notes=current_media_notes,
+    metadata_block=_metadata_block(current_payload),
     group_description=group_description,
     prompt_override=prompt_override,
   )
@@ -568,6 +625,35 @@ async def call_llm1(
     tool_calls = tool_calls or []
 
     if not tool_calls:
+      parsed_fallback = _extract_decision_from_content(
+        (message or {}).get("content") if isinstance(message, dict) else None
+      )
+      if parsed_fallback:
+        try:
+          decision = LLM1Decision.model_validate(parsed_fallback)
+          logger.warning(
+            "LLM1 response missing tool call; parsed JSON fallback",
+            extra={
+              **ctx,
+              "finish_reason": choice.get("finish_reason") if isinstance(choice, dict) else None,
+              "provider": provider,
+              "routed_model": routed_model,
+              "fallback_args": parsed_fallback,
+            },
+          )
+          logger.info(
+            "LLM1 decision",
+            extra={
+              **ctx,
+              "should_response": decision.should_response,
+              "confidence": decision.confidence,
+              "reason": decision.reason,
+              "raw": trunc(dump_json(decision.model_dump()), 400),
+            },
+          )
+          return decision
+        except ValidationError:
+          pass
       logger.warning(
         "LLM1 response missing tool call; defaulting to skip",
         extra={

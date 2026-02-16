@@ -1201,7 +1201,21 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
   const quotedStartMs = Date.now();
   const quoted = await extractQuoted(innerMessage, chatId);
   perf.quotedMs = Date.now() - quotedStartMs;
-  const mentionedJids = extractMentionedJids(innerMessage);
+  const mentionedJidsRaw = extractMentionedJids(innerMessage);
+  const mentionedJids = Array.isArray(mentionedJidsRaw)
+    ? Array.from(new Set(
+      mentionedJidsRaw
+        .map((jid) => normalizeJid(jid) || jid)
+        .filter(Boolean)
+    ))
+    : null;
+  const botMentioned = Boolean(
+    selfJid
+    && Array.isArray(mentionedJids)
+    && mentionedJids.some((jid) => (normalizeJid(jid) || jid) === selfJid)
+  );
+  const quotedSenderId = normalizeJid(quoted?.senderId) || quoted?.senderId || null;
+  const repliedToBot = Boolean(selfJid && quotedSenderId && quotedSenderId === selfJid);
 
   const attachments = [];
   const mediaKinds = [
@@ -1246,6 +1260,8 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
     quoted,
     attachments,
     mentionedJids,
+    botMentioned,
+    repliedToBot,
     location,
     groupDescription: group?.description || null,
     groupPromptOveride: group?.promptOveride || null,

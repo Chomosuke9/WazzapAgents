@@ -192,8 +192,10 @@ async def generate_reply(
   current_line = format_history([current])
   group_text = _group_description_block(group_description)
   chat_state_text = _chat_state_header(chat_type or "private", bot_is_admin, bot_is_super_admin)
-  older_messages_content = f"Chat state:\n{chat_state_text}\n\nOlder messages:\n{hist_text}"
-  current_content_text = f"Chat state:\n{chat_state_text}\n\nCurrent messages:\n{current_line}"
+  merged_messages_content = (
+    f"Chat state:\n{chat_state_text}\n\nMessages (older + current):\n{hist_text}\n{current_line}"
+  )
+  current_content_text = merged_messages_content
   media_parts: list[dict] = []
   media_notes: list[str] = []
   if llm2_media_enabled():
@@ -212,7 +214,6 @@ async def generate_reply(
 
   msgs = [SystemMessage(content=rendered_system)]
   msgs.append(HumanMessage(content=f"Group description:\n{group_text}"))
-  msgs.append(HumanMessage(content=older_messages_content))
   msgs.append(HumanMessage(content=current_content))
   if tools:
     llm = llm.bind_tools(tools)
@@ -225,7 +226,6 @@ async def generate_reply(
         "messages": [
           {"role": "system", "content": rendered_system},
           {"role": "user", "content": f"Group description:\n{group_text}"},
-          {"role": "user", "content": older_messages_content},
           {"role": "user", "content": redact_multimodal_content(current_content)},
         ],
       },
@@ -327,7 +327,6 @@ async def generate_reply(
       [
         SystemMessage(content=rendered_system),
         HumanMessage(content=f"Group description:\n{group_text}"),
-        HumanMessage(content=older_messages_content),
         HumanMessage(content=current_content_text),
       ],
       mode="text_fallback",

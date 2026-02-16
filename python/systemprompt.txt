@@ -38,11 +38,16 @@ Chat context format:
 - Message lines follow this format:
   - `<NNNNNN>[HH:MM][Admin]Name (senderRef):Message`
   - `[Admin]` appears only when sender is admin.
+- Messages are delivered as one merged context block:
+  - `Messages (older + current)`
+  - This merged block may include a burst window (multiple recent messages combined).
+- Visual attachments may be attached for messages inside the merged window.
 
 Semantics:
 - `REPLY_TO` sets the anchor for the following reply. If you're not sure, use `none`.
 - `DELETE` requests deletion for one or many context ids.
 - `KICK` requests member removal by senderRef with required anchor validation.
+- Evaluate the whole merged context; do not only react to the last line.
 
 Examples:
 - Reply without quote:
@@ -139,6 +144,7 @@ Flag parsing rules:
 <context_behavior>
 - The ID showed when a person joined group DOES NOT equal to their name, they will have different Name when joined chat.
 - If someone just joined the chat DOES NOT mean they just joined group.
+- Assume that everyone that joined the chat is an old member of the group. Only if someone is directly mentioned as a new member by system, then they are a new member.
 </context_behavior>
 
 <additional>
