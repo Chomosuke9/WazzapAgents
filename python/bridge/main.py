@@ -466,7 +466,11 @@ async def handle_socket(ws):
       return
 
     context_only_payloads = [payload for payload in non_empty_payloads if _is_context_only_payload(payload)]
-    llm1_trigger_payloads = [payload for payload in non_empty_payloads if _payload_triggers_llm1(payload)]
+    trigger_indexes = [
+      idx for idx, payload in enumerate(non_empty_payloads) if _payload_triggers_llm1(payload)
+    ]
+    llm1_trigger_payloads = [non_empty_payloads[idx] for idx in trigger_indexes]
+    last_trigger_index = trigger_indexes[-1] if trigger_indexes else None
     passive_context_payloads = [
       payload for payload in context_only_payloads if not _payload_triggers_llm1(payload)
     ]
@@ -538,19 +542,26 @@ async def handle_socket(ws):
             "raw_payload": last_payload,
           },
         )
-        for payload in passive_context_payloads:
-          _append_or_merge_history_payload(history, payload)
-
         if not llm1_trigger_payloads:
+          for payload in non_empty_payloads:
+            _append_or_merge_history_payload(history, payload)
           logger.debug("[%s] stored context-only updates", chat_id)
           _log_slow_batch("context_only")
           return
 
+        trigger_window_payloads = non_empty_payloads[: (last_trigger_index + 1)]
+        prefix_payloads = trigger_window_payloads[:-1]
+        passive_prefix_payloads = [
+          payload for payload in prefix_payloads if not _payload_triggers_llm1(payload)
+        ]
+
         history_before_current = list(history)
-        burst_messages = [_payload_to_message(payload) for payload in llm1_trigger_payloads]
         current = _build_burst_current(llm1_trigger_payloads)
         llm1_history = list(history_before_current)
-        llm1_current = burst_messages[-1]
+        llm1_history.extend(_payload_to_message(payload) for payload in prefix_payloads)
+        llm1_current = _payload_to_message(trigger_window_payloads[-1])
+        llm2_history = list(history_before_current)
+        llm2_history.extend(_payload_to_message(payload) for payload in passive_prefix_payloads)
         batch_payload_age_ms = None
         if last_payload_ts is not None:
           batch_payload_age_ms = max(0, int(time.time() * 1000) - last_payload_ts)
@@ -559,8 +570,8 @@ async def handle_socket(ws):
           and batch_payload_age_ms is not None
           and batch_payload_age_ms > MAX_TRIGGER_BATCH_AGE_MS
         ):
-          for msg in burst_messages:
-            _append_history(history, msg)
+          for payload in non_empty_payloads:
+            _append_or_merge_history_payload(history, payload)
           logger.info(
             "[%s] skipped stale trigger batch",
             chat_id,
@@ -573,9 +584,6 @@ async def handle_socket(ws):
           _log_slow_batch("stale_skip")
           return
         group_description, prompt_override = _resolve_group_prompt_context(last_payload)
-        if len(burst_messages) > 1:
-          # Let LLM1 see burst context as individual messages so char limit applies per message.
-          llm1_history.extend(burst_messages[:-1])
 
         llm1_started = time.perf_counter()
         decision = await call_llm1(
@@ -586,8 +594,8 @@ async def handle_socket(ws):
           prompt_override=prompt_override,
         )
         llm1_ms = int((time.perf_counter() - llm1_started) * 1000)
-        for msg in burst_messages:
-          _append_history(history, msg)
+        for payload in non_empty_payloads:
+          _append_or_merge_history_payload(history, payload)
         if not decision.should_response:
           logger.info(
             "[%s] skipped (llm1=%s, conf=%s%%, batch=%s)",
@@ -604,7 +612,7 @@ async def handle_socket(ws):
         chat_type, bot_is_admin, bot_is_super_admin = _chat_state_from_payload(last_payload)
         llm2_started = time.perf_counter()
         reply_msg = await generate_reply(
-          history_before_current,
+          llm2_history,
           current,
           current_payload=last_payload,
           group_description=group_description,
