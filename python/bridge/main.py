@@ -50,12 +50,6 @@ def _parse_non_negative_int(raw: str | None, default: int) -> int:
   return parsed if parsed >= 0 else default
 
 
-def _parse_bool(raw: str | None, default: bool) -> bool:
-  if raw is None:
-    return default
-  return raw.strip().lower() in {"1", "true", "yes", "on"}
-
-
 HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "20"))
 INCOMING_DEBOUNCE_SECONDS = _parse_positive_float(
   os.getenv("INCOMING_DEBOUNCE_SECONDS"), 5.0
@@ -70,9 +64,6 @@ REPLY_DEDUP_WINDOW_MS = _parse_non_negative_int(
 )
 REPLY_DEDUP_MIN_CHARS = _parse_non_negative_int(
   os.getenv("BRIDGE_REPLY_DEDUP_MIN_CHARS"), 24
-)
-DROP_REPLY_IF_NEWER_PENDING = _parse_bool(
-  os.getenv("BRIDGE_DROP_REPLY_IF_NEWER_PENDING"), True
 )
 ASSISTANT_ECHO_MERGE_WINDOW_MS = _parse_non_negative_int(
   os.getenv("BRIDGE_ASSISTANT_ECHO_MERGE_WINDOW_MS"), 180000
@@ -485,7 +476,6 @@ async def handle_socket(ws):
     history = per_chat[chat_id]
     lock = per_chat_lock[chat_id]
     batch_started = time.perf_counter()
-    batch_started_monotonic = time.monotonic()
     last_payload_ts = _payload_timestamp_ms(last_payload)
     lock_wait_started = time.perf_counter()
     async with lock:
@@ -641,36 +631,6 @@ async def handle_socket(ws):
           )
           _log_slow_batch("no_action")
           return
-
-        if DROP_REPLY_IF_NEWER_PENDING:
-          pending = pending_by_chat[chat_id]
-          async with pending.lock:
-            newer_pending_count = len(pending.payloads)
-            has_newer_pending = (
-              newer_pending_count > 0
-              and (pending.last_event_at or 0) >= batch_started_monotonic
-            )
-          if has_newer_pending:
-            send_action_count = sum(
-              1 for action in actions if action.get("type") == "send_message"
-            )
-            if send_action_count > 0:
-              actions = [
-                action for action in actions
-                if action.get("type") != "send_message"
-              ]
-              logger.info(
-                "[%s] dropped stale send actions due to newer pending payloads",
-                chat_id,
-                extra={
-                  "dropped_send_actions": send_action_count,
-                  "remaining_actions": len(actions),
-                  "pending_payloads": newer_pending_count,
-                },
-              )
-              if not actions:
-                _log_slow_batch("stale_send_drop")
-                return
 
         action_counts: dict[str, int] = defaultdict(int)
         action_send_started = time.perf_counter()
