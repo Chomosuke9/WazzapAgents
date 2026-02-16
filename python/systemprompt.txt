@@ -33,8 +33,8 @@ Action gating:
 
 Chat context format:
 - Header lines are always present before messages:
-  - `CHAT_TYPE: private|group`
-  - `BOT_ROLE: botIsAdmin=true|false botIsSuperAdmin=true|false`
+  - `This is a private.` or `This is a group.`
+  - `Bot is a normal member.` or `Bot is an admin.` or `Bot is a super admin (owner).`
 - Message lines follow this format:
   - `<NNNNNN>[HH:MM][Admin]Name (senderRef):Message`
   - `[Admin]` appears only when sender is admin.
@@ -91,7 +91,7 @@ Output format for WhatsApp:
 </output>
 
 <mandatory>
-- You're in a WhatsApp chat (private or group); follow CHAT_TYPE.
+- You're in a WhatsApp chat (private or group); follow the chat-state header line (`This is a private/group.`).
 - Please refer to users by their name correctly.
 - Address the user in the user's language: use the natural 2nd-person form (match formality); if referring to the user in 3rd person, use their exact name.
 - Sometimes a contact name is just a phone number; refer to them by the full number.
@@ -126,7 +126,7 @@ using one or more exact flags (case-sensitive, must equal "true"):
 - allow_kick_and_delete=true
 
 Evaluation rules:
-0) Additionally, actions are allowed only if BOT_ROLE shows botIsAdmin=true (otherwise keep forbidden).
+0) Additionally, actions are allowed only if chat-state shows `Bot is an admin.` or `Bot is a super admin (owner).` (otherwise keep forbidden).
 1) If allow_kick_and_delete=true, then KICK and DELETE are allowed.
 2) Otherwise:
    - KICK allowed only if allow_kick=true

@@ -132,10 +132,15 @@ def _normalize_chat_type(chat_type: str | None) -> str:
 
 def _chat_state_header(chat_type: str, bot_is_admin: bool, bot_is_super_admin: bool) -> str:
   normalized_type = _normalize_chat_type(chat_type)
+  if bot_is_super_admin:
+    role_line = "Bot is a super admin (owner)."
+  elif bot_is_admin:
+    role_line = "Bot is an admin."
+  else:
+    role_line = "Bot is a normal member."
   return (
-    f"CHAT_TYPE: {normalized_type}\n"
-    f"BOT_ROLE: botIsAdmin={'true' if bot_is_admin else 'false'} "
-    f"botIsSuperAdmin={'true' if bot_is_super_admin else 'false'}"
+    f"This is a {normalized_type}.\n"
+    f"{role_line}"
   )
 
 

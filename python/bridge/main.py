@@ -378,6 +378,82 @@ def _payload_has_meaningful_content(payload: dict) -> bool:
   return False
 
 
+def _payload_is_human(payload: dict) -> bool:
+  return not bool(payload.get("fromMe"))
+
+
+def _messages_since_last_assistant(
+  history_messages: list[WhatsAppMessage],
+  window_payloads: list[dict] | None = None,
+) -> int:
+  count = 0
+  if window_payloads:
+    for payload in reversed(window_payloads):
+      if bool(payload.get("fromMe")):
+        return count
+      count += 1
+  for msg in reversed(history_messages):
+    if msg.role == "assistant":
+      return count
+    count += 1
+  return count
+
+
+def _assistant_replies_in_recent(history_messages: list[WhatsAppMessage], recent_window: int = 20) -> int:
+  if recent_window <= 0:
+    return 0
+  recent = history_messages[-recent_window:]
+  return sum(1 for msg in recent if msg.role == "assistant")
+
+
+def _llm1_history_limit_for_metadata() -> int:
+  raw = os.getenv("LLM1_HISTORY_LIMIT")
+  if raw is None or not raw.strip():
+    raw = os.getenv("HISTORY_LIMIT")
+  try:
+    parsed = int(raw) if raw is not None else HISTORY_LIMIT
+  except (TypeError, ValueError):
+    parsed = HISTORY_LIMIT
+  if parsed > 0:
+    return parsed
+  return HISTORY_LIMIT if HISTORY_LIMIT > 0 else 20
+
+
+def _build_llm1_context_metadata(
+  history_before_current: list[WhatsAppMessage],
+  trigger_window_payloads: list[dict],
+) -> dict:
+  human_payloads = [payload for payload in trigger_window_payloads if _payload_is_human(payload)]
+  bot_mentioned_in_window = any(bool(payload.get("botMentioned")) for payload in human_payloads)
+  replied_to_bot_in_window = any(bool(payload.get("repliedToBot")) for payload in human_payloads)
+  bot_mention_count_in_window = sum(
+    1
+    for payload in human_payloads
+    if bool(payload.get("botMentioned"))
+  )
+  history_limit = _llm1_history_limit_for_metadata()
+  standard_windows = [20, 50, 100, 200]
+  assistant_reply_windows = [window for window in standard_windows if window <= history_limit]
+  if history_limit not in standard_windows:
+    assistant_reply_windows.append(history_limit)
+  assistant_reply_windows = sorted(set(assistant_reply_windows))
+  assistant_replies_by_window = {
+    str(window): _assistant_replies_in_recent(history_before_current, recent_window=window)
+    for window in assistant_reply_windows
+  }
+  return {
+    "botMentionedInWindow": bot_mentioned_in_window,
+    "repliedToBotInWindow": replied_to_bot_in_window,
+    "botMentionCountInWindow": bot_mention_count_in_window,
+    "messagesSinceAssistantReply": _messages_since_last_assistant(
+      history_before_current,
+      trigger_window_payloads,
+    ),
+    "assistantRepliesByWindow": assistant_replies_by_window,
+    "humanMessagesInWindow": len(human_payloads),
+  }
+
+
 def _extract_prompt_override(raw_description: str | None) -> tuple[str | None, str | None]:
   text = raw_description if isinstance(raw_description, str) else ""
   if not text.strip():
@@ -609,12 +685,16 @@ async def handle_socket(ws):
           _log_slow_batch("stale_skip")
           return
         group_description, prompt_override = _resolve_group_prompt_context(last_payload)
+        llm1_payload = dict(last_payload)
+        llm1_payload.update(
+          _build_llm1_context_metadata(history_before_current, trigger_window_payloads)
+        )
 
         llm1_started = time.perf_counter()
         decision = await call_llm1(
           llm1_history,
           llm1_current,
-          current_payload=last_payload,
+          current_payload=llm1_payload,
           group_description=group_description,
           prompt_override=prompt_override,
         )

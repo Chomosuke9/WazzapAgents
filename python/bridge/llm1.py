@@ -171,19 +171,29 @@ The tool must include all arguments: should_response (true/false), confidence (0
 
 ## Input format
 You will receive:
-- `Current message metadata` with fields like `messageType`, `botMentioned`, `repliedToBot`, and `mentionedCount`.
+- `Current message metadata` with useful hints about the trigger window and recent conversation.
+- Metadata may also include conversation-level signals:
+  - Whether the bot is mentioned in the trigger window.
+  - Whether any message in the trigger window replies to the bot.
+  - How many times the bot is mentioned in the trigger window.
+  - How many messages ago the assistant last replied.
+  - How many assistant replies appeared in recent windows (20/50/100/200 and custom history limit).
+  - How many human messages exist in the current trigger window.
 - `Messages (older + current)` as one merged block.
 
 Important:
 - The merged block may contain a burst window (multiple recent messages combined).
 - Do not over-prioritize only the last line. Judge whether any message in the merged block deserves a reply.
+- Use conversation-level signals as hints only (not strict rules):
+  - If bot just replied recently and there is no mention/reply signal in the trigger window, lean quieter.
+  - If bot has been quiet for a while and humans keep talking, lean helpful participation.
 
 ## Know When to Speak!
 In group chats where you receive every message, be smart about when to contribute:
 Respond when:
 - Directly mentioned or asked a question. If someone mentioned your name, it most likely means you need to respond.
 - Someone tag @52416300998887 in their message.
-- Current message metadata says botMentioned=true or repliedToBot=true.
+- Current message metadata indicates the bot was mentioned or replied to in the trigger window.
 - You can add genuine value (info, insight, help).
 - Something witty/funny fits naturally.
 - Correcting important misinformation.
@@ -392,17 +402,94 @@ def _extract_decision_from_content(content) -> dict:
 
 def _metadata_block(current_payload: dict | None) -> str:
   payload = current_payload if isinstance(current_payload, dict) else {}
-  message_type = str(payload.get("messageType") or "unknown")
-  bot_mentioned = bool(payload.get("botMentioned"))
-  replied_to_bot = bool(payload.get("repliedToBot"))
-  mentioned = payload.get("mentionedJids")
-  mention_count = len(mentioned) if isinstance(mentioned, list) else 0
+  bot_mentioned = bool(payload.get("botMentionedInWindow", payload.get("botMentioned")))
+  replied_to_bot = bool(payload.get("repliedToBotInWindow", payload.get("repliedToBot")))
+  mention_count = payload.get("botMentionCountInWindow")
+  if mention_count is None:
+    mentioned = payload.get("mentionedJids")
+    if isinstance(mentioned, list):
+      mention_count = len(mentioned)
+    elif payload.get("botMentioned") is not None:
+      mention_count = 1 if bool(payload.get("botMentioned")) else 0
+    else:
+      mention_count = None
+  since_assistant = payload.get("messagesSinceAssistantReply")
+  assistant_replies_by_window = payload.get("assistantRepliesByWindow")
+  human_window = payload.get("humanMessagesInWindow")
+
+  def _count_phrase(value, singular: str, plural: str) -> str:
+    if value is None:
+      return f"unknown {plural}"
+    if isinstance(value, int):
+      return f"{value} {singular if value == 1 else plural}"
+    return f"{value} {plural}"
+
+  def _is_singular_count(value) -> bool:
+    return isinstance(value, int) and value == 1
+
+  try:
+    mention_count = int(mention_count)
+  except (TypeError, ValueError):
+    pass
+
+  mention_count_text = _count_phrase(mention_count, "time", "times")
+  if isinstance(mention_count, int):
+    if mention_count > 0:
+      mention_line = f"- Bot is mentioned {mention_count_text} in this trigger window."
+    elif bot_mentioned:
+      mention_line = "- Bot is mentioned in this trigger window."
+    else:
+      mention_line = "- Bot is not mentioned in this trigger window."
+  elif bot_mentioned:
+    mention_line = "- Bot is mentioned in this trigger window."
+  else:
+    mention_line = "- Bot is not mentioned in this trigger window."
+
+  if replied_to_bot:
+    reply_line = "- A message in this trigger window replies to the bot."
+  else:
+    reply_line = "- No message in this trigger window replies to the bot."
+
+  since_assistant_text = _count_phrase(since_assistant, "message", "messages")
+  human_window_text = _count_phrase(human_window, "human message", "human messages")
+
+  assistant_reply_lines: list[str] = []
+  if isinstance(assistant_replies_by_window, dict):
+    assistant_reply_values: list[tuple[int, int | str]] = []
+    for raw_window, raw_count in assistant_replies_by_window.items():
+      try:
+        window = int(raw_window)
+      except (TypeError, ValueError):
+        continue
+      assistant_reply_values.append((window, raw_count))
+    assistant_reply_values.sort(key=lambda item: item[0])
+    for window, count in assistant_reply_values:
+      count_text = _count_phrase(count, "reply", "replies")
+      assistant_reply_lines.append(
+        f"- Assistant has sent {count_text} in the last {window} messages."
+      )
+
+  if not assistant_reply_lines:
+    fallback_recent = payload.get("assistantRepliesInLast20")
+    fallback_text = _count_phrase(fallback_recent, "reply", "replies")
+    assistant_reply_lines.append(
+      f"- Assistant has sent {fallback_text} in the last 20 messages."
+    )
+
+  if _is_singular_count(human_window):
+    human_window_line = f"- There is {human_window_text} in this trigger window."
+  else:
+    human_window_line = f"- There are {human_window_text} in this trigger window."
+
+  assistant_reply_block = "\n".join(assistant_reply_lines)
   return (
     "Current message metadata:\n"
-    f"- messageType: {message_type}\n"
-    f"- botMentioned: {'true' if bot_mentioned else 'false'}\n"
-    f"- repliedToBot: {'true' if replied_to_bot else 'false'}\n"
-    f"- mentionedCount: {mention_count}"
+    "Helper:\n"
+    f"{mention_line}\n"
+    f"{reply_line}\n"
+    f"- The last assistant reply was {since_assistant_text} ago.\n"
+    f"{assistant_reply_block}\n"
+    f"{human_window_line}"
   )
 
 
