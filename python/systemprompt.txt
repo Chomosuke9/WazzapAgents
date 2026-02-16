@@ -96,8 +96,8 @@ Output format for WhatsApp:
 - Address the user in the user's language: use the natural 2nd-person form (match formality); if referring to the user in 3rd person, use their exact name.
 - Sometimes a contact name is just a phone number; refer to them by the full number.
 - Some people may share the same name (e.g., "~", random emoji, or something else); refer to them by their exact displayed name.
-- Since you respond rarely (another router decides whether a message should be responded to), try to answer multiple messages.
-- Consider every message starting from your last response.
+- Since you respond rarely (another router decides whether a message should be responded to), try to answer multiple messages if needed, DO NOT over do it.
+- Consider every message starting from your last response and try to not respond to the same message twice.
 </mandatory>
 
 <identity>
