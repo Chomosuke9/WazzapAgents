@@ -399,11 +399,21 @@ def _messages_since_last_assistant(
   return count
 
 
-def _assistant_replies_in_recent(history_messages: list[WhatsAppMessage], recent_window: int = 20) -> int:
+def _assistant_replies_in_recent(
+  history_messages: list[WhatsAppMessage],
+  recent_window: int = 20,
+  window_payloads: list[dict] | None = None,
+) -> int:
   if recent_window <= 0:
     return 0
-  recent = history_messages[-recent_window:]
-  return sum(1 for msg in recent if msg.role == "assistant")
+  combined_roles: list[str] = [msg.role for msg in history_messages]
+  if window_payloads:
+    combined_roles.extend(
+      "assistant" if bool(payload.get("fromMe")) else "user"
+      for payload in window_payloads
+    )
+  recent_roles = combined_roles[-recent_window:]
+  return sum(1 for role in recent_roles if role == "assistant")
 
 
 def _llm1_history_limit_for_metadata() -> int:
@@ -438,7 +448,11 @@ def _build_llm1_context_metadata(
     assistant_reply_windows.append(history_limit)
   assistant_reply_windows = sorted(set(assistant_reply_windows))
   assistant_replies_by_window = {
-    str(window): _assistant_replies_in_recent(history_before_current, recent_window=window)
+    str(window): _assistant_replies_in_recent(
+      history_before_current,
+      recent_window=window,
+      window_payloads=trigger_window_payloads,
+    )
     for window in assistant_reply_windows
   }
   return {
