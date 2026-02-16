@@ -406,9 +406,8 @@ def _metadata_block(current_payload: dict | None) -> str:
   replied_to_bot = bool(payload.get("repliedToBotInWindow", payload.get("repliedToBot")))
   mention_count = payload.get("botMentionCountInWindow")
   if mention_count is None:
-    mentioned = payload.get("mentionedJids")
-    if isinstance(mentioned, list):
-      mention_count = len(mentioned)
+    if payload.get("botMentionedInWindow") is not None:
+      mention_count = 1 if bool(payload.get("botMentionedInWindow")) else 0
     elif payload.get("botMentioned") is not None:
       mention_count = 1 if bool(payload.get("botMentioned")) else 0
     else:
