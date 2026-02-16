@@ -8,7 +8,7 @@ Node.js (ESM) gateway that connects a WhatsApp account via Baileys v7 and forwar
 - Internet access to install dependencies (`pnpm install`).
 
 ## Setup
-1. Copy `.env.example` to `.env` and fill `LLM_WS_ENDPOINT` (your WebSocket server URL) and optional `LLM_WS_TOKEN`.
+1. Copy `.env.example` to `.env`, fill required `LLM_WS_ENDPOINT` first, then adjust optional values as needed.
 2. Install deps with `pnpm install` (Baileys v7 is ESM-only; this project is `type: module`).
 3. Run the gateway: `pnpm dev`.
 4. Scan the QR in the terminal to pair the WhatsApp account (auth is stored in `data/auth`).
