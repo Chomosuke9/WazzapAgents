@@ -318,6 +318,11 @@ function normalizeJid(jid) {
   }
 }
 
+function escapeRegex(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function rememberParticipantName(jid, name) {
   if (!jid || typeof jid !== 'string') return;
   if (!name || typeof name !== 'string') return;
@@ -1283,6 +1288,12 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
   const chatType = isGroup ? 'group' : 'private';
   const fromMe = Boolean(msg.key?.fromMe);
   const selfJid = normalizeJid(sock.user?.id) || null;
+  const botAliases = new Set(
+    currentBotAliases()
+      .map((jid) => normalizeJid(jid) || jid)
+      .filter(Boolean)
+  );
+  if (selfJid) botAliases.add(selfJid);
   const fromId = msg.key.participant || (fromMe ? selfJid : msg.key.remoteJid);
   const senderId = normalizeJid(fromId) || fromId || normalizeJid(msg.key.remoteJid) || msg.key.remoteJid;
   const senderDisplay = msg.pushName || lookupParticipantName(senderId) || senderId;
@@ -1315,13 +1326,22 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
         .filter(Boolean)
     ))
     : null;
-  const botMentioned = Boolean(
-    selfJid
-    && Array.isArray(mentionedJids)
-    && mentionedJids.some((jid) => (normalizeJid(jid) || jid) === selfJid)
+  const botMentionedByJid = Boolean(
+    Array.isArray(mentionedJids)
+    && mentionedJids.some((jid) => botAliases.has(normalizeJid(jid) || jid))
   );
+  const botMentionTokens = Array.from(botAliases)
+    .map((jid) => String(jid).split('@')[0]?.trim())
+    .filter((token) => typeof token === 'string' && token.length >= 5);
+  const botMentionedByText = Boolean(
+    typeof text === 'string'
+    && botMentionTokens.some((token) => (
+      new RegExp(`(^|[^0-9A-Za-z_])@${escapeRegex(token)}(?=$|[^0-9A-Za-z_])`).test(text)
+    ))
+  );
+  const botMentioned = botMentionedByJid || botMentionedByText;
   const quotedSenderId = normalizeJid(quoted?.senderId) || quoted?.senderId || null;
-  const repliedToBot = Boolean(selfJid && quotedSenderId && quotedSenderId === selfJid);
+  const repliedToBot = Boolean(quotedSenderId && botAliases.has(quotedSenderId));
 
   const attachments = [];
   const mediaKinds = [

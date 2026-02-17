@@ -379,7 +379,40 @@ def _payload_has_meaningful_content(payload: dict) -> bool:
 
 
 def _payload_is_human(payload: dict) -> bool:
-  return not bool(payload.get("fromMe"))
+  # `contextOnly` non-fromMe events are synthetic context (e.g. group updates),
+  # not real human-authored chat messages.
+  return (not bool(payload.get("fromMe"))) and (not bool(payload.get("contextOnly")))
+
+
+def _is_provisional_assistant_echo(
+  history_messages: list[WhatsAppMessage],
+  payload: dict,
+) -> bool:
+  if not bool(payload.get("fromMe")):
+    return False
+  if not bool(payload.get("contextOnly")):
+    return False
+
+  payload_sig = _reply_signature(payload.get("text"))
+  if not payload_sig:
+    return False
+
+  payload_ts = _payload_timestamp_ms(payload)
+  for msg in reversed(history_messages):
+    if msg.role != "assistant":
+      continue
+    msg_id = msg.message_id or ""
+    if not msg_id.startswith("local-send-"):
+      continue
+    candidate_sig = _reply_signature(msg.text)
+    if not candidate_sig or candidate_sig != payload_sig:
+      continue
+    if payload_ts is not None and ASSISTANT_ECHO_MERGE_WINDOW_MS > 0:
+      age_delta = payload_ts - msg.timestamp_ms
+      if age_delta < 0 or age_delta > ASSISTANT_ECHO_MERGE_WINDOW_MS:
+        continue
+    return True
+  return False
 
 
 def _messages_since_last_assistant(
@@ -433,7 +466,12 @@ def _build_llm1_context_metadata(
   history_before_current: list[WhatsAppMessage],
   trigger_window_payloads: list[dict],
 ) -> dict:
-  human_payloads = [payload for payload in trigger_window_payloads if _payload_is_human(payload)]
+  effective_window_payloads = [
+    payload
+    for payload in trigger_window_payloads
+    if not _is_provisional_assistant_echo(history_before_current, payload)
+  ]
+  human_payloads = [payload for payload in effective_window_payloads if _payload_is_human(payload)]
   bot_mentioned_in_window = any(bool(payload.get("botMentioned")) for payload in human_payloads)
   replied_to_bot_in_window = any(bool(payload.get("repliedToBot")) for payload in human_payloads)
   bot_mention_count_in_window = sum(
@@ -451,7 +489,7 @@ def _build_llm1_context_metadata(
     str(window): _assistant_replies_in_recent(
       history_before_current,
       recent_window=window,
-      window_payloads=trigger_window_payloads,
+      window_payloads=effective_window_payloads,
     )
     for window in assistant_reply_windows
   }
@@ -461,7 +499,7 @@ def _build_llm1_context_metadata(
     "botMentionCountInWindow": bot_mention_count_in_window,
     "messagesSinceAssistantReply": _messages_since_last_assistant(
       history_before_current,
-      trigger_window_payloads,
+      effective_window_payloads,
     ),
     "assistantRepliesByWindow": assistant_replies_by_window,
     "humanMessagesInWindow": len(human_payloads),
