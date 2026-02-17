@@ -132,6 +132,10 @@ def _normalize_chat_type(chat_type: str | None) -> str:
 
 def _chat_state_header(chat_type: str, bot_is_admin: bool, bot_is_super_admin: bool) -> str:
   normalized_type = _normalize_chat_type(chat_type)
+  if normalized_type == "group":
+    scope_line = "This is a group chat. You're in a chat with multiple people at once."
+  else:
+    scope_line = "This is a private chat. You're directly chatting with one other person."
   if bot_is_super_admin:
     role_line = "Bot is a super admin (owner)."
   elif bot_is_admin:
@@ -139,8 +143,110 @@ def _chat_state_header(chat_type: str, bot_is_admin: bool, bot_is_super_admin: b
   else:
     role_line = "Bot is a normal member."
   return (
-    f"This is a {normalized_type}.\n"
+    f"{scope_line}\n"
     f"{role_line}"
+  )
+
+
+def _context_injection_block(
+  current_payload: dict | None,
+  *,
+  chat_type: str,
+  bot_is_admin: bool,
+  bot_is_super_admin: bool,
+) -> str:
+  payload = current_payload if isinstance(current_payload, dict) else {}
+  bot_mentioned = bool(payload.get("botMentionedInWindow", payload.get("botMentioned")))
+  replied_to_bot = bool(payload.get("repliedToBotInWindow", payload.get("repliedToBot")))
+  mention_count = payload.get("botMentionCountInWindow")
+  if mention_count is None:
+    mentioned = payload.get("mentionedJids")
+    if isinstance(mentioned, list):
+      mention_count = len(mentioned)
+    elif payload.get("botMentioned") is not None:
+      mention_count = 1 if bool(payload.get("botMentioned")) else 0
+    else:
+      mention_count = None
+  since_assistant = payload.get("messagesSinceAssistantReply")
+  assistant_replies_by_window = payload.get("assistantRepliesByWindow")
+  human_window = payload.get("humanMessagesInWindow")
+
+  def _count_phrase(value, singular: str, plural: str) -> str:
+    if value is None:
+      return f"unknown {plural}"
+    if isinstance(value, int):
+      return f"{value} {singular if value == 1 else plural}"
+    return f"{value} {plural}"
+
+  def _is_singular_count(value) -> bool:
+    return isinstance(value, int) and value == 1
+
+  try:
+    mention_count = int(mention_count)
+  except (TypeError, ValueError):
+    pass
+
+  mention_count_text = _count_phrase(mention_count, "time", "times")
+  if isinstance(mention_count, int):
+    if mention_count > 0:
+      mention_line = f"- Bot is mentioned {mention_count_text} in this current message window."
+    elif bot_mentioned:
+      mention_line = "- Bot is mentioned in this current message window."
+    else:
+      mention_line = "- Bot is not mentioned in this current message window."
+  elif bot_mentioned:
+    mention_line = "- Bot is mentioned in this current message window."
+  else:
+    mention_line = "- Bot is not mentioned in this current message window."
+
+  if replied_to_bot:
+    reply_line = "- A message in this current message window replies to the bot."
+  else:
+    reply_line = "- No message in this current message window replies to the bot."
+
+  since_assistant_text = _count_phrase(since_assistant, "message", "messages")
+  human_window_text = _count_phrase(human_window, "human message", "human messages")
+
+  assistant_reply_lines: list[str] = []
+  if isinstance(assistant_replies_by_window, dict):
+    assistant_reply_values: list[tuple[int, int | str]] = []
+    for raw_window, raw_count in assistant_replies_by_window.items():
+      try:
+        window = int(raw_window)
+      except (TypeError, ValueError):
+        continue
+      assistant_reply_values.append((window, raw_count))
+    assistant_reply_values.sort(key=lambda item: item[0])
+    for window, count in assistant_reply_values:
+      count_text = _count_phrase(count, "reply", "replies")
+      assistant_reply_lines.append(
+        f"- Assistant has sent {count_text} in the last {window} messages."
+      )
+
+  if not assistant_reply_lines:
+    fallback_recent = payload.get("assistantRepliesInLast20")
+    fallback_text = _count_phrase(fallback_recent, "reply", "replies")
+    assistant_reply_lines.append(
+      f"- Assistant has sent {fallback_text} in the last 20 messages."
+    )
+
+  if _is_singular_count(human_window):
+    human_window_line = f"- There is {human_window_text} in this current message window."
+  else:
+    human_window_line = f"- There are {human_window_text} in this current message window."
+
+  assistant_reply_block = "\n".join(assistant_reply_lines)
+  chat_state_text = _chat_state_header(chat_type, bot_is_admin, bot_is_super_admin)
+  return (
+    "Current message metadata:\n"
+    "Helper:\n"
+    f"{mention_line}\n"
+    f"{reply_line}\n"
+    f"- The last assistant reply was {since_assistant_text} ago.\n"
+    f"{assistant_reply_block}\n"
+    f"{human_window_line}\n"
+    "Chat state:\n"
+    f"{chat_state_text}"
   )
 
 
@@ -196,30 +302,33 @@ async def generate_reply(
   hist_text = format_history(history_list) or "(no history)"
   current_line = format_history([current])
   group_text = _group_description_block(group_description)
-  chat_state_text = _chat_state_header(chat_type or "private", bot_is_admin, bot_is_super_admin)
-  merged_messages_content = (
-    f"Chat state:\n{chat_state_text}\n\nMessages (older + current):\n{hist_text}\n{current_line}"
+  context_injection = _context_injection_block(
+    current_payload,
+    chat_type=chat_type or "private",
+    bot_is_admin=bot_is_admin,
+    bot_is_super_admin=bot_is_super_admin,
   )
-  current_content_text = merged_messages_content
+  messages_content_text = f"Messages (older + current):\n{hist_text}\n{current_line}"
   media_parts: list[dict] = []
   media_notes: list[str] = []
   if llm2_media_enabled():
     media_parts, media_notes = build_visual_parts(current_payload)
   if media_notes:
-    current_content_text += "\n\nVisual attachments:\n" + "\n".join(
+    messages_content_text += "\n\nVisual attachments:\n" + "\n".join(
       f"- {note}" for note in media_notes
     )
 
-  current_content: str | list[dict]
+  messages_content: str | list[dict]
   if media_parts:
-    current_content = [{"type": "text", "text": current_content_text}]
-    current_content.extend(media_parts)
+    messages_content = [{"type": "text", "text": messages_content_text}]
+    messages_content.extend(media_parts)
   else:
-    current_content = current_content_text
+    messages_content = messages_content_text
 
   msgs = [SystemMessage(content=rendered_system)]
   msgs.append(HumanMessage(content=f"Group description:\n{group_text}"))
-  msgs.append(HumanMessage(content=current_content))
+  msgs.append(HumanMessage(content=context_injection))
+  msgs.append(HumanMessage(content=messages_content))
   if tools:
     llm = llm.bind_tools(tools)
   if env_flag("BRIDGE_LOG_PROMPT_FULL"):
@@ -231,7 +340,8 @@ async def generate_reply(
         "messages": [
           {"role": "system", "content": rendered_system},
           {"role": "user", "content": f"Group description:\n{group_text}"},
-          {"role": "user", "content": redact_multimodal_content(current_content)},
+          {"role": "user", "content": context_injection},
+          {"role": "user", "content": redact_multimodal_content(messages_content)},
         ],
       },
     )
@@ -242,7 +352,7 @@ async def generate_reply(
       "history_len": len(history_list),
       "system_chars": len(rendered_system),
       "prompt_preview": trunc(
-        group_text + '\n' + chat_state_text + '\n' + hist_text + '\n' + current_line + f"\n[visual_attachments={len(media_parts)}]",
+        group_text + '\n' + context_injection + '\n' + hist_text + '\n' + current_line + f"\n[visual_attachments={len(media_parts)}]",
         800,
       ),
       "model": model_name,
@@ -332,7 +442,8 @@ async def generate_reply(
       [
         SystemMessage(content=rendered_system),
         HumanMessage(content=f"Group description:\n{group_text}"),
-        HumanMessage(content=current_content_text),
+        HumanMessage(content=context_injection),
+        HumanMessage(content=messages_content_text),
       ],
       mode="text_fallback",
     )

@@ -699,10 +699,12 @@ async def handle_socket(ws):
           _log_slow_batch("stale_skip")
           return
         group_description, prompt_override = _resolve_group_prompt_context(last_payload)
-        llm1_payload = dict(last_payload)
-        llm1_payload.update(
-          _build_llm1_context_metadata(history_before_current, trigger_window_payloads)
+        llm_context_metadata = _build_llm1_context_metadata(
+          history_before_current,
+          trigger_window_payloads,
         )
+        llm1_payload = dict(last_payload)
+        llm1_payload.update(llm_context_metadata)
 
         llm1_started = time.perf_counter()
         decision = await call_llm1(
@@ -730,6 +732,7 @@ async def handle_socket(ws):
         fallback_reply_to = _normalize_context_msg_id(last_payload.get("contextMsgId"))
         chat_type, bot_is_admin, bot_is_super_admin = _chat_state_from_payload(last_payload)
         llm2_payload = _merge_payload_attachments(trigger_window_payloads, last_payload)
+        llm2_payload.update(llm_context_metadata)
         llm2_started = time.perf_counter()
         reply_msg = await generate_reply(
           llm2_history,

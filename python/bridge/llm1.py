@@ -171,21 +171,21 @@ The tool must include all arguments: should_response (true/false), confidence (0
 
 ## Input format
 You will receive:
-- `Current message metadata` with useful hints about the trigger window and recent conversation.
+- `Current message metadata` with a Helper section and Chat state section.
 - Metadata may also include conversation-level signals:
-  - Whether the bot is mentioned in the trigger window.
-  - Whether any message in the trigger window replies to the bot.
-  - How many times the bot is mentioned in the trigger window.
+  - Whether the bot is mentioned in the current message window.
+  - Whether any message in the current message window replies to the bot.
+  - How many times the bot is mentioned in the current message window.
   - How many messages ago the assistant last replied.
   - How many assistant replies appeared in recent windows (20/50/100/200 and custom history limit).
-  - How many human messages exist in the current trigger window.
+  - How many human messages exist in the current message window.
 - `Messages (older + current)` as one merged block.
 
 Important:
 - The merged block may contain a burst window (multiple recent messages combined).
 - Do not over-prioritize only the last line. Judge whether any message in the merged block deserves a reply.
 - Use conversation-level signals as hints only (not strict rules):
-  - If bot just replied recently and there is no mention/reply signal in the trigger window, lean quieter.
+  - If bot just replied recently and there is no mention/reply signal in the current message window, lean quieter.
   - If bot has been quiet for a while and humans keep talking, lean helpful participation.
 
 ## Know When to Speak!
@@ -193,7 +193,7 @@ In group chats where you receive every message, be smart about when to contribut
 Respond when:
 - Directly mentioned or asked a question. If someone mentioned your name, it most likely means you need to respond.
 - Someone tag @52416300998887 in their message.
-- Current message metadata indicates the bot was mentioned or replied to in the trigger window.
+- Current message metadata indicates the bot was mentioned or replied to in the current message window.
 - You can add genuine value (info, insight, help).
 - Something witty/funny fits naturally.
 - Correcting important misinformation.
@@ -415,6 +415,19 @@ def _metadata_block(current_payload: dict | None) -> str:
   since_assistant = payload.get("messagesSinceAssistantReply")
   assistant_replies_by_window = payload.get("assistantRepliesByWindow")
   human_window = payload.get("humanMessagesInWindow")
+  raw_chat_type = str(payload.get("chatType") or "").strip().lower()
+  if raw_chat_type not in {"private", "group"}:
+    raw_chat_type = "group" if bool(payload.get("isGroup")) else "private"
+  if raw_chat_type == "group":
+    scope_line = "This is a group chat. You're in a chat with multiple people at once."
+  else:
+    scope_line = "This is a private chat. You're directly chatting with one other person."
+  if bool(payload.get("botIsSuperAdmin")):
+    role_line = "Bot is a super admin (owner)."
+  elif bool(payload.get("botIsAdmin")):
+    role_line = "Bot is an admin."
+  else:
+    role_line = "Bot is a normal member."
 
   def _count_phrase(value, singular: str, plural: str) -> str:
     if value is None:
@@ -434,20 +447,20 @@ def _metadata_block(current_payload: dict | None) -> str:
   mention_count_text = _count_phrase(mention_count, "time", "times")
   if isinstance(mention_count, int):
     if mention_count > 0:
-      mention_line = f"- Bot is mentioned {mention_count_text} in this trigger window."
+      mention_line = f"- Bot is mentioned {mention_count_text} in this current message window."
     elif bot_mentioned:
-      mention_line = "- Bot is mentioned in this trigger window."
+      mention_line = "- Bot is mentioned in this current message window."
     else:
-      mention_line = "- Bot is not mentioned in this trigger window."
+      mention_line = "- Bot is not mentioned in this current message window."
   elif bot_mentioned:
-    mention_line = "- Bot is mentioned in this trigger window."
+    mention_line = "- Bot is mentioned in this current message window."
   else:
-    mention_line = "- Bot is not mentioned in this trigger window."
+    mention_line = "- Bot is not mentioned in this current message window."
 
   if replied_to_bot:
-    reply_line = "- A message in this trigger window replies to the bot."
+    reply_line = "- A message in this current message window replies to the bot."
   else:
-    reply_line = "- No message in this trigger window replies to the bot."
+    reply_line = "- No message in this current message window replies to the bot."
 
   since_assistant_text = _count_phrase(since_assistant, "message", "messages")
   human_window_text = _count_phrase(human_window, "human message", "human messages")
@@ -476,9 +489,9 @@ def _metadata_block(current_payload: dict | None) -> str:
     )
 
   if _is_singular_count(human_window):
-    human_window_line = f"- There is {human_window_text} in this trigger window."
+    human_window_line = f"- There is {human_window_text} in this current message window."
   else:
-    human_window_line = f"- There are {human_window_text} in this trigger window."
+    human_window_line = f"- There are {human_window_text} in this current message window."
 
   assistant_reply_block = "\n".join(assistant_reply_lines)
   return (
@@ -488,7 +501,10 @@ def _metadata_block(current_payload: dict | None) -> str:
     f"{reply_line}\n"
     f"- The last assistant reply was {since_assistant_text} ago.\n"
     f"{assistant_reply_block}\n"
-    f"{human_window_line}"
+    f"{human_window_line}\n"
+    "Chat state:\n"
+    f"{scope_line}\n"
+    f"{role_line}"
   )
 
 
