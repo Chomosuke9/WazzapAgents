@@ -69,12 +69,16 @@ ASSISTANT_ECHO_MERGE_WINDOW_MS = _parse_non_negative_int(
   os.getenv("BRIDGE_ASSISTANT_ECHO_MERGE_WINDOW_MS"), 180000
 )
 logger = setup_logging()
-PROMPT_OVERIDE_TAG = re.compile(r"<prompt_override>([\s\S]*?)</prompt_override>", re.IGNORECASE)
+# Accept both canonical <prompt_override> and legacy typo <prompt_overide>.
+PROMPT_OVERIDE_TAG = re.compile(r"<prompt_overr?ide>([\s\S]*?)</prompt_overr?ide>", re.IGNORECASE)
 ACTION_LINE_RE = re.compile(r"^\[?\s*(REPLY_TO|DELETE|KICK)\s*[:=]\s*(.*?)\s*\]?$", re.IGNORECASE)
 CONTEXT_MSG_ID_RE = re.compile(r"^<?\s*(\d{6})\s*>?$")
 SENDER_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$")
 EMPTY_TARGET_TOKENS = {"none", "null", "no", "nil", "-", ""}
 REQUEST_COUNTER = count(1)
+ALLOW_KICK_FLAG = "allow_kick=true"
+ALLOW_DELETE_FLAG = "allow_delete=true"
+ALLOW_BOTH_FLAG = "allow_kick_and_delete=true"
 
 
 @dataclass
@@ -545,6 +549,55 @@ def _resolve_group_prompt_context(payload: dict) -> tuple[str | None, str | None
   return cleaned_description, merged_overide
 
 
+def _extract_allow_flags(prompt_override: str | None) -> set[str]:
+  if not prompt_override:
+    return set()
+  flags: set[str] = set()
+  for raw_line in prompt_override.splitlines():
+    line = raw_line.strip()
+    if line in {ALLOW_KICK_FLAG, ALLOW_DELETE_FLAG, ALLOW_BOTH_FLAG}:
+      flags.add(line)
+  return flags
+
+
+def _moderation_permissions(
+  prompt_override: str | None,
+  *,
+  bot_is_admin: bool,
+  bot_is_super_admin: bool,
+) -> dict:
+  flags = _extract_allow_flags(prompt_override)
+  admin_ok = bool(bot_is_admin or bot_is_super_admin)
+  allow_both = ALLOW_BOTH_FLAG in flags
+  allow_kick = admin_ok and (allow_both or ALLOW_KICK_FLAG in flags)
+  allow_delete = admin_ok and (allow_both or ALLOW_DELETE_FLAG in flags)
+  return {
+    "allowKick": allow_kick,
+    "allowDelete": allow_delete,
+    "adminOk": admin_ok,
+    "flags": sorted(flags),
+  }
+
+
+def _enforce_moderation_permissions(actions: list[dict], permissions: dict) -> tuple[list[dict], dict]:
+  filtered: list[dict] = []
+  blocked = {"kick_member": 0, "delete_message": 0}
+  allow_kick = bool(permissions.get("allowKick"))
+  allow_delete = bool(permissions.get("allowDelete"))
+
+  for action in actions:
+    action_type = action.get("type")
+    if action_type == "kick_member" and not allow_kick:
+      blocked["kick_member"] += 1
+      continue
+    if action_type == "delete_message" and not allow_delete:
+      blocked["delete_message"] += 1
+      continue
+    filtered.append(action)
+
+  return filtered, blocked
+
+
 def _merge_payload_attachments(payloads: list[dict], base_payload: dict) -> dict:
   merged = dict(base_payload)
   merged_attachments: list[dict] = []
@@ -792,11 +845,33 @@ async def handle_socket(ws):
           fallback_reply_to=fallback_reply_to,
           allowed_context_ids=allowed_context_ids,
         )
+        permissions = _moderation_permissions(
+          prompt_override,
+          bot_is_admin=bot_is_admin,
+          bot_is_super_admin=bot_is_super_admin,
+        )
+        actions, blocked_actions = _enforce_moderation_permissions(actions, permissions)
+        blocked_total = blocked_actions["kick_member"] + blocked_actions["delete_message"]
+        if blocked_total > 0:
+          logger.warning(
+            "[%s] blocked moderation actions by backend policy",
+            chat_id,
+            extra={
+              "blocked_actions": blocked_actions,
+              "admin_ok": permissions.get("adminOk"),
+              "flags": permissions.get("flags"),
+              "prompt_override_present": bool(prompt_override),
+            },
+          )
         if not actions:
           logger.warning(
             "[%s] llm2 returned no executable action",
             chat_id,
-            extra={"reply_preview": _extract_reply_text(reply_msg), "fallback_reply_to": fallback_reply_to},
+            extra={
+              "reply_preview": _extract_reply_text(reply_msg),
+              "fallback_reply_to": fallback_reply_to,
+              "blocked_actions": blocked_actions,
+            },
           )
           _log_slow_batch("no_action")
           return

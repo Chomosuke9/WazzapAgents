@@ -72,6 +72,7 @@ Notes:
 - `senderRef` is a short deterministic reference per sender in each chat; LLM moderation must use this, not JIDs.
 - Bot messages are forwarded as `contextOnly: true` and `triggerLlm1: false` so they enrich context without causing loops.
 - Gateway may emit synthetic bot context events with `messageType: "actionLog"` and `actionLog` details after successful moderation actions (`delete_message`, `kick_member`).
+- Backend bridge enforces moderation flags from `<prompt_override>`: `DELETE`/`KICK` actions are dropped unless matching `allow_*` flags are present and bot role is admin/superadmin.
 
 ### LLM -> Gateway: `send_message`
 ```json
