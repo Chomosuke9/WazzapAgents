@@ -123,6 +123,14 @@ def _group_description_block(group_description: str | None) -> str:
   return "(none)"
 
 
+def _format_current_window(msg: WhatsAppMessage) -> str:
+  # Burst windows are already serialized as multi-line chat entries.
+  text = (msg.text or "").strip()
+  if text.startswith("Burst messages ("):
+    return text
+  return format_history([msg])
+
+
 def _normalize_chat_type(chat_type: str | None) -> str:
   lowered = (chat_type or "").strip().lower()
   if lowered in {"private", "group"}:
@@ -240,6 +248,7 @@ def _context_injection_block(
   return (
     "Current message metadata:\n"
     "Helper:\n"
+    "- `current message window` = only `current messages(burst)` (exclude `older messages`).\n"
     f"{mention_line}\n"
     f"{reply_line}\n"
     f"- The last assistant reply was {since_assistant_text} ago.\n"
@@ -299,8 +308,8 @@ async def generate_reply(
     prompt_override=prompt_override,
   )
   history_list = list(history)
-  hist_text = format_history(history_list) or "(no history)"
-  current_line = format_history([current])
+  hist_text = format_history(history_list) or "(no older messages)"
+  current_line = _format_current_window(current) or "(no current messages)"
   group_text = _group_description_block(group_description)
   context_injection = _context_injection_block(
     current_payload,
@@ -308,7 +317,12 @@ async def generate_reply(
     bot_is_admin=bot_is_admin,
     bot_is_super_admin=bot_is_super_admin,
   )
-  messages_content_text = f"Messages (older + current):\n{hist_text}\n{current_line}"
+  messages_content_text = (
+    "older messages:\n"
+    f"{hist_text}\n\n"
+    "current messages(burst):\n"
+    f"{current_line}"
+  )
   media_parts: list[dict] = []
   media_notes: list[str] = []
   if llm2_media_enabled():
@@ -352,7 +366,16 @@ async def generate_reply(
       "history_len": len(history_list),
       "system_chars": len(rendered_system),
       "prompt_preview": trunc(
-        group_text + '\n' + context_injection + '\n' + hist_text + '\n' + current_line + f"\n[visual_attachments={len(media_parts)}]",
+        (
+          group_text
+          + '\n'
+          + context_injection
+          + '\nolder messages:\n'
+          + hist_text
+          + '\n\ncurrent messages(burst):\n'
+          + current_line
+          + f"\n[visual_attachments={len(media_parts)}]"
+        ),
         800,
       ),
       "model": model_name,

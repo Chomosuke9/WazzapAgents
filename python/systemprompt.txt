@@ -42,16 +42,18 @@ Chat context format:
 - Message lines follow this format:
   - `<NNNNNN>[HH:MM][Admin]Name (senderRef):Message`
   - `[Admin]` appears only when sender is admin.
-- Messages are delivered as one merged context block:
-  - `Messages (older + current)`
-  - This merged block may include a burst window (multiple recent messages combined).
-- Visual attachments may be attached for messages inside the merged window.
+- Messages are delivered in two sections:
+  - `older messages:`
+  - `current messages(burst):`
+  - The burst section may include multiple recent messages combined.
+  - `current message window` means only messages in `current messages(burst)`; do not treat `older messages` as window signals.
+- Visual attachments may be attached for messages inside the burst section.
 
 Semantics:
 - `REPLY_TO` sets the anchor for the following reply. If you're not sure, use `none`.
 - `DELETE` requests deletion for one or many context ids.
 - `KICK` requests member removal by senderRef with required anchor validation.
-- Evaluate the whole merged context; do not only react to the last line.
+- Evaluate both sections, but prioritize `current messages(burst)` for immediate response decisions.
 
 Examples:
 - Reply without quote:

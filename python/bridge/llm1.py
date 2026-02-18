@@ -133,6 +133,14 @@ def _group_description_block(group_description: str | None) -> str:
   return "(none)"
 
 
+def _format_current_window(msg: WhatsAppMessage) -> str:
+  # Burst windows are already serialized as multi-line chat entries.
+  text = (msg.text or "").strip()
+  if text.startswith("Burst messages ("):
+    return text
+  return format_history([msg])
+
+
 def build_llm1_prompt(
   history: Iterable[WhatsAppMessage],
   current: WhatsAppMessage,
@@ -148,11 +156,16 @@ def build_llm1_prompt(
   history_list = list(history)[-history_limit:]
   prompt_history = [_truncate_message(msg, message_max_chars) for msg in history_list]
   current_prompt_msg = _truncate_message(current, message_max_chars)
-  hist_text = format_history(prompt_history) or "(no history)"
-  current_line = format_history([current_prompt_msg])
+  hist_text = format_history(prompt_history) or "(no older messages)"
+  current_line = _format_current_window(current_prompt_msg) or "(no current messages)"
   group_text = _group_description_block(group_description)
-  merged_messages = f"Messages (older + current):\n{hist_text}\n{current_line}\n"
-  current_content: str | list[dict] = merged_messages
+  context_messages = (
+    "older messages:\n"
+    f"{hist_text}\n\n"
+    "current messages(burst):\n"
+    f"{current_line}\n"
+  )
+  current_content: str | list[dict] = context_messages
   if current_media_notes:
     current_content += "\nVisual attachments:\n" + "\n".join(
       f"- {note}" for note in current_media_notes
@@ -179,11 +192,13 @@ You will receive:
   - How many messages ago the assistant last replied.
   - How many assistant replies appeared in recent windows (20/50/100/200 and custom history limit).
   - How many human messages exist in the current message window.
-- `Messages (older + current)` as one merged block.
+- `older messages` section for background history.
+- `current messages(burst)` section for the latest trigger window.
+- Definition: `current message window` means only messages listed in `current messages(burst)`, not `older messages`.
 
 Important:
-- The merged block may contain a burst window (multiple recent messages combined).
-- Do not over-prioritize only the last line. Judge whether any message in the merged block deserves a reply.
+- The `current messages(burst)` section may contain multiple recent messages combined.
+- Do not over-prioritize only the last line. Judge whether any message in the burst deserves a reply.
 - Use conversation-level signals as hints only (not strict rules):
   - If bot just replied recently and there is no mention/reply signal in the current message window, lean quieter.
   - If bot has been quiet for a while and humans keep talking, lean helpful participation.
@@ -213,7 +228,7 @@ Try to be helpful without being annoying.
 
 ## Burst messages
 When group chat is active, you may get a burst of messages. Please consider every single message in the burst. Sometimes when it's super busy, burst message get sent to older messages.
-Consider every single message in "Messages (older + current)". If one of those messages deserves an answer, answer it.
+Consider every single message in `current messages(burst)`. Use `older messages` only as supporting context.
 
 ## Prompt Override (higher priority patch)
 You may receive extra instructions inside:
@@ -497,6 +512,7 @@ def _metadata_block(current_payload: dict | None) -> str:
   return (
     "Current message metadata:\n"
     "Helper:\n"
+    "- `current message window` = only `current messages(burst)` (exclude `older messages`).\n"
     f"{mention_line}\n"
     f"{reply_line}\n"
     f"- The last assistant reply was {since_assistant_text} ago.\n"
