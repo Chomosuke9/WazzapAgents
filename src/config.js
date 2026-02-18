@@ -36,6 +36,7 @@ const config = {
   authDir: AUTH_DIR,
   mediaDir: MEDIA_DIR,
   logLevel: process.env.LOG_LEVEL || 'info',
+  groupMetadataTimeoutMs: positiveInt(process.env.GROUP_METADATA_TIMEOUT_MS, 8000),
   downloadTimeoutMs: positiveInt(process.env.DOWNLOAD_TIMEOUT_MS, 60000),
   sendTimeoutMs: positiveInt(process.env.SEND_TIMEOUT_MS, 60000),
   upsertConcurrency: positiveInt(process.env.UPSERT_CONCURRENCY, 2),

@@ -71,6 +71,7 @@ Notes:
 - `contextMsgId` is a 6-digit per-chat sequence (`000000..999999`, wraps after `999999`).
 - `senderRef` is a short deterministic reference per sender in each chat; LLM moderation must use this, not JIDs.
 - Bot messages are forwarded as `contextOnly: true` and `triggerLlm1: false` so they enrich context without causing loops.
+- Gateway may emit synthetic bot context events with `messageType: "actionLog"` and `actionLog` details after successful moderation actions (`delete_message`, `kick_member`).
 
 ### LLM -> Gateway: `send_message`
 ```json

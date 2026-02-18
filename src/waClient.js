@@ -74,6 +74,25 @@ async function runWithConcurrency(items, concurrency, worker) {
   await Promise.all(workers);
 }
 
+async function withTimeout(promise, timeoutMs, label = 'operation') {
+  const timeout = Number(timeoutMs);
+  if (!Number.isFinite(timeout) || timeout <= 0) return promise;
+
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(actionError('timeout', `${label} timed out`, `timeout after ${timeout}ms`));
+        }, timeout);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function normalizeContextMsgId(value) {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   const raw = String(value).trim();
@@ -485,6 +504,17 @@ function normalizeGroupMetadata(meta, jid) {
   };
 }
 
+function defaultGroupContext(jid) {
+  return {
+    name: jid,
+    description: null,
+    promptOveride: null,
+    botIsAdmin: false,
+    botIsSuperAdmin: false,
+    participantRoles: {},
+  };
+}
+
 function getCachedGroupMetadata(jid) {
   const cached = groupMetadataCache.get(jid);
   if (!cached) return null;
@@ -508,8 +538,8 @@ function invalidateGroupMetadata(jid) {
 }
 
 async function getGroupContext(jid, { forceRefresh = false } = {}) {
-  if (!jid) return { name: jid, description: null, promptOveride: null, botIsAdmin: false, botIsSuperAdmin: false, participantRoles: {} };
-  if (!sock) return { name: jid, description: null, promptOveride: null, botIsAdmin: false, botIsSuperAdmin: false, participantRoles: {} };
+  if (!jid) return defaultGroupContext(jid);
+  if (!sock) return defaultGroupContext(jid);
 
   if (!forceRefresh) {
     const cached = getCachedGroupMetadata(jid);
@@ -517,16 +547,24 @@ async function getGroupContext(jid, { forceRefresh = false } = {}) {
   }
 
   try {
-    const meta = await sock.groupMetadata(jid);
+    const meta = await withTimeout(
+      sock.groupMetadata(jid),
+      config.groupMetadataTimeoutMs,
+      `groupMetadata(${jid})`
+    );
     hydrateGroupParticipantCaches(jid, meta?.participants);
     const normalized = normalizeGroupMetadata(meta, jid);
     rememberGroupMetadata(jid, normalized);
     return normalized;
   } catch (err) {
-    logger.warn({ err, jid }, 'failed to fetch group metadata');
+    logger.warn({
+      err,
+      jid,
+      timeoutMs: config.groupMetadataTimeoutMs,
+    }, 'failed to fetch group metadata');
     const cached = getCachedGroupMetadata(jid);
     if (cached) return cached;
-    return { name: jid, description: null, promptOveride: null, botIsAdmin: false, botIsSuperAdmin: false, participantRoles: {} };
+    return defaultGroupContext(jid);
   }
 }
 
@@ -649,8 +687,16 @@ function shouldRetryStickerAsImage(err) {
 }
 
 async function downloadMediaToFile(content, mediaKind, filepath) {
-  const stream = await downloadContentFromMessage(content, mediaKind);
-  return streamToFile(stream, filepath);
+  const stream = await withTimeout(
+    downloadContentFromMessage(content, mediaKind),
+    config.downloadTimeoutMs,
+    `downloadContentFromMessage(${mediaKind})`
+  );
+  return withTimeout(
+    streamToFile(stream, filepath),
+    config.downloadTimeoutMs,
+    `streamToFile(${mediaKind})`
+  );
 }
 
 function mapMediaKind(contentType) {
@@ -898,7 +944,7 @@ async function saveMedia(contentType, content, messageId) {
   };
 }
 
-async function extractQuoted(messageOrContent, chatId) {
+async function extractQuoted(messageOrContent, chatId, { allowGroupLookup = true } = {}) {
   const ctx = extractContextInfo(messageOrContent);
   if (!ctx || !ctx.quotedMessage) return null;
   const { contentType: qType, message: qMsg } = unwrapMessage(ctx.quotedMessage);
@@ -926,7 +972,7 @@ async function extractQuoted(messageOrContent, chatId) {
 
   if (!senderName && senderId) senderName = lookupParticipantName(senderId);
   if (!senderName && ctx.participant) senderName = lookupParticipantName(ctx.participant);
-  if (!senderName && chatId?.endsWith('@g.us') && senderId) {
+  if (allowGroupLookup && !senderName && chatId?.endsWith('@g.us') && senderId) {
     senderName = await getGroupParticipantName(chatId, senderId);
   }
   const contextMsgId = ctx.stanzaId ? findContextMsgIdByMessageId(chatId, ctx.stanzaId) : null;
@@ -1241,6 +1287,54 @@ async function emitGroupJoinContextEvent({
   wsClient.send({ type: 'incoming_message', payload });
 }
 
+function emitBotActionContextEvent({
+  chatId,
+  action,
+  text,
+  result = null,
+}) {
+  if (!sock || !chatId || !text) return;
+
+  const isGroup = chatId.endsWith('@g.us');
+  const group = isGroup
+    ? (getCachedGroupMetadata(chatId) || defaultGroupContext(chatId))
+    : null;
+  const senderId = normalizeJid(sock.user?.id) || 'bot@wazzap.local';
+  const senderRef = rememberSenderRef(chatId, senderId, senderId) || 'unknown';
+  const payload = {
+    messageId: makeEventMessageId('action_log'),
+    instanceId: config.instanceId,
+    chatId,
+    chatName: isGroup ? (group?.name || chatId) : chatId,
+    chatType: isGroup ? 'group' : 'private',
+    senderId,
+    senderRef,
+    senderName: sock.user?.name || 'LLM',
+    senderIsAdmin: Boolean(group?.botIsAdmin),
+    isGroup,
+    botIsAdmin: Boolean(group?.botIsAdmin),
+    botIsSuperAdmin: Boolean(group?.botIsSuperAdmin),
+    fromMe: true,
+    contextOnly: true,
+    triggerLlm1: false,
+    timestampMs: Date.now(),
+    messageType: 'actionLog',
+    text,
+    quoted: null,
+    attachments: [],
+    mentionedJids: null,
+    location: null,
+    groupDescription: group?.description || null,
+    groupPromptOveride: group?.promptOveride || null,
+    actionLog: {
+      action,
+      result,
+    },
+  };
+
+  wsClient.send({ type: 'incoming_message', payload });
+}
+
 async function handleGroupParticipantsUpdate(update) {
   if (!sock) return;
   const chatId = update?.id;
@@ -1301,7 +1395,13 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
   rememberParticipantName(senderId, senderDisplay);
 
   const groupStartMs = Date.now();
-  const group = isGroup ? await getGroupContext(chatId) : null;
+  const group = isGroup
+    ? (
+      fromMe
+        ? (getCachedGroupMetadata(chatId) || defaultGroupContext(chatId))
+        : await getGroupContext(chatId)
+    )
+    : null;
   perf.groupMs = Date.now() - groupStartMs;
   const senderRole = isGroup ? roleFlagsForJid(group?.participantRoles, senderId) : { isAdmin: false, isSuperAdmin: false };
   const senderRef = rememberSenderRef(chatId, senderId, msg.key.participant || senderId) || 'unknown';
@@ -1316,7 +1416,7 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
   const baseText = extractText(innerMessage);
   const text = [baseText, locationText].filter(Boolean).join('\n') || null;
   const quotedStartMs = Date.now();
-  const quoted = await extractQuoted(innerMessage, chatId);
+  const quoted = await extractQuoted(innerMessage, chatId, { allowGroupLookup: !fromMe });
   perf.quotedMs = Date.now() - quotedStartMs;
   const mentionedJidsRaw = extractMentionedJids(innerMessage);
   const mentionedJids = Array.isArray(mentionedJidsRaw)
@@ -1443,6 +1543,15 @@ async function deleteMessageByContextId({ chatId, contextMsgId }) {
   }
   try {
     await sock.sendMessage(chatId, { delete: indexed.key });
+    emitBotActionContextEvent({
+      chatId,
+      action: 'delete_message',
+      text: `Action log: deleted message <${normalizedContextMsgId}>.`,
+      result: {
+        contextMsgId: normalizedContextMsgId,
+        messageId: indexed.id || null,
+      },
+    });
     return {
       contextMsgId: normalizedContextMsgId,
       messageId: indexed.id,
@@ -1672,6 +1781,27 @@ async function kickMembers({
     if (autoReplyAnchor && successTargets.length > 0) {
       await maybeEmitKickAnchorReplies(chatId, successTargets);
     }
+    if (successTargets.length > 0) {
+      const kickedRefs = successTargets.map(
+        (item) => `${item.senderRef}@${item.anchorContextMsgId}`
+      );
+      const text = kickedRefs.length === 1
+        ? `Action log: kicked ${kickedRefs[0]}.`
+        : `Action log: kicked ${kickedRefs.length} members (${kickedRefs.join(', ')}).`;
+      emitBotActionContextEvent({
+        chatId,
+        action: 'kick_member',
+        text,
+        result: {
+          mode,
+          targets: successTargets.map((item) => ({
+            senderRef: item.senderRef,
+            anchorContextMsgId: item.anchorContextMsgId,
+            participantJid: item.participantJid,
+          })),
+        },
+      });
+    }
   }
 
   return {
@@ -1692,7 +1822,7 @@ async function startWhatsApp() {
     syncFullHistory: false,
     browser: ['WazzapAgents', 'Chrome', '1.0'],
     markOnlineOnConnect: false,
-    defaultQueryTimeoutMs: 60_000,
+    defaultQueryTimeoutMs: config.sendTimeoutMs,
   });
 
   sock.ev.on('creds.update', saveCreds);
