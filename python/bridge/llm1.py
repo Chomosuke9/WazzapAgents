@@ -415,6 +415,37 @@ def _llm1_ctx(current: WhatsAppMessage, *, model: str, url: str | None) -> dict:
   }
 
 
+def _log_llm1_decision(
+  decision: LLM1Decision,
+  *,
+  ctx: dict,
+  elapsed_ms: int,
+  source: str,
+) -> None:
+  chat_id = ctx.get("chat_id")
+  chat_prefix = f"[{chat_id}] " if chat_id else ""
+  status = "respond" if decision.should_response else "skip"
+  reason_text = trunc(" ".join((decision.reason or "").split()), 220)
+  logger.info(
+    '%sLLM1 decision final (%s): %s conf=%s%% reason="%s" elapsed=%sms',
+    chat_prefix,
+    source,
+    status,
+    decision.confidence,
+    reason_text,
+    elapsed_ms,
+    extra={
+      **ctx,
+      "source": source,
+      "should_response": decision.should_response,
+      "confidence": decision.confidence,
+      "reason": decision.reason,
+      "elapsed_ms": elapsed_ms,
+      "raw": trunc(dump_json(decision.model_dump()), 400),
+    },
+  )
+
+
 def _extract_tool_args(tool_call) -> dict:
   """Best-effort extraction of tool arguments across provider shapes."""
   raw_args = None
@@ -830,15 +861,11 @@ async def call_llm1(
             "fallback_args": parsed_fallback,
           },
         )
-        logger.info(
-          "LLM1 decision",
-          extra={
-            **ctx,
-            "should_response": decision.should_response,
-            "confidence": decision.confidence,
-            "reason": decision.reason,
-            "raw": trunc(dump_json(decision.model_dump()), 400),
-          },
+        _log_llm1_decision(
+          decision,
+          ctx=ctx,
+          elapsed_ms=elapsed_ms,
+          source="json_fallback",
         )
         return decision
       except ValidationError:
@@ -891,14 +918,10 @@ async def call_llm1(
     )
     return LLM1Decision(should_response=False, confidence=10, reason="llm1_invalid_tool")
 
-  logger.info(
-    "LLM1 decision",
-    extra={
-      **ctx,
-      "should_response": decision.should_response,
-      "confidence": decision.confidence,
-      "reason": decision.reason,
-      "raw": trunc(dump_json(decision.model_dump()), 400),
-    },
+  _log_llm1_decision(
+    decision,
+    ctx=ctx,
+    elapsed_ms=elapsed_ms,
+    source="tool_call",
   )
   return decision
