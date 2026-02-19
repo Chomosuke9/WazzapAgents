@@ -33,12 +33,14 @@ def _compact(value: Optional[str]) -> str:
   return " ".join(value.split())
 
 
-def _normalize_context_msg_id(value: Optional[str]) -> str:
+def _normalize_context_msg_id(value: Optional[str], *, role: str = "user") -> str:
   compact = _compact(value).lower()
-  if compact == "system":
-    return "system"
+  if compact in {"system", "pending"}:
+    return compact
   if compact.isdigit() and len(compact) == 6:
     return compact
+  if role == "assistant":
+    return "pending"
   return "000000"
 
 
@@ -53,7 +55,7 @@ def _message_text(msg: WhatsAppMessage) -> str:
 def format_history(messages: Iterable[WhatsAppMessage]) -> str:
   lines: list[str] = []
   for msg in messages:
-    context_msg_id = _normalize_context_msg_id(msg.context_msg_id)
+    context_msg_id = _normalize_context_msg_id(msg.context_msg_id, role=msg.role)
     time = _fmt_time(msg.timestamp_ms)
     sender = _compact(msg.sender) or "unknown"
     sender_ref = _compact(msg.sender_ref) or "unknown"

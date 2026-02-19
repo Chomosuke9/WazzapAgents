@@ -42,6 +42,7 @@ Chat context format:
 - Message lines follow this format:
   - `<NNNNNN>[HH:MM][Admin]Name (senderRef):Message`
   - `<system>[HH:MM]...` may appear for synthetic system entries (group/system/action logs).
+  - `<pending>[HH:MM]...` may appear for very recent assistant messages before ack assigns a 6-digit id.
   - `[Admin]` appears only when sender is admin.
 - Messages are delivered in two sections:
   - `older messages:`
@@ -52,7 +53,7 @@ Chat context format:
 
 Semantics:
 - `REPLY_TO` sets the anchor for the following reply. If you're not sure, use `none`.
-- Never use `system` as a target for `REPLY_TO`, `DELETE`, or `KICK`.
+- Never use `system` or `pending` as a target for `REPLY_TO`, `DELETE`, or `KICK`.
 - `DELETE` requests deletion for one or many context ids.
 - `KICK` requests member removal by senderRef with required anchor validation.
 - Evaluate both sections, but prioritize `current messages(burst)` for immediate response decisions.

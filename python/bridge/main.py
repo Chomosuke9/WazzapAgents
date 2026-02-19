@@ -421,6 +421,9 @@ def _is_context_only_payload(payload: dict) -> bool:
 
 
 def _payload_triggers_llm1(payload: dict) -> bool:
+  message_type = str(payload.get("messageType") or "").strip().lower()
+  if message_type == "reactionmessage":
+    return False
   if not _is_context_only_payload(payload):
     return True
   return bool(payload.get("triggerLlm1"))
@@ -978,7 +981,7 @@ async def handle_socket(ws):
               WhatsAppMessage(
                 timestamp_ms=int(time.time() * 1000),
                 sender="LLM",
-                context_msg_id=None,
+                context_msg_id="pending",
                 sender_ref="llm",
                 sender_is_admin=False,
                 text=action_text or None,
