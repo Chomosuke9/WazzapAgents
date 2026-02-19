@@ -30,6 +30,8 @@ LOG_RECORD_BUILTINS = {
   "processName",
   "process",
   "message",
+  "asctime",
+  "taskName",
 }
 
 
@@ -62,6 +64,7 @@ def _extras_limit_from_env() -> int:
 
 
 EXTRAS_JSON_LIMIT = _extras_limit_from_env()
+SHOW_INFO_EXTRAS = env_flag("BRIDGE_LOG_INFO_EXTRAS", False)
 
 
 class ExtraFormatter(logging.Formatter):
@@ -69,8 +72,14 @@ class ExtraFormatter(logging.Formatter):
 
   def format(self, record: logging.LogRecord) -> str:
     base = super().format(record)
-    # Append extras up to WARNING so operational/debug context is visible for failures.
-    if record.levelno <= logging.WARNING:
+    # Keep INFO compact by default; include extras on DEBUG and WARNING+.
+    # Set BRIDGE_LOG_INFO_EXTRAS=true to include extras at INFO too.
+    include_extras = (
+      record.levelno <= logging.DEBUG
+      or record.levelno >= logging.WARNING
+      or (record.levelno == logging.INFO and SHOW_INFO_EXTRAS)
+    )
+    if include_extras:
       extras = {k: v for k, v in record.__dict__.items() if k not in LOG_RECORD_BUILTINS}
       if extras:
         base = f"{base} | extras={dump_json(extras, limit=EXTRAS_JSON_LIMIT)}"
