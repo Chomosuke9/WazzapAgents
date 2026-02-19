@@ -309,6 +309,15 @@ async def generate_reply(
   bot_is_super_admin: bool = False,
 ):
   llm = get_llm2()
+  payload = current_payload if isinstance(current_payload, dict) else {}
+  log_chat_id = payload.get("chatId") or payload.get("chat_id") or current.sender
+  payload_chat_type = _normalize_chat_type(
+    chat_type
+    or payload.get("chatType")
+    or payload.get("chat_type")
+    or ("group" if bool(payload.get("isGroup")) else "private")
+  )
+  log_chat_name = (payload.get("chatName") or payload.get("chat_name")) if payload_chat_type == "group" else None
   model_name = os.getenv("LLM2_MODEL", "gpt-4.1")
   timeout_s = _llm2_timeout()
   retry_max = _llm2_retry_max()
@@ -362,7 +371,8 @@ async def generate_reply(
     logger.info(
       "LLM2 prompt full",
       extra={
-        "chat_id": current.sender,
+        "chat_id": log_chat_id,
+        "chat_name": log_chat_name,
         "model": os.getenv("LLM2_MODEL", "gpt-4.1"),
         "messages": [
           {"role": "system", "content": rendered_system},
@@ -375,7 +385,8 @@ async def generate_reply(
   logger.debug(
     "LLM2 invoke",
     extra={
-      "chat_id": current.sender,
+      "chat_id": log_chat_id,
+      "chat_name": log_chat_name,
       "history_len": len(history_list),
       "system_chars": len(rendered_system),
       "prompt_preview": trunc(
@@ -405,13 +416,35 @@ async def generate_reply(
     last_failure_kind: str | None = None
     for attempt in range(1, attempts_total + 1):
       started = time.perf_counter()
+      logger.info(
+        "LLM2 invoke start (mode=%s, attempt=%s/%s, model=%s)",
+        mode,
+        attempt,
+        attempts_total,
+        model_name,
+        extra={
+          "chat_id": log_chat_id,
+          "chat_name": log_chat_name,
+          "model": model_name,
+          "mode": mode,
+          "attempt": attempt,
+          "attempts_total": attempts_total,
+          "timeout_s": timeout_s,
+          "sdk_max_retries": sdk_max_retries,
+        },
+      )
       try:
         response = await llm.ainvoke(prompt_msgs)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         logger.info(
-          "LLM2 invoke success",
+          "LLM2 invoke success (mode=%s, attempt=%s/%s, elapsed=%sms)",
+          mode,
+          attempt,
+          attempts_total,
+          elapsed_ms,
           extra={
-            "chat_id": current.sender,
+            "chat_id": log_chat_id,
+            "chat_name": log_chat_name,
             "model": model_name,
             "mode": mode,
             "attempt": attempt,
@@ -431,7 +464,8 @@ async def generate_reply(
           "LLM2 invoke failed",
           exc_info=not can_retry,
           extra={
-            "chat_id": current.sender,
+            "chat_id": log_chat_id,
+            "chat_name": log_chat_name,
             "model": model_name,
             "mode": mode,
             "attempt": attempt,
@@ -456,7 +490,8 @@ async def generate_reply(
       logger.warning(
         "LLM2 multimodal timeout; skipping text-only fallback",
         extra={
-          "chat_id": current.sender,
+          "chat_id": log_chat_id,
+          "chat_name": log_chat_name,
           "model": model_name,
           "media_parts": len(media_parts),
           "timeout_s": timeout_s,
@@ -469,7 +504,8 @@ async def generate_reply(
     logger.warning(
       "LLM2 multimodal failed; retrying text-only prompt",
       extra={
-        "chat_id": current.sender,
+        "chat_id": log_chat_id,
+        "chat_name": log_chat_name,
         "model": model_name,
         "media_parts": len(media_parts),
       },
@@ -489,7 +525,8 @@ async def generate_reply(
   logger.debug(
     "LLM2 result",
     extra={
-      "chat_id": current.sender,
+      "chat_id": log_chat_id,
+      "chat_name": log_chat_name,
       "reply_preview": trunc(getattr(result, 'content', ''), 800),
       "raw": dump_json(getattr(result, "model_dump", lambda: str(result))()),
     },

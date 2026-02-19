@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 try:
   from .history import WhatsAppMessage
-  from .log import setup_logging
+  from .log import setup_logging, set_chat_log_context, reset_chat_log_context
   from .llm1 import call_llm1
   from .llm2 import generate_reply
 except ImportError:  # allow running as `python python/bridge/main.py`
@@ -24,7 +24,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
   from pathlib import Path
   sys.path.append(str(Path(__file__).resolve().parent.parent))
   from bridge.history import WhatsAppMessage  # type: ignore
-  from bridge.log import setup_logging  # type: ignore
+  from bridge.log import setup_logging, set_chat_log_context, reset_chat_log_context  # type: ignore
   from bridge.llm1 import call_llm1  # type: ignore
   from bridge.llm2 import generate_reply  # type: ignore
 
@@ -737,9 +737,12 @@ async def handle_socket(ws):
     if not non_empty_payloads:
       chat_id = payloads[-1].get("chatId") if payloads else "unknown"
       logger.debug(
-        "[%s] skipped empty batch",
-        chat_id,
-        extra={"batch_size": len(payloads), "message_ids": [p.get("messageId") for p in payloads]},
+        "skipped empty batch",
+        extra={
+          "chat_id": chat_id,
+          "batch_size": len(payloads),
+          "message_ids": [p.get("messageId") for p in payloads],
+        },
       )
       return
 
@@ -774,9 +777,9 @@ async def handle_socket(ws):
         if last_payload_ts is not None:
           payload_age_ms = max(0, int(time.time() * 1000) - last_payload_ts)
         logger.info(
-          "[%s] slow batch observed",
-          chat_id,
+          "slow batch observed",
           extra={
+            "chat_id": chat_id,
             "outcome": outcome,
             "batch_size": len(payloads),
             "non_empty_batch_size": len(non_empty_payloads),
@@ -800,9 +803,9 @@ async def handle_socket(ws):
 
       try:
         logger.debug(
-          "[%s] incoming_batch",
-          chat_id,
+          "incoming_batch",
           extra={
+            "chat_id": chat_id,
             "batch_size": len(payloads),
             "non_empty_batch_size": len(non_empty_payloads),
             "llm1_trigger_batch_size": len(llm1_trigger_payloads),
@@ -823,7 +826,7 @@ async def handle_socket(ws):
         if not llm1_trigger_payloads:
           for payload in non_empty_payloads:
             _append_or_merge_history_payload(history, payload)
-          logger.debug("[%s] stored context-only updates", chat_id)
+          logger.debug("stored context-only updates", extra={"chat_id": chat_id})
           _log_slow_batch("context_only")
           return
 
@@ -852,9 +855,9 @@ async def handle_socket(ws):
           for payload in non_empty_payloads:
             _append_or_merge_history_payload(history, payload)
           logger.info(
-            "[%s] skipped stale trigger batch",
-            chat_id,
+            "skipped stale trigger batch",
             extra={
+              "chat_id": chat_id,
               "payload_age_ms": batch_payload_age_ms,
               "max_trigger_batch_age_ms": MAX_TRIGGER_BATCH_AGE_MS,
               "trigger_batch_size": len(llm1_trigger_payloads),
@@ -883,11 +886,8 @@ async def handle_socket(ws):
           _append_or_merge_history_payload(history, payload)
         if not decision.should_response:
           logger.info(
-            "[%s] skipped (llm1=%s, conf=%s%%, batch=%s)",
-            chat_id,
-            decision.reason,
-            decision.confidence,
-            len(llm1_trigger_payloads),
+            "llm1 skip; no response sent",
+            extra={"chat_id": chat_id},
           )
           _log_slow_batch("llm1_skip")
           return
@@ -917,7 +917,7 @@ async def handle_socket(ws):
         )
         llm2_ms = int((time.perf_counter() - llm2_started) * 1000)
         if reply_msg is None:
-          logger.warning("[%s] llm2 failed to produce reply", chat_id)
+          logger.warning("llm2 failed to produce reply", extra={"chat_id": chat_id})
           _log_slow_batch("llm2_none")
           return
         actions = _extract_actions(
@@ -934,9 +934,9 @@ async def handle_socket(ws):
         blocked_total = blocked_actions["kick_member"] + blocked_actions["delete_message"]
         if blocked_total > 0:
           logger.warning(
-            "[%s] blocked moderation actions by backend policy",
-            chat_id,
+            "blocked moderation actions by backend policy",
             extra={
+              "chat_id": chat_id,
               "blocked_actions": blocked_actions,
               "admin_ok": permissions.get("adminOk"),
               "flags": permissions.get("flags"),
@@ -945,9 +945,9 @@ async def handle_socket(ws):
           )
         if not actions:
           logger.warning(
-            "[%s] llm2 returned no executable action",
-            chat_id,
+            "llm2 returned no executable action",
             extra={
+              "chat_id": chat_id,
               "reply_preview": _extract_reply_text(reply_msg),
               "fallback_reply_to": fallback_reply_to,
               "blocked_actions": blocked_actions,
@@ -964,9 +964,9 @@ async def handle_socket(ws):
             action_text = action.get("text") or ""
             if _is_duplicate_reply(chat_id, action_text):
               logger.info(
-                "[%s] dropped duplicate reply",
-                chat_id,
+                "dropped duplicate reply",
                 extra={
+                  "chat_id": chat_id,
                   "reply_preview": _normalize_preview_text(action_text, limit=180),
                   "reply_dedup_window_ms": REPLY_DEDUP_WINDOW_MS,
                 },
@@ -1023,12 +1023,16 @@ async def handle_socket(ws):
             )
             action_counts[action_type] += 1
             continue
-          logger.warning("[%s] unknown action type from parser: %s", chat_id, action_type)
+          logger.warning(
+            "unknown action type from parser: %s",
+            action_type,
+            extra={"chat_id": chat_id},
+          )
         action_send_ms = int((time.perf_counter() - action_send_started) * 1000)
         logger.info(
-          "[%s] executed actions",
-          chat_id,
+          "executed actions",
           extra={
+            "chat_id": chat_id,
             "action_counts": action_counts,
             "batch_size": len(llm1_trigger_payloads),
             "action_total": len(actions),
@@ -1037,7 +1041,7 @@ async def handle_socket(ws):
         _log_slow_batch("actions_executed", action_counts=action_counts, action_total=len(actions))
       except Exception as err:
         _log_slow_batch("handler_error")
-        logger.exception("[%s] handler error: %s", chat_id, err)
+        logger.exception("handler error: %s", err, extra={"chat_id": chat_id})
 
   async def flush_pending(chat_id: str):
     pending = pending_by_chat[chat_id]
@@ -1069,7 +1073,17 @@ async def handle_socket(ws):
         pending.last_event_at = None
 
       if payloads:
-        await process_message_batch(payloads)
+        context_payload = payloads[-1] if payloads else {}
+        context_chat_type, _, _ = _chat_state_from_payload(context_payload)
+        context_chat_name = _clean_text(context_payload.get("chatName")) if context_chat_type == "group" else None
+        context_token = set_chat_log_context(
+          chat_id=_clean_text(context_payload.get("chatId")) or None,
+          chat_name=context_chat_name or None,
+        )
+        try:
+          await process_message_batch(payloads)
+        finally:
+          reset_chat_log_context(context_token)
       # Keep the same worker task alive so new payloads for the same chat
       # are drained sequentially without spawning extra waiters.
 
@@ -1109,18 +1123,18 @@ async def handle_socket(ws):
                 )
               if updated:
                 logger.debug(
-                  "[%s] hydrated provisional send context id from action_ack",
-                  chat_id_for_request,
+                  "hydrated provisional send context id from action_ack",
                   extra={
+                    "chat_id": chat_id_for_request,
                     "request_id": request_id,
                     "context_msg_id": context_msg_id,
                   },
                 )
               else:
                 logger.debug(
-                  "[%s] action_ack arrived but provisional send not found",
-                  chat_id_for_request,
+                  "action_ack arrived but provisional send not found",
                   extra={
+                    "chat_id": chat_id_for_request,
                     "request_id": request_id,
                     "context_msg_id": context_msg_id,
                   },
@@ -1172,9 +1186,9 @@ async def send_message(
   request_id: str,
 ):
   logger.debug(
-    "[%s] outbound",
-    chat_id,
+    "outbound",
     extra={
+      "chat_id": chat_id,
       "action": "send_message",
       "request_id": request_id,
       "reply_to": reply_to,
@@ -1208,9 +1222,9 @@ async def send_delete_message(
   if not normalized_context_msg_id:
     return
   logger.debug(
-    "[%s] outbound",
-    chat_id,
+    "outbound",
     extra={
+      "chat_id": chat_id,
       "action": "delete_message",
       "request_id": request_id,
       "context_msg_id": normalized_context_msg_id,
@@ -1242,9 +1256,9 @@ async def send_kick_member(
   if not targets:
     return
   logger.debug(
-    "[%s] outbound",
-    chat_id,
+    "outbound",
     extra={
+      "chat_id": chat_id,
       "action": "kick_member",
       "request_id": request_id,
       "targets": targets,

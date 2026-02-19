@@ -69,12 +69,40 @@ def _parse_non_negative_int(raw: str | None, default: int) -> int:
   return parsed if parsed >= 0 else default
 
 
+def _parse_non_negative_float(raw: str | None, default: float) -> float:
+  if raw is None:
+    return default
+  try:
+    parsed = float(raw)
+  except (TypeError, ValueError):
+    return default
+  return parsed if parsed >= 0 else default
+
+
 def _llm1_timeout(default: float = 8.0) -> float:
   return _parse_positive_float(os.getenv("LLM1_TIMEOUT"), default)
 
 
 def _llm1_sdk_max_retries() -> int:
   return _parse_non_negative_int(os.getenv("LLM1_SDK_MAX_RETRIES"), 0)
+
+
+def _llm1_temperature() -> float:
+  return _parse_non_negative_float(os.getenv("LLM1_TEMPERATURE"), 0.0)
+
+
+def _llm1_max_tokens() -> int | None:
+  raw = os.getenv("LLM1_MAX_TOKENS")
+  if raw is None:
+    return None
+  cleaned = raw.strip()
+  if not cleaned:
+    return None
+  try:
+    parsed = int(cleaned)
+  except (TypeError, ValueError):
+    return None
+  return parsed if parsed > 0 else None
 
 
 def _llm1_reasoning_effort() -> str | None:
@@ -325,13 +353,16 @@ def get_llm1(*, timeout: float = 8.0, include_reasoning: bool = True) -> ChatOpe
   model = os.getenv("LLM1_MODEL", "gpt-4o-mini")
   base_url = _chat_base_url()  # optional custom base URL / proxy
   api_key = os.getenv("LLM1_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+  max_tokens = _llm1_max_tokens()
   kwargs = {
     "model": model,
     "api_key": api_key,
     "timeout": _llm1_timeout(timeout),
     "max_retries": _llm1_sdk_max_retries(),
-    "temperature": 0,
+    "temperature": _llm1_temperature(),
   }
+  if max_tokens is not None:
+    kwargs["max_tokens"] = max_tokens
   if base_url:
     kwargs["base_url"] = base_url
   reasoning_effort = _llm1_reasoning_effort() if include_reasoning else None
@@ -406,9 +437,25 @@ def _is_reasoning_unsupported_error(err: Exception) -> bool:
   return any(marker in text for marker in unsupported_markers)
 
 
-def _llm1_ctx(current: WhatsAppMessage, *, model: str, url: str | None) -> dict:
+def _llm1_ctx(
+  current: WhatsAppMessage,
+  *,
+  model: str,
+  url: str | None,
+  current_payload: dict | None = None,
+) -> dict:
+  payload = current_payload if isinstance(current_payload, dict) else {}
+  chat_id = payload.get("chatId") or payload.get("chat_id")
+  raw_chat_type = str(payload.get("chatType") or payload.get("chat_type") or "").strip().lower()
+  if raw_chat_type not in {"group", "private"}:
+    if isinstance(chat_id, str) and chat_id.endswith("@g.us"):
+      raw_chat_type = "group"
+    else:
+      raw_chat_type = "group" if bool(payload.get("isGroup")) else "private"
+  chat_name = (payload.get("chatName") or payload.get("chat_name")) if raw_chat_type == "group" else None
   return {
-    "chat_id": getattr(current, "sender", None),
+    "chat_id": chat_id or getattr(current, "sender", None),
+    "chat_name": chat_name,
     "message_id": getattr(current, "message_id", None) or getattr(current, "id", None),
     "model": model,
     "endpoint": url,
@@ -422,13 +469,10 @@ def _log_llm1_decision(
   elapsed_ms: int,
   source: str,
 ) -> None:
-  chat_id = ctx.get("chat_id")
-  chat_prefix = f"[{chat_id}] " if chat_id else ""
   status = "respond" if decision.should_response else "skip"
   reason_text = trunc(" ".join((decision.reason or "").split()), 220)
   logger.info(
-    '%sLLM1 decision final (%s): %s conf=%s%% reason="%s" elapsed=%sms',
-    chat_prefix,
+    'LLM1 decision final (%s): %s conf=%s%% reason="%s" elapsed=%sms',
     source,
     status,
     decision.confidence,
@@ -693,8 +737,15 @@ async def call_llm1(
     logger.debug("LLM1 endpoint missing after normalization; defaulting to skip")
     return LLM1Decision(should_response=False, confidence=10, reason="llm1_missing_url")
   reasoning_effort = _llm1_reasoning_effort()
+  llm1_temperature = _llm1_temperature()
+  llm1_max_tokens = _llm1_max_tokens()
   t0 = time.perf_counter()
-  ctx = _llm1_ctx(current, model=model_name, url=base_url)
+  ctx = _llm1_ctx(
+    current,
+    model=model_name,
+    url=base_url,
+    current_payload=current_payload,
+  )
   llm = client or get_llm1(
     timeout=timeout,
     include_reasoning=bool(reasoning_effort),
@@ -719,6 +770,23 @@ async def call_llm1(
       },
     )
 
+  logger.info(
+    "LLM1 invoke start (model=%s, history=%s, media=%s, temp=%s, max_tokens=%s)",
+    model_name,
+    len(prompt_history),
+    len(current_media_parts),
+    llm1_temperature,
+    llm1_max_tokens if llm1_max_tokens is not None else "auto",
+    extra={
+      **ctx,
+      "history_used": len(prompt_history),
+      "media_parts": len(current_media_parts),
+      "temperature": llm1_temperature,
+      "max_tokens": llm1_max_tokens,
+      "reasoning_effort": reasoning_effort,
+    },
+  )
+
   logger.debug(
     "LLM1 request start",
     extra={
@@ -731,6 +799,8 @@ async def call_llm1(
       "prompt_preview": trunc(prompt_text, 300),
       "media_parts": len(current_media_parts),
       "base_url": _chat_base_url(),
+      "temperature": llm1_temperature,
+      "max_tokens": llm1_max_tokens,
       "reasoning_effort": reasoning_effort,
       "tool_name": LLM1_TOOL["function"]["name"],
     },
