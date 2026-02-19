@@ -130,9 +130,13 @@ LLM1_SCHEMA = {
       },
       "reason": {
         "type": "string",
-        "description": "A brief reason (2-8 words) justifying the decision.",
+        "description": (
+          "A concise routing reason for downstream handoff. "
+          "Write 1-3 short sentences (target 12-60 words) grounded in current context, "
+          "without chain-of-thought."
+        ),
         "minLength": 2,
-        "maxLength": 64,
+        "maxLength": 320,
       },
     },
     "required": ["should_response", "confidence", "reason"],
@@ -154,7 +158,7 @@ LLM1_TOOL = {
 class LLM1Decision(BaseModel):
   should_response: bool = Field(..., description="Whether to respond")
   confidence: int = Field(..., ge=0, le=100)
-  reason: str = Field(..., min_length=2, max_length=64)
+  reason: str = Field(..., min_length=2, max_length=320)
 
 
 def _render_prompt_override(base_system: str, prompt_override: str | None) -> str:
@@ -219,7 +223,9 @@ Your name is Vivy. Sometimes people will refer to you as Vy, Ivy, Vivi, etc.
 Call the tool `llm_should_response` exactly once with your decision.
 Do not write any other text outside the tool call.
 Your tag is @52416300998887, if someone mention it in the chat, respond to it.
-The tool must include all arguments: should_response (true/false), confidence (0-100), reason (2-8 words). You will be given up to {_llm1_history_limit()} last messages. Every message is capped at {_llm1_message_max_chars()} characters max.
+The tool must include all arguments: should_response (true/false), confidence (0-100), reason (1-3 short sentences, target 12-60 words, max 320 chars).
+The reason will be forwarded to LLM2. Keep it specific and actionable based on the current message window; avoid generic phrases and avoid chain-of-thought.
+You will be given up to {_llm1_history_limit()} last messages. Every message is capped at {_llm1_message_max_chars()} characters max.
 
 ## Input format
 You will receive:

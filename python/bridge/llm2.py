@@ -178,6 +178,7 @@ def _context_injection_block(
   since_assistant = payload.get("messagesSinceAssistantReply")
   assistant_replies_by_window = payload.get("assistantRepliesByWindow")
   human_window = payload.get("humanMessagesInWindow")
+  llm1_reason_raw = payload.get("llm1Reason")
 
   def _count_phrase(value, singular: str, plural: str) -> str:
     if value is None:
@@ -243,6 +244,17 @@ def _context_injection_block(
   else:
     human_window_line = f"- There are {human_window_text} in this current message window."
 
+  llm1_reason = ""
+  if isinstance(llm1_reason_raw, str):
+    llm1_reason = " ".join(llm1_reason_raw.split())
+  elif llm1_reason_raw is not None:
+    llm1_reason = " ".join(str(llm1_reason_raw).split())
+
+  if llm1_reason:
+    llm1_reason_line = f"\nLLM1 routing reason: {llm1_reason}\n\n"
+  else:
+    llm1_reason_line = "\n"
+
   assistant_reply_block = "\n".join(assistant_reply_lines)
   chat_state_text = _chat_state_header(chat_type, bot_is_admin, bot_is_super_admin)
   return (
@@ -254,6 +266,7 @@ def _context_injection_block(
     f"- The last assistant reply was {since_assistant_text} ago.\n"
     f"{assistant_reply_block}\n"
     f"{human_window_line}\n"
+    f"{llm1_reason_line}"
     "Chat state:\n"
     f"{chat_state_text}"
   )

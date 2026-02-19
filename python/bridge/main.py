@@ -897,6 +897,13 @@ async def handle_socket(ws):
         chat_type, bot_is_admin, bot_is_super_admin = _chat_state_from_payload(last_payload)
         llm2_payload = _merge_payload_attachments(trigger_window_payloads, last_payload)
         llm2_payload.update(llm_context_metadata)
+        llm2_payload.update(
+          {
+            "llm1ShouldResponse": decision.should_response,
+            "llm1Confidence": decision.confidence,
+            "llm1Reason": " ".join((decision.reason or "").split()),
+          }
+        )
         llm2_started = time.perf_counter()
         reply_msg = await generate_reply(
           llm2_history,
@@ -1392,7 +1399,6 @@ def _extract_actions(
 
   actions: list[dict] = []
   orphan_lines: list[str] = []
-  saw_control_line = False
   reply_declared = False
   reply_target = fallback_reply_to
   reply_lines: list[str] = []
@@ -1425,7 +1431,6 @@ def _extract_actions(
         orphan_lines.append(raw_line)
       continue
 
-    saw_control_line = True
     control = marker.group(1).upper()
     value = marker.group(2).strip()
     if control == "REPLY_TO":
@@ -1465,26 +1470,13 @@ def _extract_actions(
 
   orphan_text = "\n".join(orphan_lines).strip()
   if orphan_text:
-    actions.append(
-      {
-        "type": "send_message",
-        "text": orphan_text,
-        "replyTo": fallback_reply_to,
-      }
+    logger.info(
+      "dropping llm2 text outside REPLY_TO block",
+      extra={
+        "text_preview": _normalize_preview_text(orphan_text, limit=180),
+        "fallback_reply_to": fallback_reply_to,
+      },
     )
-
-  if not actions:
-    if saw_control_line:
-      return []
-    single = text.strip()
-    if single:
-      actions.append(
-        {
-          "type": "send_message",
-          "text": single,
-          "replyTo": fallback_reply_to,
-        }
-      )
 
   return actions
 
