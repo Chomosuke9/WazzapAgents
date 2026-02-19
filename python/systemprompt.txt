@@ -41,6 +41,7 @@ Chat context format:
   - `Bot is a normal member.` or `Bot is an admin.` or `Bot is a super admin (owner).`
 - Message lines follow this format:
   - `<NNNNNN>[HH:MM][Admin]Name (senderRef):Message`
+  - `<system>[HH:MM]...` may appear for synthetic system entries (group/system/action logs).
   - `[Admin]` appears only when sender is admin.
 - Messages are delivered in two sections:
   - `older messages:`
@@ -51,6 +52,7 @@ Chat context format:
 
 Semantics:
 - `REPLY_TO` sets the anchor for the following reply. If you're not sure, use `none`.
+- Never use `system` as a target for `REPLY_TO`, `DELETE`, or `KICK`.
 - `DELETE` requests deletion for one or many context ids.
 - `KICK` requests member removal by senderRef with required anchor validation.
 - Evaluate both sections, but prioritize `current messages(burst)` for immediate response decisions.

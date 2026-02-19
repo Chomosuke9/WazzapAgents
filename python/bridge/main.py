@@ -54,7 +54,9 @@ HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "20"))
 INCOMING_DEBOUNCE_SECONDS = _parse_positive_float(
   os.getenv("INCOMING_DEBOUNCE_SECONDS"), 5.0
 )
-INCOMING_BURST_MAX_SECONDS = 20.0
+INCOMING_BURST_MAX_SECONDS = _parse_positive_float(
+  os.getenv("INCOMING_BURST_MAX_SECONDS"), 20.0
+)
 SLOW_BATCH_LOG_MS = _parse_non_negative_int(os.getenv("BRIDGE_SLOW_BATCH_LOG_MS"), 2000)
 MAX_TRIGGER_BATCH_AGE_MS = _parse_non_negative_int(
   os.getenv("BRIDGE_MAX_TRIGGER_BATCH_AGE_MS"), 45000
@@ -79,6 +81,7 @@ REQUEST_COUNTER = count(1)
 ALLOW_KICK_FLAG = "allow_kick=true"
 ALLOW_DELETE_FLAG = "allow_delete=true"
 ALLOW_BOTH_FLAG = "allow_kick_and_delete=true"
+SYSTEM_CONTEXT_TOKEN = "system"
 
 
 @dataclass
@@ -177,10 +180,31 @@ def _normalize_context_msg_id(value) -> str | None:
   return match.group(1)
 
 
+def _is_system_payload(payload: dict) -> bool:
+  if not isinstance(payload, dict):
+    return False
+  message_type = str(payload.get("messageType") or "").strip()
+  sender_id = str(payload.get("senderId") or "").strip().lower()
+  if message_type == "actionLog":
+    return True
+  if isinstance(payload.get("groupEvent"), dict):
+    return True
+  if sender_id == "group-system@wazzap.local":
+    return True
+  return False
+
+
+def _display_context_msg_id_from_payload(payload: dict) -> str:
+  if _is_system_payload(payload):
+    return SYSTEM_CONTEXT_TOKEN
+  return _normalize_context_msg_id(payload.get("contextMsgId")) or "000000"
+
+
 def _payload_to_message(payload: dict) -> WhatsAppMessage:
   quoted = _quoted_from_payload(payload)
   is_context_only = bool(payload.get("contextOnly"))
-  context_msg_id = _normalize_context_msg_id(payload.get("contextMsgId"))
+  normalized_context_msg_id = _normalize_context_msg_id(payload.get("contextMsgId"))
+  context_msg_id = SYSTEM_CONTEXT_TOKEN if _is_system_payload(payload) else normalized_context_msg_id
   sender_ref = _clean_text(payload.get("senderRef")) or None
   sender_is_admin = bool(payload.get("senderIsAdmin"))
   role = "assistant" if bool(payload.get("fromMe")) else "user"
@@ -211,7 +235,7 @@ def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
 
   lines: list[str] = []
   for item in payloads:
-    context_msg_id = _normalize_context_msg_id(item.get("contextMsgId")) or "000000"
+    context_msg_id = _display_context_msg_id_from_payload(item)
     sender = item.get("senderName") or item.get("senderId") or item.get("chatId") or "unknown"
     sender_ref = _clean_text(item.get("senderRef")) or "unknown"
     sender_admin = "[Admin]" if bool(item.get("senderIsAdmin")) else ""
@@ -335,6 +359,51 @@ def _append_or_merge_history_payload(
   if bool(payload.get("fromMe")) and _merge_fromme_echo_into_provisional(history, msg):
     return
   _append_history(history, msg)
+
+
+def _extract_send_ack_context_msg_id(payload: dict) -> str | None:
+  if not isinstance(payload, dict):
+    return None
+  result = payload.get("result")
+  if not isinstance(result, dict):
+    return None
+  sent = result.get("sent")
+  if not isinstance(sent, list):
+    return None
+
+  picked: dict | None = None
+  for row in sent:
+    if not isinstance(row, dict):
+      continue
+    if str(row.get("kind") or "").strip().lower() == "text":
+      picked = row
+      break
+    if picked is None:
+      picked = row
+
+  if not picked:
+    return None
+  return _normalize_context_msg_id(picked.get("contextMsgId"))
+
+
+def _hydrate_provisional_context_id_from_ack(
+  history: Deque[WhatsAppMessage],
+  *,
+  request_id: str,
+  context_msg_id: str | None,
+) -> bool:
+  if not request_id or not context_msg_id:
+    return False
+  local_message_id = f"local-send-{request_id}"
+  for idx in range(len(history) - 1, -1, -1):
+    candidate = history[idx]
+    if candidate.role != "assistant":
+      continue
+    if (candidate.message_id or "") != local_message_id:
+      continue
+    candidate.context_msg_id = context_msg_id
+    return True
+  return False
 
 
 def _make_request_id(action: str) -> str:
@@ -626,6 +695,7 @@ async def handle_socket(ws):
   per_chat: Dict[str, Deque[WhatsAppMessage]] = defaultdict(deque)
   per_chat_lock: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
   pending_by_chat: Dict[str, PendingChat] = defaultdict(PendingChat)
+  pending_send_request_chat: Dict[str, str] = {}
   recent_reply_signatures_by_chat: Dict[str, Deque[tuple[int, str]]] = defaultdict(deque)
   tasks: Set[asyncio.Task] = set()
   logger.info("Gateway connected")
@@ -900,6 +970,9 @@ async def handle_socket(ws):
               action.get("replyTo"),
               request_id=request_id,
             )
+            pending_send_request_chat[request_id] = chat_id
+            if len(pending_send_request_chat) > 4096:
+              pending_send_request_chat.pop(next(iter(pending_send_request_chat)))
             _append_history(
               history,
               WhatsAppMessage(
@@ -1005,6 +1078,43 @@ async def handle_socket(ws):
         continue
 
       if event_type in {"send_ack", "action_ack"}:
+        payload = event.get("payload")
+        if (
+          event_type == "action_ack"
+          and isinstance(payload, dict)
+          and str(payload.get("action") or "") == "send_message"
+        ):
+          request_id = _clean_text(payload.get("requestId"))
+          chat_id_for_request = pending_send_request_chat.pop(request_id, None)
+          if request_id and chat_id_for_request:
+            context_msg_id = _extract_send_ack_context_msg_id(payload)
+            if context_msg_id:
+              history = per_chat[chat_id_for_request]
+              lock = per_chat_lock[chat_id_for_request]
+              async with lock:
+                updated = _hydrate_provisional_context_id_from_ack(
+                  history,
+                  request_id=request_id,
+                  context_msg_id=context_msg_id,
+                )
+              if updated:
+                logger.debug(
+                  "[%s] hydrated provisional send context id from action_ack",
+                  chat_id_for_request,
+                  extra={
+                    "request_id": request_id,
+                    "context_msg_id": context_msg_id,
+                  },
+                )
+              else:
+                logger.debug(
+                  "[%s] action_ack arrived but provisional send not found",
+                  chat_id_for_request,
+                  extra={
+                    "request_id": request_id,
+                    "context_msg_id": context_msg_id,
+                  },
+                )
         logger.debug("Gateway ack: %s", event.get("payload"))
         continue
 

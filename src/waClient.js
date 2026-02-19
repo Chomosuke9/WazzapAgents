@@ -1478,7 +1478,7 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
     botIsAdmin: Boolean(group?.botIsAdmin),
     botIsSuperAdmin: Boolean(group?.botIsSuperAdmin),
     fromMe,
-    contextOnly: fromMe,
+    contextOnly: fromMe || contentType === 'reactionMessage',
     triggerLlm1: false,
     timestampMs: Number(msg.messageTimestamp) * 1000,
     messageType: contentType,

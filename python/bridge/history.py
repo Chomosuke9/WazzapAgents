@@ -34,7 +34,9 @@ def _compact(value: Optional[str]) -> str:
 
 
 def _normalize_context_msg_id(value: Optional[str]) -> str:
-  compact = _compact(value)
+  compact = _compact(value).lower()
+  if compact == "system":
+    return "system"
   if compact.isdigit() and len(compact) == 6:
     return compact
   return "000000"
