@@ -538,6 +538,28 @@ def _llm1_history_limit_for_metadata() -> int:
   return HISTORY_LIMIT if HISTORY_LIMIT > 0 else 20
 
 
+def _is_group_join_action(action) -> bool:
+  token = _clean_text(action).lower()
+  if not token:
+    return False
+  if token in {"join", "add", "invite", "approve"}:
+    return True
+  return "join" in token
+
+
+def _payload_has_explicit_join_event(payload: dict) -> bool:
+  group_event = payload.get("groupEvent")
+  if isinstance(group_event, dict) and _is_group_join_action(group_event.get("action")):
+    return True
+
+  message_type = str(payload.get("messageType") or "").strip().lower()
+  if message_type != "groupparticipantsupdate":
+    return False
+
+  text = _clean_text(payload.get("text")).lower()
+  return ("joined the group" in text) or ("new members joined the group" in text)
+
+
 def _build_llm1_context_metadata(
   history_before_current: list[WhatsAppMessage],
   trigger_window_payloads: list[dict],
@@ -555,6 +577,22 @@ def _build_llm1_context_metadata(
     for payload in human_payloads
     if bool(payload.get("botMentioned"))
   )
+  explicit_join_payloads = [
+    payload for payload in effective_window_payloads if _payload_has_explicit_join_event(payload)
+  ]
+  explicit_join_participants: set[str] = set()
+  for payload in explicit_join_payloads:
+    group_event = payload.get("groupEvent")
+    if not isinstance(group_event, dict):
+      continue
+    participants = group_event.get("participants")
+    if not isinstance(participants, list):
+      continue
+    for participant in participants:
+      token = _clean_text(participant)
+      if token:
+        explicit_join_participants.add(token.lower())
+
   history_limit = _llm1_history_limit_for_metadata()
   standard_windows = [20, 50, 100, 200]
   assistant_reply_windows = [window for window in standard_windows if window <= history_limit]
@@ -579,6 +617,8 @@ def _build_llm1_context_metadata(
     ),
     "assistantRepliesByWindow": assistant_replies_by_window,
     "humanMessagesInWindow": len(human_payloads),
+    "explicitJoinEventsInWindow": len(explicit_join_payloads),
+    "explicitJoinParticipantsInWindow": len(explicit_join_participants),
   }
 
 

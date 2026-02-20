@@ -178,6 +178,8 @@ def _context_injection_block(
   since_assistant = payload.get("messagesSinceAssistantReply")
   assistant_replies_by_window = payload.get("assistantRepliesByWindow")
   human_window = payload.get("humanMessagesInWindow")
+  explicit_join_events = payload.get("explicitJoinEventsInWindow")
+  explicit_join_participants = payload.get("explicitJoinParticipantsInWindow")
   llm1_reason_raw = payload.get("llm1Reason")
 
   def _count_phrase(value, singular: str, plural: str) -> str:
@@ -244,6 +246,19 @@ def _context_injection_block(
   else:
     human_window_line = f"- There are {human_window_text} in this current message window."
 
+  join_event_text = _count_phrase(explicit_join_events, "event", "events")
+  join_participant_text = _count_phrase(explicit_join_participants, "participant", "participants")
+  if isinstance(explicit_join_events, int):
+    if explicit_join_events > 0:
+      join_event_line = (
+        "- Explicit system member-join signals in this current message window: "
+        f"{join_event_text} ({join_participant_text})."
+      )
+    else:
+      join_event_line = "- No explicit system member-join signal in this current message window."
+  else:
+    join_event_line = "- Explicit system member-join signal count is unknown for this current message window."
+
   llm1_reason = ""
   if isinstance(llm1_reason_raw, str):
     llm1_reason = " ".join(llm1_reason_raw.split())
@@ -266,6 +281,7 @@ def _context_injection_block(
     f"- The last assistant reply was {since_assistant_text} ago.\n"
     f"{assistant_reply_block}\n"
     f"{human_window_line}\n"
+    f"{join_event_line}\n"
     f"{llm1_reason_line}"
     "Chat state:\n"
     f"{chat_state_text}"

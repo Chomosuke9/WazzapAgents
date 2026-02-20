@@ -123,6 +123,20 @@ def _truncate_text(text: str | None, max_chars: int) -> str | None:
   return f"{text[: max_chars - 3]}..."
 
 
+def _truncate_burst_text(text: str | None, max_chars: int) -> str | None:
+  if text is None:
+    return None
+  if not text.startswith("Burst messages ("):
+    return _truncate_text(text, max_chars)
+  lines = text.splitlines()
+  if not lines:
+    return text
+  header = lines[0]
+  body = lines[1:]
+  truncated_body = [_truncate_text(line, max_chars) or "" for line in body]
+  return "\n".join([header, *truncated_body])
+
+
 def _truncate_message(msg: WhatsAppMessage, max_chars: int) -> WhatsAppMessage:
   return WhatsAppMessage(
     timestamp_ms=msg.timestamp_ms,
@@ -130,7 +144,7 @@ def _truncate_message(msg: WhatsAppMessage, max_chars: int) -> WhatsAppMessage:
     context_msg_id=msg.context_msg_id,
     sender_ref=msg.sender_ref,
     sender_is_admin=msg.sender_is_admin,
-    text=_truncate_text(msg.text, max_chars),
+    text=_truncate_burst_text(msg.text, max_chars),
     media=msg.media,
     quoted_message_id=msg.quoted_message_id,
     quoted_sender=msg.quoted_sender,
@@ -265,6 +279,7 @@ You will receive:
   - How many messages ago the assistant last replied.
   - How many assistant replies appeared in recent windows (20/50/100/200 and custom history limit).
   - How many human messages exist in the current message window.
+  - How many explicit system member-join events appear in the current message window.
 - `older messages` section for background history.
 - `current messages(burst)` section for the latest trigger window.
 - Definition: `current message window` means only messages listed in `current messages(burst)`, not `older messages`.
@@ -273,6 +288,8 @@ You will receive:
 Important:
 - The `current messages(burst)` section may contain multiple recent messages combined.
 - Do not over-prioritize only the last line. Judge whether any message in the burst deserves a reply.
+- Do NOT infer someone is a new group member only because they appear for the first time, say "hi", or use an unfamiliar name.
+- Treat someone as a new member only when there is an explicit system join signal (for example `<system>` / `Group update: ... joined the group` / metadata join-event count > 0).
 - Use conversation-level signals as hints only (not strict rules):
   - If bot just replied recently and there is no mention/reply signal in the current message window, lean quieter.
   - If bot has been quiet for a while and humans keep talking, lean helpful participation.
@@ -592,6 +609,8 @@ def _metadata_block(current_payload: dict | None) -> str:
   since_assistant = payload.get("messagesSinceAssistantReply")
   assistant_replies_by_window = payload.get("assistantRepliesByWindow")
   human_window = payload.get("humanMessagesInWindow")
+  explicit_join_events = payload.get("explicitJoinEventsInWindow")
+  explicit_join_participants = payload.get("explicitJoinParticipantsInWindow")
   raw_chat_type = str(payload.get("chatType") or "").strip().lower()
   if raw_chat_type not in {"private", "group"}:
     raw_chat_type = "group" if bool(payload.get("isGroup")) else "private"
@@ -670,6 +689,19 @@ def _metadata_block(current_payload: dict | None) -> str:
   else:
     human_window_line = f"- There are {human_window_text} in this current message window."
 
+  join_event_text = _count_phrase(explicit_join_events, "event", "events")
+  join_participant_text = _count_phrase(explicit_join_participants, "participant", "participants")
+  if isinstance(explicit_join_events, int):
+    if explicit_join_events > 0:
+      join_event_line = (
+        "- Explicit system member-join signals in this current message window: "
+        f"{join_event_text} ({join_participant_text})."
+      )
+    else:
+      join_event_line = "- No explicit system member-join signal in this current message window."
+  else:
+    join_event_line = "- Explicit system member-join signal count is unknown for this current message window."
+
   assistant_reply_block = "\n".join(assistant_reply_lines)
   return (
     "Current message metadata:\n"
@@ -680,6 +712,7 @@ def _metadata_block(current_payload: dict | None) -> str:
     f"- The last assistant reply was {since_assistant_text} ago.\n"
     f"{assistant_reply_block}\n"
     f"{human_window_line}\n"
+    f"{join_event_line}\n"
     "Chat state:\n"
     f"{scope_line}\n"
     f"{role_line}"
