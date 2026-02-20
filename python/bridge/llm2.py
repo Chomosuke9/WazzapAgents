@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -24,6 +25,14 @@ except ImportError:  # allow running as script
 logger = setup_logging()
 SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent.parent / "systemprompt.txt"
 _SYSTEM_PROMPT_CACHE: str | None = None
+
+
+@dataclass(frozen=True)
+class LLM2Target:
+  name: str
+  model: str
+  base_url: str | None
+  api_key: str
 
 
 def _parse_positive_float(raw: str | None, default: float) -> float:
@@ -70,6 +79,53 @@ def _llm2_reasoning_effort() -> str | None:
   if not cleaned:
     return None
   return cleaned
+
+
+def _clean_env(raw: str | None) -> str | None:
+  if raw is None:
+    return None
+  cleaned = raw.strip()
+  return cleaned or None
+
+
+def _llm2_targets() -> list[LLM2Target]:
+  primary_model = _clean_env(os.getenv("LLM2_MODEL")) or "gpt-4.1"
+  primary_endpoint = _clean_env(os.getenv("LLM2_ENDPOINT"))
+  primary_api_key = _clean_env(os.getenv("LLM2_API_KEY")) or ""
+
+  targets = [
+    LLM2Target(
+      name="primary",
+      model=primary_model,
+      base_url=primary_endpoint,
+      api_key=primary_api_key,
+    )
+  ]
+
+  fallback_model_raw = _clean_env(os.getenv("LLM2_FALLBACK_MODEL"))
+  fallback_endpoint_raw = _clean_env(os.getenv("LLM2_FALLBACK_ENDPOINT"))
+  fallback_api_key_raw = _clean_env(os.getenv("LLM2_FALLBACK_API_KEY"))
+  fallback_enabled = any((fallback_model_raw, fallback_endpoint_raw, fallback_api_key_raw))
+  if not fallback_enabled:
+    return targets
+
+  fallback_target = LLM2Target(
+    name="fallback",
+    model=fallback_model_raw or primary_model,
+    base_url=fallback_endpoint_raw if fallback_endpoint_raw is not None else primary_endpoint,
+    api_key=fallback_api_key_raw if fallback_api_key_raw is not None else primary_api_key,
+  )
+
+  primary_target = targets[0]
+  if (
+    fallback_target.model == primary_target.model
+    and fallback_target.base_url == primary_target.base_url
+    and fallback_target.api_key == primary_target.api_key
+  ):
+    return targets
+
+  targets.append(fallback_target)
+  return targets
 
 
 def _is_timeout_error(err: Exception) -> bool:
@@ -288,19 +344,25 @@ def _context_injection_block(
   )
 
 
-def get_llm2() -> ChatOpenAI:
-  model = os.getenv("LLM2_MODEL", "gpt-4.1")
+def get_llm2(
+  *,
+  model: str | None = None,
+  base_url: str | None = None,
+  api_key: str | None = None,
+  include_reasoning: bool = True,
+) -> ChatOpenAI:
+  resolved_model = model or (_clean_env(os.getenv("LLM2_MODEL")) or "gpt-4.1")
   temperature = float(os.getenv("LLM2_TEMPERATURE", "0.5"))
   timeout = _llm2_timeout()
   max_retries = _llm2_sdk_max_retries()
-  reasoning_effort = _llm2_reasoning_effort()
-  base_url = os.getenv("LLM2_ENDPOINT")  # optional: custom base URL / proxy
-  api_key = os.getenv("LLM2_API_KEY", "")  # optional: override OPENAI_API_KEY
+  reasoning_effort = _llm2_reasoning_effort() if include_reasoning else None
+  resolved_base_url = base_url if base_url is not None else _clean_env(os.getenv("LLM2_ENDPOINT"))
+  resolved_api_key = api_key if api_key is not None else (_clean_env(os.getenv("LLM2_API_KEY")) or "")
   kwargs = {
-    "model": model,
+    "model": resolved_model,
     "temperature": temperature,
-    "base_url": base_url,
-    "api_key": api_key,
+    "base_url": resolved_base_url,
+    "api_key": resolved_api_key,
     "timeout": timeout,
     "max_retries": max_retries,
   }
@@ -324,7 +386,7 @@ async def generate_reply(
   bot_is_admin: bool = False,
   bot_is_super_admin: bool = False,
 ):
-  llm = get_llm2()
+  targets = _llm2_targets()
   payload = current_payload if isinstance(current_payload, dict) else {}
   log_chat_id = payload.get("chatId") or payload.get("chat_id") or current.sender
   payload_chat_type = _normalize_chat_type(
@@ -334,7 +396,6 @@ async def generate_reply(
     or ("group" if bool(payload.get("isGroup")) else "private")
   )
   log_chat_name = (payload.get("chatName") or payload.get("chat_name")) if payload_chat_type == "group" else None
-  model_name = os.getenv("LLM2_MODEL", "gpt-4.1")
   timeout_s = _llm2_timeout()
   retry_max = _llm2_retry_max()
   retry_backoff_s = _llm2_retry_backoff_seconds()
@@ -381,15 +442,16 @@ async def generate_reply(
   msgs.append(HumanMessage(content=f"Group description:\n{group_text}"))
   msgs.append(HumanMessage(content=context_injection))
   msgs.append(HumanMessage(content=messages_content))
-  if tools:
-    llm = llm.bind_tools(tools)
   if env_flag("BRIDGE_LOG_PROMPT_FULL"):
+    first_target = targets[0]
     logger.info(
       "LLM2 prompt full",
       extra={
         "chat_id": log_chat_id,
         "chat_name": log_chat_name,
-        "model": os.getenv("LLM2_MODEL", "gpt-4.1"),
+        "provider": first_target.name,
+        "model": first_target.model,
+        "endpoint": first_target.base_url,
         "messages": [
           {"role": "system", "content": rendered_system},
           {"role": "user", "content": f"Group description:\n{group_text}"},
@@ -398,153 +460,200 @@ async def generate_reply(
         ],
       },
     )
-  logger.debug(
-    "LLM2 invoke",
-    extra={
-      "chat_id": log_chat_id,
-      "chat_name": log_chat_name,
-      "history_len": len(history_list),
-      "system_chars": len(rendered_system),
-      "prompt_preview": trunc(
-        (
-          group_text
-          + '\n'
-          + context_injection
-          + '\nolder messages:\n'
-          + hist_text
-          + '\n\ncurrent messages(burst):\n'
-          + current_line
-          + f"\n[visual_attachments={len(media_parts)}]"
-        ),
-        800,
-      ),
-      "model": model_name,
-      "timeout_s": timeout_s,
-      "retry_max": retry_max,
-      "retry_backoff_s": retry_backoff_s,
-      "sdk_max_retries": sdk_max_retries,
-      "reasoning_effort": reasoning_effort,
-    },
+  prompt_preview = trunc(
+    (
+      group_text
+      + '\n'
+      + context_injection
+      + '\nolder messages:\n'
+      + hist_text
+      + '\n\ncurrent messages(burst):\n'
+      + current_line
+      + f"\n[visual_attachments={len(media_parts)}]"
+    ),
+    800,
   )
 
-  async def _invoke_with_retry(prompt_msgs, *, mode: str):
-    attempts_total = retry_max + 1
-    last_failure_kind: str | None = None
-    for attempt in range(1, attempts_total + 1):
-      started = time.perf_counter()
-      logger.info(
-        "LLM2 invoke start (mode=%s, attempt=%s/%s, model=%s)",
-        mode,
-        attempt,
-        attempts_total,
-        model_name,
-        extra={
-          "chat_id": log_chat_id,
-          "chat_name": log_chat_name,
-          "model": model_name,
-          "mode": mode,
-          "attempt": attempt,
-          "attempts_total": attempts_total,
-          "timeout_s": timeout_s,
-          "sdk_max_retries": sdk_max_retries,
-        },
-      )
-      try:
-        response = await llm.ainvoke(prompt_msgs)
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        logger.info(
-          "LLM2 invoke success (mode=%s, attempt=%s/%s, elapsed=%sms)",
-          mode,
-          attempt,
-          attempts_total,
-          elapsed_ms,
-          extra={
-            "chat_id": log_chat_id,
-            "chat_name": log_chat_name,
-            "model": model_name,
-            "mode": mode,
-            "attempt": attempt,
-            "attempts_total": attempts_total,
-            "elapsed_ms": elapsed_ms,
-            "timeout_s": timeout_s,
-            "sdk_max_retries": sdk_max_retries,
-          },
-        )
-        return response, None
-      except Exception as err:
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        timeout_error = _is_timeout_error(err)
-        last_failure_kind = "timeout" if timeout_error else "error"
-        can_retry = timeout_error and attempt < attempts_total
-        logger.warning(
-          "LLM2 invoke failed",
-          exc_info=not can_retry,
-          extra={
-            "chat_id": log_chat_id,
-            "chat_name": log_chat_name,
-            "model": model_name,
-            "mode": mode,
-            "attempt": attempt,
-            "attempts_total": attempts_total,
-            "elapsed_ms": elapsed_ms,
-            "timeout_s": timeout_s,
-            "retry_backoff_s": retry_backoff_s,
-            "will_retry": can_retry,
-            "error_type": type(err).__name__,
-            "error_chain": _error_chain(err),
-            "sdk_max_retries": sdk_max_retries,
-          },
-        )
-        if not can_retry:
-          return None, last_failure_kind
-        await asyncio.sleep(retry_backoff_s * attempt)
-    return None, last_failure_kind
+  total_targets = len(targets)
+  for idx, target in enumerate(targets):
+    has_next_target = idx < (total_targets - 1)
+    llm = get_llm2(
+      model=target.model,
+      base_url=target.base_url,
+      api_key=target.api_key,
+      include_reasoning=bool(reasoning_effort),
+    )
+    if tools:
+      llm = llm.bind_tools(tools)
 
-  result, failure_kind = await _invoke_with_retry(msgs, mode="multimodal" if media_parts else "text")
-  if result is None and media_parts:
-    if failure_kind == "timeout":
-      logger.warning(
-        "LLM2 multimodal timeout; skipping text-only fallback",
-        extra={
-          "chat_id": log_chat_id,
-          "chat_name": log_chat_name,
-          "model": model_name,
-          "media_parts": len(media_parts),
-          "timeout_s": timeout_s,
-          "retry_max": retry_max,
-          "sdk_max_retries": sdk_max_retries,
-        },
-      )
-      return None
-
-    logger.warning(
-      "LLM2 multimodal failed; retrying text-only prompt",
+    logger.debug(
+      "LLM2 invoke",
       extra={
         "chat_id": log_chat_id,
         "chat_name": log_chat_name,
-        "model": model_name,
-        "media_parts": len(media_parts),
+        "provider": target.name,
+        "history_len": len(history_list),
+        "system_chars": len(rendered_system),
+        "prompt_preview": prompt_preview,
+        "model": target.model,
+        "endpoint": target.base_url,
+        "timeout_s": timeout_s,
+        "retry_max": retry_max,
+        "retry_backoff_s": retry_backoff_s,
+        "sdk_max_retries": sdk_max_retries,
+        "reasoning_effort": reasoning_effort,
       },
     )
-    result, _ = await _invoke_with_retry(
-      [
-        SystemMessage(content=rendered_system),
-        HumanMessage(content=f"Group description:\n{group_text}"),
-        HumanMessage(content=context_injection),
-        HumanMessage(content=messages_content_text),
-      ],
-      mode="text_fallback",
-    )
-  if result is None:
-    return None
 
-  logger.debug(
-    "LLM2 result",
-    extra={
-      "chat_id": log_chat_id,
-      "chat_name": log_chat_name,
-      "reply_preview": trunc(getattr(result, 'content', ''), 800),
-      "raw": dump_json(getattr(result, "model_dump", lambda: str(result))()),
-    },
-  )
-  return result
+    async def _invoke_with_retry(prompt_msgs, *, mode: str):
+      attempts_total = retry_max + 1
+      last_failure_kind: str | None = None
+      for attempt in range(1, attempts_total + 1):
+        started = time.perf_counter()
+        logger.info(
+          "LLM2 invoke start (provider=%s, mode=%s, attempt=%s/%s, model=%s)",
+          target.name,
+          mode,
+          attempt,
+          attempts_total,
+          target.model,
+          extra={
+            "chat_id": log_chat_id,
+            "chat_name": log_chat_name,
+            "provider": target.name,
+            "model": target.model,
+            "endpoint": target.base_url,
+            "mode": mode,
+            "attempt": attempt,
+            "attempts_total": attempts_total,
+            "timeout_s": timeout_s,
+            "sdk_max_retries": sdk_max_retries,
+          },
+        )
+        try:
+          response = await llm.ainvoke(prompt_msgs)
+          elapsed_ms = int((time.perf_counter() - started) * 1000)
+          logger.info(
+            "LLM2 invoke success (provider=%s, mode=%s, attempt=%s/%s, elapsed=%sms)",
+            target.name,
+            mode,
+            attempt,
+            attempts_total,
+            elapsed_ms,
+            extra={
+              "chat_id": log_chat_id,
+              "chat_name": log_chat_name,
+              "provider": target.name,
+              "model": target.model,
+              "endpoint": target.base_url,
+              "mode": mode,
+              "attempt": attempt,
+              "attempts_total": attempts_total,
+              "elapsed_ms": elapsed_ms,
+              "timeout_s": timeout_s,
+              "sdk_max_retries": sdk_max_retries,
+            },
+          )
+          return response, None
+        except Exception as err:
+          elapsed_ms = int((time.perf_counter() - started) * 1000)
+          timeout_error = _is_timeout_error(err)
+          last_failure_kind = "timeout" if timeout_error else "error"
+          can_retry = timeout_error and attempt < attempts_total
+          logger.warning(
+            "LLM2 invoke failed",
+            exc_info=not can_retry,
+            extra={
+              "chat_id": log_chat_id,
+              "chat_name": log_chat_name,
+              "provider": target.name,
+              "model": target.model,
+              "endpoint": target.base_url,
+              "mode": mode,
+              "attempt": attempt,
+              "attempts_total": attempts_total,
+              "elapsed_ms": elapsed_ms,
+              "timeout_s": timeout_s,
+              "retry_backoff_s": retry_backoff_s,
+              "will_retry": can_retry,
+              "error_type": type(err).__name__,
+              "error_chain": _error_chain(err),
+              "sdk_max_retries": sdk_max_retries,
+            },
+          )
+          if not can_retry:
+            return None, last_failure_kind
+          await asyncio.sleep(retry_backoff_s * attempt)
+      return None, last_failure_kind
+
+    result, failure_kind = await _invoke_with_retry(msgs, mode="multimodal" if media_parts else "text")
+    if result is None and media_parts:
+      if failure_kind == "timeout":
+        logger.warning(
+          "LLM2 multimodal timeout; skipping text-only fallback on this provider",
+          extra={
+            "chat_id": log_chat_id,
+            "chat_name": log_chat_name,
+            "provider": target.name,
+            "model": target.model,
+            "endpoint": target.base_url,
+            "media_parts": len(media_parts),
+            "timeout_s": timeout_s,
+            "retry_max": retry_max,
+            "sdk_max_retries": sdk_max_retries,
+            "will_try_fallback_target": has_next_target,
+          },
+        )
+      else:
+        logger.warning(
+          "LLM2 multimodal failed; retrying text-only prompt",
+          extra={
+            "chat_id": log_chat_id,
+            "chat_name": log_chat_name,
+            "provider": target.name,
+            "model": target.model,
+            "endpoint": target.base_url,
+            "media_parts": len(media_parts),
+          },
+        )
+        result, _ = await _invoke_with_retry(
+          [
+            SystemMessage(content=rendered_system),
+            HumanMessage(content=f"Group description:\n{group_text}"),
+            HumanMessage(content=context_injection),
+            HumanMessage(content=messages_content_text),
+          ],
+          mode="text_fallback",
+        )
+
+    if result is not None:
+      logger.debug(
+        "LLM2 result",
+        extra={
+          "chat_id": log_chat_id,
+          "chat_name": log_chat_name,
+          "provider": target.name,
+          "model": target.model,
+          "endpoint": target.base_url,
+          "reply_preview": trunc(getattr(result, 'content', ''), 800),
+          "raw": dump_json(getattr(result, "model_dump", lambda: str(result))()),
+        },
+      )
+      return result
+
+    if has_next_target:
+      logger.warning(
+        "LLM2 provider failed; trying fallback target",
+        extra={
+          "chat_id": log_chat_id,
+          "chat_name": log_chat_name,
+          "provider": target.name,
+          "model": target.model,
+          "endpoint": target.base_url,
+          "next_provider": targets[idx + 1].name,
+          "next_model": targets[idx + 1].model,
+          "next_endpoint": targets[idx + 1].base_url,
+        },
+      )
+
+  return None

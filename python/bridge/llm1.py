@@ -6,6 +6,7 @@ import os
 import time
 import logging
 import re
+from dataclasses import dataclass
 from typing import Iterable, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -25,6 +26,14 @@ except ImportError:  # allow running as script
   from bridge.media import build_visual_parts, llm1_media_enabled, redact_multimodal_content  # type: ignore
 
 logger = setup_logging()
+
+
+@dataclass(frozen=True)
+class LLM1Target:
+  name: str
+  model: str
+  base_url: str
+  api_key: str
 
 
 def _parse_positive_int(raw: str | None, default: int) -> int:
@@ -356,8 +365,15 @@ Safety check:
   ]
 
 
-def _chat_base_url() -> str | None:
-  endpoint = os.getenv("LLM1_ENDPOINT")
+def _clean_env(raw: str | None) -> str | None:
+  if raw is None:
+    return None
+  cleaned = raw.strip()
+  return cleaned or None
+
+
+def _endpoint_base_url(raw_endpoint: str | None) -> str | None:
+  endpoint = _clean_env(raw_endpoint)
   if not endpoint:
     return None
   trimmed = endpoint.rstrip("/")
@@ -366,22 +382,79 @@ def _chat_base_url() -> str | None:
   return trimmed
 
 
-def get_llm1(*, timeout: float = 8.0, include_reasoning: bool = True) -> ChatOpenAI:
-  model = os.getenv("LLM1_MODEL", "gpt-4o-mini")
-  base_url = _chat_base_url()  # optional custom base URL / proxy
-  api_key = os.getenv("LLM1_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+def _chat_base_url() -> str | None:
+  return _endpoint_base_url(os.getenv("LLM1_ENDPOINT"))
+
+
+def _llm1_targets() -> list[LLM1Target]:
+  primary_model = _clean_env(os.getenv("LLM1_MODEL")) or "gpt-4o-mini"
+  primary_url = _endpoint_base_url(os.getenv("LLM1_ENDPOINT"))
+  primary_api_key = os.getenv("LLM1_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+
+  targets: list[LLM1Target] = []
+  if primary_url:
+    targets.append(
+      LLM1Target(
+        name="primary",
+        model=primary_model,
+        base_url=primary_url,
+        api_key=primary_api_key,
+      )
+    )
+
+  fallback_model_raw = _clean_env(os.getenv("LLM1_FALLBACK_MODEL"))
+  fallback_url_raw = _clean_env(os.getenv("LLM1_FALLBACK_ENDPOINT"))
+  fallback_api_key_raw = _clean_env(os.getenv("LLM1_FALLBACK_API_KEY"))
+  fallback_enabled = any((fallback_model_raw, fallback_url_raw, fallback_api_key_raw))
+  if not fallback_enabled:
+    return targets
+
+  fallback_url = _endpoint_base_url(fallback_url_raw) or primary_url
+  if not fallback_url:
+    return targets
+  fallback_model = fallback_model_raw or primary_model
+  fallback_api_key = fallback_api_key_raw or primary_api_key
+  fallback_target = LLM1Target(
+    name="fallback",
+    model=fallback_model,
+    base_url=fallback_url,
+    api_key=fallback_api_key,
+  )
+  if targets:
+    primary_target = targets[0]
+    if (
+      fallback_target.model == primary_target.model
+      and fallback_target.base_url == primary_target.base_url
+      and fallback_target.api_key == primary_target.api_key
+    ):
+      return targets
+  targets.append(fallback_target)
+  return targets
+
+
+def get_llm1(
+  *,
+  model: str | None = None,
+  base_url: str | None = None,
+  api_key: str | None = None,
+  timeout: float = 8.0,
+  include_reasoning: bool = True,
+) -> ChatOpenAI:
+  resolved_model = model or _clean_env(os.getenv("LLM1_MODEL")) or "gpt-4o-mini"
+  resolved_base_url = base_url if base_url is not None else _chat_base_url()
+  resolved_api_key = api_key if api_key is not None else (os.getenv("LLM1_API_KEY") or os.getenv("OPENAI_API_KEY", ""))
   max_tokens = _llm1_max_tokens()
   kwargs = {
-    "model": model,
-    "api_key": api_key,
+    "model": resolved_model,
+    "api_key": resolved_api_key,
     "timeout": _llm1_timeout(timeout),
     "max_retries": _llm1_sdk_max_retries(),
     "temperature": _llm1_temperature(),
   }
   if max_tokens is not None:
     kwargs["max_tokens"] = max_tokens
-  if base_url:
-    kwargs["base_url"] = base_url
+  if resolved_base_url:
+    kwargs["base_url"] = resolved_base_url
   reasoning_effort = _llm1_reasoning_effort() if include_reasoning else None
   if reasoning_effort:
     kwargs["reasoning_effort"] = reasoning_effort
@@ -457,6 +530,7 @@ def _is_reasoning_unsupported_error(err: Exception) -> bool:
 def _llm1_ctx(
   current: WhatsAppMessage,
   *,
+  provider: str,
   model: str,
   url: str | None,
   current_payload: dict | None = None,
@@ -474,6 +548,7 @@ def _llm1_ctx(
     "chat_id": chat_id or getattr(current, "sender", None),
     "chat_name": chat_name,
     "message_id": getattr(current, "message_id", None) or getattr(current, "id", None),
+    "provider": provider,
     "model": model,
     "endpoint": url,
   }
@@ -740,10 +815,19 @@ async def call_llm1(
   group_description: str | None = None,
   prompt_override: str | None = None,
 ) -> LLM1Decision:
+  primary_endpoint = _clean_env(os.getenv("LLM1_ENDPOINT"))
+  fallback_endpoint = _clean_env(os.getenv("LLM1_FALLBACK_ENDPOINT"))
   # If LLM1 is not configured, allow responding by default.
-  if not os.getenv("LLM1_ENDPOINT"):
+  if not primary_endpoint and not fallback_endpoint:
     logger.debug("LLM1 disabled (no LLM1_ENDPOINT set); defaulting to respond")
     return LLM1Decision(should_response=True, confidence=50, reason="llm1_disabled")
+
+  targets = _llm1_targets()
+  if client is not None and targets:
+    targets = targets[:1]
+  if not targets:
+    logger.debug("LLM1 endpoint missing after normalization; defaulting to skip")
+    return LLM1Decision(should_response=False, confidence=10, reason="llm1_missing_url")
 
   history_limit = _llm1_history_limit()
   message_max_chars = _llm1_message_max_chars()
@@ -764,267 +848,338 @@ async def call_llm1(
     group_description=group_description,
     prompt_override=prompt_override,
   )
-  model_name = os.getenv("LLM1_MODEL", "gpt-4o-mini")
-  base_url = _chat_base_url()
-  if not base_url:
-    logger.debug("LLM1 endpoint missing after normalization; defaulting to skip")
-    return LLM1Decision(should_response=False, confidence=10, reason="llm1_missing_url")
-  reasoning_effort = _llm1_reasoning_effort()
-  llm1_temperature = _llm1_temperature()
-  llm1_max_tokens = _llm1_max_tokens()
-  t0 = time.perf_counter()
-  ctx = _llm1_ctx(
-    current,
-    model=model_name,
-    url=base_url,
-    current_payload=current_payload,
-  )
-  llm = client or get_llm1(
-    timeout=timeout,
-    include_reasoning=bool(reasoning_effort),
-  )
-
   prompt_text = "\n".join(
     [_content_to_text(m.get("content", "")) for m in prompt if isinstance(m, dict)]
   )
 
-  if env_flag("BRIDGE_LOG_PROMPT_FULL"):
+  last_failure: LLM1Decision | None = None
+  total_targets = len(targets)
+  llm1_temperature = _llm1_temperature()
+  llm1_max_tokens = _llm1_max_tokens()
+
+  for idx, target in enumerate(targets):
+    has_next_target = idx < (total_targets - 1)
+    reasoning_effort = _llm1_reasoning_effort()
+    t0 = time.perf_counter()
+    ctx = _llm1_ctx(
+      current,
+      provider=target.name,
+      model=target.model,
+      url=target.base_url,
+      current_payload=current_payload,
+    )
+    llm = client if (client is not None and idx == 0) else get_llm1(
+      model=target.model,
+      base_url=target.base_url,
+      api_key=target.api_key,
+      timeout=timeout,
+      include_reasoning=bool(reasoning_effort),
+    )
+
+    if env_flag("BRIDGE_LOG_PROMPT_FULL"):
+      logger.info(
+        "LLM1 prompt full",
+        extra={
+          **ctx,
+          "history_limit": history_limit,
+          "history_used": len(prompt_history),
+          "message_max_chars": message_max_chars,
+          "base_url": target.base_url,
+          "media_parts": len(current_media_parts),
+          "reasoning_effort": reasoning_effort,
+          "messages": _redact_messages_for_log(prompt),
+        },
+      )
+
     logger.info(
-      "LLM1 prompt full",
+      "LLM1 invoke start (provider=%s, model=%s, history=%s, media=%s, temp=%s, max_tokens=%s)",
+      target.name,
+      target.model,
+      len(prompt_history),
+      len(current_media_parts),
+      llm1_temperature,
+      llm1_max_tokens if llm1_max_tokens is not None else "auto",
+      extra={
+        **ctx,
+        "history_used": len(prompt_history),
+        "media_parts": len(current_media_parts),
+        "temperature": llm1_temperature,
+        "max_tokens": llm1_max_tokens,
+        "reasoning_effort": reasoning_effort,
+      },
+    )
+
+    logger.debug(
+      "LLM1 request start",
       extra={
         **ctx,
         "history_limit": history_limit,
         "history_used": len(prompt_history),
         "message_max_chars": message_max_chars,
-        "base_url": _chat_base_url(),
+        "timeout_s": _llm1_timeout(timeout),
+        "prompt_chars": len(prompt_text),
+        "prompt_preview": trunc(prompt_text, 300),
         "media_parts": len(current_media_parts),
+        "base_url": target.base_url,
+        "temperature": llm1_temperature,
+        "max_tokens": llm1_max_tokens,
         "reasoning_effort": reasoning_effort,
-        "messages": _redact_messages_for_log(prompt),
+        "tool_name": LLM1_TOOL["function"]["name"],
       },
     )
 
-  logger.info(
-    "LLM1 invoke start (model=%s, history=%s, media=%s, temp=%s, max_tokens=%s)",
-    model_name,
-    len(prompt_history),
-    len(current_media_parts),
-    llm1_temperature,
-    llm1_max_tokens if llm1_max_tokens is not None else "auto",
-    extra={
-      **ctx,
-      "history_used": len(prompt_history),
-      "media_parts": len(current_media_parts),
-      "temperature": llm1_temperature,
-      "max_tokens": llm1_max_tokens,
-      "reasoning_effort": reasoning_effort,
-    },
-  )
-
-  logger.debug(
-    "LLM1 request start",
-    extra={
-      **ctx,
-      "history_limit": history_limit,
-      "history_used": len(prompt_history),
-      "message_max_chars": message_max_chars,
-      "timeout_s": _llm1_timeout(timeout),
-      "prompt_chars": len(prompt_text),
-      "prompt_preview": trunc(prompt_text, 300),
-      "media_parts": len(current_media_parts),
-      "base_url": _chat_base_url(),
-      "temperature": llm1_temperature,
-      "max_tokens": llm1_max_tokens,
-      "reasoning_effort": reasoning_effort,
-      "tool_name": LLM1_TOOL["function"]["name"],
-    },
-  )
-
-  async def _invoke_once(llm_client: ChatOpenAI):
-    try:
-      llm_with_tool = llm_client.bind_tools(
-        [LLM1_TOOL],
-        tool_choice=LLM1_TOOL["function"]["name"],
-      )
-    except Exception as err:
-      logger.warning(
-        "LLM1 bind_tools with explicit tool_choice failed; retrying default bind_tools",
-        exc_info=err,
-        extra={
-          **ctx,
-          "error_type": type(err).__name__,
-        },
-      )
-      llm_with_tool = llm_client.bind_tools([LLM1_TOOL])
-    return await llm_with_tool.ainvoke(_prompt_to_langchain_messages(prompt))
-
-  try:
-    response = await _invoke_once(llm)
-  except Exception as err:
-    # Some providers reject `reasoning_effort`. Retry once without it when using
-    # internally created client.
-    if (
-      client is None
-      and reasoning_effort
-      and _is_reasoning_unsupported_error(err)
-    ):
-      logger.warning(
-        "LLM1 invoke rejected reasoning_effort; retrying without reasoning",
-        exc_info=True,
-        extra={
-          **ctx,
-          "reasoning_effort": reasoning_effort,
-          "error_type": type(err).__name__,
-          "error_chain": _error_chain(err),
-        },
-      )
-      llm = get_llm1(timeout=timeout, include_reasoning=False)
-      reasoning_effort = None
+    async def _invoke_once(llm_client: ChatOpenAI):
       try:
-        response = await _invoke_once(llm)
-      except Exception as retry_err:
+        llm_with_tool = llm_client.bind_tools(
+          [LLM1_TOOL],
+          tool_choice=LLM1_TOOL["function"]["name"],
+        )
+      except Exception as err:
+        logger.warning(
+          "LLM1 bind_tools with explicit tool_choice failed; retrying default bind_tools",
+          exc_info=err,
+          extra={
+            **ctx,
+            "error_type": type(err).__name__,
+          },
+        )
+        llm_with_tool = llm_client.bind_tools([LLM1_TOOL])
+      return await llm_with_tool.ainvoke(_prompt_to_langchain_messages(prompt))
+
+    try:
+      response = await _invoke_once(llm)
+    except Exception as err:
+      # Some providers reject `reasoning_effort`. Retry once without it when using
+      # internally created client.
+      if (
+        client is None
+        and reasoning_effort
+        and _is_reasoning_unsupported_error(err)
+      ):
+        logger.warning(
+          "LLM1 invoke rejected reasoning_effort; retrying without reasoning",
+          exc_info=True,
+          extra={
+            **ctx,
+            "reasoning_effort": reasoning_effort,
+            "error_type": type(err).__name__,
+            "error_chain": _error_chain(err),
+          },
+        )
+        llm = get_llm1(
+          model=target.model,
+          base_url=target.base_url,
+          api_key=target.api_key,
+          timeout=timeout,
+          include_reasoning=False,
+        )
+        reasoning_effort = None
+        try:
+          response = await _invoke_once(llm)
+        except Exception as retry_err:
+          elapsed_ms = int((time.perf_counter() - t0) * 1000)
+          timeout_error = _is_timeout_error(retry_err)
+          logger.error(
+            "LLM1 invoke failed after reasoning fallback",
+            exc_info=True,
+            extra={
+              **ctx,
+              "elapsed_ms": elapsed_ms,
+              "reasoning_effort": reasoning_effort,
+              "error_type": type(retry_err).__name__,
+              "error_chain": _error_chain(retry_err),
+              "will_try_fallback_target": has_next_target,
+            },
+          )
+          last_failure = LLM1Decision(
+            should_response=False,
+            confidence=10,
+            reason="llm1_unreachable" if timeout_error else "llm1_exception",
+          )
+          if has_next_target:
+            logger.warning(
+              "LLM1 provider failed; trying fallback target",
+              extra={
+                **ctx,
+                "next_provider": targets[idx + 1].name,
+              },
+            )
+            continue
+          return last_failure
+      else:
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
-        timeout_error = _is_timeout_error(retry_err)
+        timeout_error = _is_timeout_error(err)
         logger.error(
-          "LLM1 invoke failed after reasoning fallback; defaulting to skip",
+          "LLM1 invoke failed",
           exc_info=True,
           extra={
             **ctx,
             "elapsed_ms": elapsed_ms,
             "reasoning_effort": reasoning_effort,
-            "error_type": type(retry_err).__name__,
-            "error_chain": _error_chain(retry_err),
+            "error_type": type(err).__name__,
+            "error_chain": _error_chain(err),
+            "will_try_fallback_target": has_next_target,
           },
         )
-        if timeout_error:
-          return LLM1Decision(should_response=False, confidence=10, reason="llm1_unreachable")
-        return LLM1Decision(should_response=False, confidence=10, reason="llm1_exception")
-    else:
-      elapsed_ms = int((time.perf_counter() - t0) * 1000)
-      timeout_error = _is_timeout_error(err)
-      logger.error(
-        "LLM1 invoke failed; defaulting to skip",
-        exc_info=True,
-        extra={
-          **ctx,
-          "elapsed_ms": elapsed_ms,
-          "reasoning_effort": reasoning_effort,
-          "error_type": type(err).__name__,
-          "error_chain": _error_chain(err),
-        },
-      )
-      if timeout_error:
-        return LLM1Decision(should_response=False, confidence=10, reason="llm1_unreachable")
-      return LLM1Decision(should_response=False, confidence=10, reason="llm1_exception")
+        last_failure = LLM1Decision(
+          should_response=False,
+          confidence=10,
+          reason="llm1_unreachable" if timeout_error else "llm1_exception",
+        )
+        if has_next_target:
+          logger.warning(
+            "LLM1 provider failed; trying fallback target",
+            extra={
+              **ctx,
+              "next_provider": targets[idx + 1].name,
+            },
+          )
+          continue
+        return last_failure
 
-  elapsed_ms = int((time.perf_counter() - t0) * 1000)
-  response_metadata = getattr(response, "response_metadata", None)
-  usage_metadata = getattr(response, "usage_metadata", None)
-  raw_tool_calls = getattr(response, "tool_calls", None) or []
-  content = getattr(response, "content", None)
-  additional_kwargs = getattr(response, "additional_kwargs", {}) or {}
-  if not raw_tool_calls and isinstance(additional_kwargs, dict):
-    maybe_tool_calls = additional_kwargs.get("tool_calls")
-    if isinstance(maybe_tool_calls, list):
-      raw_tool_calls = maybe_tool_calls
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    response_metadata = getattr(response, "response_metadata", None)
+    usage_metadata = getattr(response, "usage_metadata", None)
+    raw_tool_calls = getattr(response, "tool_calls", None) or []
+    content = getattr(response, "content", None)
+    additional_kwargs = getattr(response, "additional_kwargs", {}) or {}
+    if not raw_tool_calls and isinstance(additional_kwargs, dict):
+      maybe_tool_calls = additional_kwargs.get("tool_calls")
+      if isinstance(maybe_tool_calls, list):
+        raw_tool_calls = maybe_tool_calls
 
-  logger.debug(
-    "LLM1 response received",
-    extra={
-      **ctx,
-      "elapsed_ms": elapsed_ms,
-      "reasoning_effort": reasoning_effort,
-      "response_metadata": response_metadata,
-      "usage": usage_metadata,
-      "tool_calls_count": len(raw_tool_calls),
-      "content_preview": trunc(_content_to_text(content), 600),
-    },
-  )
-
-  if logger.isEnabledFor(logging.DEBUG):
     logger.debug(
-      "LLM1 raw response",
+      "LLM1 response received",
       extra={
         **ctx,
-        "raw": dump_json(getattr(response, "model_dump", lambda: str(response))()),
-      },
-    )
-
-  tool_calls = raw_tool_calls or []
-  if not tool_calls:
-    parsed_fallback = _extract_decision_from_content(content)
-    if parsed_fallback:
-      try:
-        decision = LLM1Decision.model_validate(parsed_fallback)
-        logger.warning(
-          "LLM1 response missing tool call; parsed JSON fallback",
-          extra={
-            **ctx,
-            "reasoning_effort": reasoning_effort,
-            "response_metadata": response_metadata,
-            "fallback_args": parsed_fallback,
-          },
-        )
-        _log_llm1_decision(
-          decision,
-          ctx=ctx,
-          elapsed_ms=elapsed_ms,
-          source="json_fallback",
-        )
-        return decision
-      except ValidationError:
-        pass
-    logger.warning(
-      "LLM1 response missing tool call; defaulting to skip",
-      extra={
-        **ctx,
+        "elapsed_ms": elapsed_ms,
         "reasoning_effort": reasoning_effort,
         "response_metadata": response_metadata,
+        "usage": usage_metadata,
+        "tool_calls_count": len(raw_tool_calls),
+        "content_preview": trunc(_content_to_text(content), 600),
       },
     )
-    return LLM1Decision(should_response=False, confidence=10, reason="llm1_no_tool")
 
-  tool_name = LLM1_TOOL["function"]["name"]
-  tool_call = next(
-    (
-      tc
-      for tc in tool_calls
-      if isinstance(tc, dict)
-      and (
-        tc.get("name") == tool_name
-        or (
-          isinstance(tc.get("function"), dict)
-          and tc["function"].get("name") == tool_name
-        )
+    if logger.isEnabledFor(logging.DEBUG):
+      logger.debug(
+        "LLM1 raw response",
+        extra={
+          **ctx,
+          "raw": dump_json(getattr(response, "model_dump", lambda: str(response))()),
+        },
       )
-    ),
-    tool_calls[0],
-  )
 
-  args = _extract_tool_args(tool_call)
-  if not args:
-    logger.warning(
-      "LLM1 tool args empty; defaulting to skip",
-      extra={
-        **ctx,
-        "raw_tool_call": trunc(str(tool_call), 500),
-      },
+    tool_calls = raw_tool_calls or []
+    if not tool_calls:
+      parsed_fallback = _extract_decision_from_content(content)
+      if parsed_fallback:
+        try:
+          decision = LLM1Decision.model_validate(parsed_fallback)
+          logger.warning(
+            "LLM1 response missing tool call; parsed JSON fallback",
+            extra={
+              **ctx,
+              "reasoning_effort": reasoning_effort,
+              "response_metadata": response_metadata,
+              "fallback_args": parsed_fallback,
+            },
+          )
+          _log_llm1_decision(
+            decision,
+            ctx=ctx,
+            elapsed_ms=elapsed_ms,
+            source="json_fallback",
+          )
+          return decision
+        except ValidationError:
+          pass
+      logger.warning(
+        "LLM1 response missing tool call",
+        extra={
+          **ctx,
+          "reasoning_effort": reasoning_effort,
+          "response_metadata": response_metadata,
+          "will_try_fallback_target": has_next_target,
+        },
+      )
+      last_failure = LLM1Decision(should_response=False, confidence=10, reason="llm1_no_tool")
+      if has_next_target:
+        logger.warning(
+          "LLM1 invalid response shape; trying fallback target",
+          extra={
+            **ctx,
+            "next_provider": targets[idx + 1].name,
+          },
+        )
+        continue
+      return last_failure
+
+    tool_name = LLM1_TOOL["function"]["name"]
+    tool_call = next(
+      (
+        tc
+        for tc in tool_calls
+        if isinstance(tc, dict)
+        and (
+          tc.get("name") == tool_name
+          or (
+            isinstance(tc.get("function"), dict)
+            and tc["function"].get("name") == tool_name
+          )
+        )
+      ),
+      tool_calls[0],
     )
-    return LLM1Decision(should_response=False, confidence=10, reason="llm1_empty_tool")
 
-  try:
-    decision = LLM1Decision.model_validate(args)
-  except ValidationError as err:
-    logger.warning(
-      "LLM1 tool args failed validation; defaulting to skip",
-      exc_info=err,
-      extra={**ctx, "raw_args": args},
+    args = _extract_tool_args(tool_call)
+    if not args:
+      logger.warning(
+        "LLM1 tool args empty",
+        extra={
+          **ctx,
+          "raw_tool_call": trunc(str(tool_call), 500),
+          "will_try_fallback_target": has_next_target,
+        },
+      )
+      last_failure = LLM1Decision(should_response=False, confidence=10, reason="llm1_empty_tool")
+      if has_next_target:
+        logger.warning(
+          "LLM1 invalid tool args; trying fallback target",
+          extra={
+            **ctx,
+            "next_provider": targets[idx + 1].name,
+          },
+        )
+        continue
+      return last_failure
+
+    try:
+      decision = LLM1Decision.model_validate(args)
+    except ValidationError as err:
+      logger.warning(
+        "LLM1 tool args failed validation",
+        exc_info=err,
+        extra={**ctx, "raw_args": args, "will_try_fallback_target": has_next_target},
+      )
+      last_failure = LLM1Decision(should_response=False, confidence=10, reason="llm1_invalid_tool")
+      if has_next_target:
+        logger.warning(
+          "LLM1 invalid tool args; trying fallback target",
+          extra={
+            **ctx,
+            "next_provider": targets[idx + 1].name,
+          },
+        )
+        continue
+      return last_failure
+
+    _log_llm1_decision(
+      decision,
+      ctx=ctx,
+      elapsed_ms=elapsed_ms,
+      source="tool_call",
     )
-    return LLM1Decision(should_response=False, confidence=10, reason="llm1_invalid_tool")
+    return decision
 
-  _log_llm1_decision(
-    decision,
-    ctx=ctx,
-    elapsed_ms=elapsed_ms,
-    source="tool_call",
-  )
-  return decision
+  return last_failure or LLM1Decision(should_response=False, confidence=10, reason="llm1_exception")
