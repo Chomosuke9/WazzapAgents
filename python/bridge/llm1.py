@@ -273,7 +273,7 @@ You are a WhatsApp router agent. Decide whether you should respond.
 Your name is Vivy. Sometimes people will refer to you as Vy, Ivy, Vivi, etc.
 Call the tool `llm_should_response` exactly once with your decision.
 Do not write any other text outside the tool call.
-Your tag is @52416300998887, if someone mention it in the chat, respond to it.
+Your normalized mention token in context is @<bot>. If someone mentions @<bot>, respond to it.
 The tool must include all arguments: should_response (true/false), confidence (0-100), reason (1-3 short sentences, target 12-60 words, max 320 chars).
 The reason will be forwarded to LLM2. Keep it specific and actionable based on the current message window; avoid generic phrases and avoid chain-of-thought.
 You will be given up to {_llm1_history_limit()} last messages. Every message is capped at {_llm1_message_max_chars()} characters max.
@@ -307,7 +307,7 @@ Important:
 In group chats where you receive every message, be smart about when to contribute:
 Respond when:
 - Directly mentioned or asked a question. If someone mentioned your name, it most likely means you need to respond.
-- Someone tag @52416300998887 in their message.
+- Someone tags @<bot> in their message.
 - Current message metadata indicates the bot was mentioned or replied to in the current message window.
 - You can add genuine value (info, insight, help).
 - Something witty/funny fits naturally.
@@ -892,13 +892,9 @@ async def call_llm1(
       )
 
     logger.info(
-      "LLM1 invoke start (provider=%s, model=%s, history=%s, media=%s, temp=%s, max_tokens=%s)",
-      target.name,
+      "LLM1 invoke start (model=%s, history=%s)",
       target.model,
       len(prompt_history),
-      len(current_media_parts),
-      llm1_temperature,
-      llm1_max_tokens if llm1_max_tokens is not None else "auto",
       extra={
         **ctx,
         "history_used": len(prompt_history),

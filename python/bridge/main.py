@@ -82,6 +82,7 @@ ALLOW_KICK_FLAG = "allow_kick=true"
 ALLOW_DELETE_FLAG = "allow_delete=true"
 ALLOW_BOTH_FLAG = "allow_kick_and_delete=true"
 SYSTEM_CONTEXT_TOKEN = "system"
+MENTION_SUMMARY_MAX_ITEMS = 8
 
 
 @dataclass
@@ -168,6 +169,160 @@ def _quoted_preview(payload: dict) -> str | None:
   return f"reply_to: {' | '.join(parts)}"
 
 
+def _mentioned_participant_rows(payload: dict) -> list[dict]:
+  rows: list[dict] = []
+  mentioned_participants = payload.get("mentionedParticipants")
+  if isinstance(mentioned_participants, list):
+    for item in mentioned_participants:
+      if not isinstance(item, dict):
+        continue
+      name = _clean_text(item.get("name")) or None
+      sender_ref = _clean_text(item.get("senderRef")) or None
+      jid = _clean_text(item.get("jid")) or None
+      if not (name or sender_ref or jid):
+        continue
+      rows.append(
+        {
+          "name": name,
+          "senderRef": sender_ref,
+          "jid": jid,
+          "isBot": bool(item.get("isBot")),
+        }
+      )
+  if rows:
+    return rows
+
+  mentioned = payload.get("mentionedJids")
+  if isinstance(mentioned, list):
+    for jid in mentioned:
+      token = _clean_text(jid)
+      if not token:
+        continue
+      rows.append(
+        {
+          "name": None,
+          "senderRef": None,
+          "jid": token,
+          "isBot": False,
+        }
+      )
+  return rows
+
+
+def _mention_label(row: dict) -> str:
+  if bool(row.get("isBot")):
+    return "<bot>"
+  name = _clean_text(row.get("name"))
+  sender_ref = _clean_text(row.get("senderRef"))
+  jid = _clean_text(row.get("jid"))
+  if name and sender_ref:
+    return f"{name} ({sender_ref})"
+  if name:
+    return name
+  if sender_ref:
+    return sender_ref
+  return jid
+
+
+def _mention_labels(payload: dict, *, max_items: int = MENTION_SUMMARY_MAX_ITEMS) -> list[str]:
+  rows = _mentioned_participant_rows(payload)
+  if not rows:
+    return []
+
+  labels: list[str] = []
+  seen: set[str] = set()
+  for row in rows:
+    label = _mention_label(row)
+    if not label:
+      continue
+    key = label.casefold()
+    if key in seen:
+      continue
+    seen.add(key)
+    labels.append(label)
+  if max_items > 0:
+    return labels[:max_items]
+  return labels
+
+
+def _mention_number_candidates(row: dict) -> list[str]:
+  jid = _clean_text(row.get("jid"))
+  if not jid:
+    return []
+  local = jid.split("@", 1)[0].strip()
+  if not local:
+    return []
+  candidates = [f"@{local}"]
+  digits = re.sub(r"\D+", "", local)
+  if digits and digits != local:
+    candidates.append(f"@{digits}")
+  return candidates
+
+
+def _replace_mentions_in_text(base_text: str, rows: list[dict], labels: list[str]) -> tuple[str, int]:
+  if not base_text or not rows or not labels:
+    return base_text, 0
+
+  rendered = base_text
+  replaced = 0
+  for idx, row in enumerate(rows):
+    if idx >= len(labels):
+      break
+    replacement = f"@{labels[idx]}"
+    candidates = _mention_number_candidates(row)
+    applied = False
+    for candidate in candidates:
+      if not candidate:
+        continue
+      if candidate in rendered:
+        rendered = rendered.replace(candidate, replacement, 1)
+        replaced += 1
+        applied = True
+        break
+    if applied:
+      continue
+  return rendered, replaced
+
+
+def _ensure_bot_token_in_text(text: str, *, bot_mentioned: bool) -> str:
+  if not bot_mentioned:
+    return text
+  if "@<bot>" in text:
+    return text
+  replaced = re.sub(r"@[0-9]{5,}", "@<bot>", text, count=1)
+  if replaced != text:
+    return replaced
+  stripped = text.strip()
+  if stripped:
+    return f"@<bot> {text}"
+  return "@<bot>"
+
+
+def _payload_text_with_mentions(payload: dict) -> str | None:
+  base_text_raw = payload.get("text")
+  base_text = base_text_raw if isinstance(base_text_raw, str) else ""
+  if str(payload.get("messageType") or "").strip().lower() == "groupparticipantsupdate":
+    return base_text if base_text else None
+
+  rows = _mentioned_participant_rows(payload)
+  labels = _mention_labels(payload)
+  if not rows or not labels:
+    normalized = _ensure_bot_token_in_text(base_text, bot_mentioned=bool(payload.get("botMentioned")))
+    return normalized if normalized else None
+
+  rendered, replaced = _replace_mentions_in_text(base_text, rows, labels)
+  if replaced > 0:
+    normalized = _ensure_bot_token_in_text(rendered, bot_mentioned=bool(payload.get("botMentioned")))
+    return normalized
+
+  mention_tokens = [f"@{label}" for label in labels]
+  if base_text and base_text.strip():
+    normalized = f"{' '.join(mention_tokens)} {base_text}"
+    return _ensure_bot_token_in_text(normalized, bot_mentioned=bool(payload.get("botMentioned")))
+  normalized = " ".join(mention_tokens)
+  return _ensure_bot_token_in_text(normalized, bot_mentioned=bool(payload.get("botMentioned")))
+
+
 def _normalize_context_msg_id(value) -> str | None:
   if value is None:
     return None
@@ -214,7 +369,7 @@ def _payload_to_message(payload: dict) -> WhatsAppMessage:
     context_msg_id=context_msg_id,
     sender_ref=sender_ref,
     sender_is_admin=sender_is_admin,
-    text=payload.get("text"),
+    text=_payload_text_with_mentions(payload),
     media=_infer_media(payload),
     quoted_message_id=(
       _normalize_context_msg_id(quoted.get("contextMsgId"))
@@ -241,7 +396,7 @@ def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
     sender_admin = "[Admin]" if bool(item.get("senderIsAdmin")) else ""
     timestamp_ms = int(item.get("timestampMs") or last.get("timestampMs") or 0)
     formatted_time = time.strftime("%H:%M", time.gmtime(max(timestamp_ms, 0) / 1000))
-    text = _normalize_preview_text(item.get("text"))
+    text = _normalize_preview_text(_payload_text_with_mentions(item))
     media = _infer_media(item)
     quoted = _quoted_preview(item)
     suffix = f" | {quoted}" if quoted else ""
@@ -1346,6 +1501,21 @@ def _is_empty_target_token(value: str | None) -> bool:
   return value.strip().lower() in EMPTY_TARGET_TOKENS
 
 
+def _unwrap_angle_group(value: str | None) -> str:
+  token = "" if value is None else str(value).strip()
+  if token.startswith("<") and token.endswith(">") and len(token) >= 2:
+    return token[1:-1].strip()
+  return token
+
+
+def _unwrap_required_angle_group(value: str | None) -> str | None:
+  token = "" if value is None else str(value).strip()
+  if not token or not token.startswith("<") or not token.endswith(">") or len(token) < 2:
+    return None
+  inner = token[1:-1].strip()
+  return inner if inner else None
+
+
 def _resolve_reply_target(
   token: str | None,
   *,
@@ -1354,10 +1524,14 @@ def _resolve_reply_target(
 ) -> str | None:
   if token is None:
     return fallback_reply_to
-  lowered = token.strip().lower()
+  token_value = _unwrap_required_angle_group(token)
+  if token_value is None:
+    logger.warning("reply target ignored: expected angle-bracket token, got=%r", token)
+    return None
+  lowered = token_value.lower()
   if lowered in EMPTY_TARGET_TOKENS:
     return None
-  normalized = _normalize_context_msg_id(token)
+  normalized = _normalize_context_msg_id(token_value)
   if not normalized:
     logger.warning("reply target ignored: invalid context id token=%r", token)
     return None
@@ -1387,11 +1561,14 @@ def _parse_delete_targets(
   *,
   allowed_context_ids: set[str],
 ) -> list[str]:
-  if _is_empty_target_token(token):
+  token_value = _unwrap_required_angle_group(token)
+  if token_value is None:
+    return []
+  if _is_empty_target_token(token_value):
     return []
   parsed_targets: list[str] = []
   dedup: set[str] = set()
-  parts = re.split(r"[,\s]+", token or "")
+  parts = re.split(r"[,\s]+", token_value)
   for part in parts:
     normalized = _resolve_delete_target(part, allowed_context_ids=allowed_context_ids)
     if not normalized:
@@ -1408,22 +1585,37 @@ def _parse_kick_targets(
   *,
   allowed_context_ids: set[str],
 ) -> list[dict[str, str]]:
-  if _is_empty_target_token(token):
+  token_value = _unwrap_required_angle_group(token)
+  if token_value is None:
+    return []
+  if _is_empty_target_token(token_value):
     return []
 
   parsed_targets: list[dict[str, str]] = []
   dedup: set[tuple[str, str]] = set()
-  segments = [segment.strip() for segment in (token or "").split(",")]
+  segments = [segment.strip() for segment in token_value.split(",")]
+  active_sender_ref: str | None = None
   for segment in segments:
-    if not segment or "@" not in segment:
+    cleaned_segment = _unwrap_angle_group(segment)
+    if not cleaned_segment:
       continue
-    sender_part, anchors_part = segment.split("@", 1)
-    sender_ref = sender_part.strip().lower()
-    if not SENDER_REF_RE.match(sender_ref):
-      continue
-    anchor_tokens = [anchor.strip() for anchor in anchors_part.split("|")]
+
+    if "@" in cleaned_segment:
+      sender_part, anchors_part = cleaned_segment.split("@", 1)
+      sender_ref = _unwrap_angle_group(sender_part).strip().lower()
+      if not SENDER_REF_RE.match(sender_ref):
+        active_sender_ref = None
+        continue
+      active_sender_ref = sender_ref
+      anchor_tokens = [anchors_part.strip()]
+    else:
+      if not active_sender_ref:
+        continue
+      sender_ref = active_sender_ref
+      anchor_tokens = [cleaned_segment]
+
     for anchor_token in anchor_tokens:
-      anchor_context_msg_id = _normalize_context_msg_id(anchor_token)
+      anchor_context_msg_id = _normalize_context_msg_id(_unwrap_angle_group(anchor_token))
       if not anchor_context_msg_id:
         continue
       if allowed_context_ids and anchor_context_msg_id not in allowed_context_ids:

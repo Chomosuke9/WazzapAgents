@@ -486,6 +486,7 @@ function normalizeGroupMetadata(meta, jid) {
   const rawDescription = pickGroupDescription(meta);
   const { description, promptOveride } = parseGroupDescription(rawDescription || '');
   const participantRoles = buildParticipantRoleMap(meta);
+  const participants = compactParticipantJids(Array.isArray(meta?.participants) ? meta.participants : []);
   const botAliases = currentBotAliases();
   let botIsAdmin = false;
   let botIsSuperAdmin = false;
@@ -501,6 +502,7 @@ function normalizeGroupMetadata(meta, jid) {
     botIsAdmin,
     botIsSuperAdmin,
     participantRoles,
+    participants,
   };
 }
 
@@ -512,6 +514,7 @@ function defaultGroupContext(jid) {
     botIsAdmin: false,
     botIsSuperAdmin: false,
     participantRoles: {},
+    participants: [],
   };
 }
 
@@ -1014,6 +1017,35 @@ async function resolveParticipantLabel(chatId, participantJid) {
   return fallbackParticipantLabel(normalized);
 }
 
+async function buildMentionedParticipants(chatId, mentionedJids, botAliasSet = null) {
+  if (!Array.isArray(mentionedJids) || mentionedJids.length === 0) return null;
+  const normalizedMentions = Array.from(new Set(
+    mentionedJids
+      .map((jid) => normalizeJid(jid) || jid)
+      .filter(Boolean)
+  ));
+  if (normalizedMentions.length === 0) return null;
+
+  const rows = [];
+  for (const participantJid of normalizedMentions) {
+    const normalized = normalizeJid(participantJid) || participantJid;
+    if (!normalized) continue;
+    const name = await resolveParticipantLabel(chatId, normalized);
+    const senderRef = rememberSenderRef(chatId, normalized, normalized) || null;
+    const isBot = Boolean(
+      botAliasSet instanceof Set
+      && (botAliasSet.has(normalized) || botAliasSet.has(participantJid))
+    );
+    rows.push({
+      jid: normalized,
+      senderRef,
+      name: name || fallbackParticipantLabel(normalized),
+      isBot,
+    });
+  }
+  return rows.length > 0 ? rows : null;
+}
+
 function makeEventMessageId(prefix) {
   const stamp = Date.now();
   const rand = Math.random().toString(36).slice(2, 8);
@@ -1217,13 +1249,31 @@ async function emitGroupJoinContextEvent({
   const labels = await Promise.all(
     normalizedParticipants.map((participantJid) => resolveParticipantLabel(chatId, participantJid))
   );
-  const uniqueLabels = Array.from(new Set(labels.filter(Boolean)));
+  const mentionedParticipants = normalizedParticipants.map((participantJid, idx) => {
+    const senderRef = rememberSenderRef(chatId, participantJid, participantJid) || null;
+    const name = labels[idx] || fallbackParticipantLabel(participantJid);
+    return {
+      jid: participantJid,
+      senderRef,
+      name,
+      isBot: false,
+    };
+  });
+  const uniqueParticipantLabels = Array.from(new Set(
+    mentionedParticipants
+      .map((item) => {
+        const senderRef = typeof item.senderRef === 'string' ? item.senderRef.trim() : '';
+        if (senderRef) return `${item.name} (${senderRef})`;
+        return item.name;
+      })
+      .filter(Boolean)
+  ));
   const normalizedActorId = normalizeJid(actorId) || null;
   const actorName = normalizedActorId
     ? await resolveParticipantLabel(chatId, normalizedActorId)
     : null;
   const actorSenderId = normalizedActorId || 'group-system@wazzap.local';
-  const senderRef = rememberSenderRef(chatId, actorSenderId, actorSenderId) || 'unknown';
+  const actorSenderRef = rememberSenderRef(chatId, actorSenderId, actorSenderId) || 'unknown';
   const actorRole = roleFlagsForJid(group?.participantRoles, actorSenderId);
   const hasAnchorKey = Boolean(messageKey?.id);
   const contextMsgId = hasAnchorKey ? nextContextMsgId(chatId) : null;
@@ -1236,16 +1286,16 @@ async function emitGroupJoinContextEvent({
       contextMsgId,
       rawKey: messageKey,
       senderId: actorSenderId,
-      senderRef,
+      senderRef: actorSenderRef,
       senderIsAdmin: actorRole.isAdmin || actorRole.isSuperAdmin,
       fromMe: false,
       timestampMs: normalizedTimestampMs,
     });
   }
 
-  const joinedText = uniqueLabels.length === 1
-    ? `${uniqueLabels[0]} joined the group.`
-    : `New members joined the group: ${uniqueLabels.join(', ')}.`;
+  const joinedText = uniqueParticipantLabels.length === 1
+    ? `${uniqueParticipantLabels[0]} joined the group.`
+    : `New members joined the group: ${uniqueParticipantLabels.join(', ')}.`;
   const byText = actorName ? ` Added by ${actorName}.` : '';
   const text = `Group update: ${joinedText}${byText}`;
 
@@ -1256,7 +1306,7 @@ async function emitGroupJoinContextEvent({
     chatName: group.name || chatId,
     chatType: 'group',
     senderId: actorSenderId,
-    senderRef,
+    senderRef: actorSenderRef,
     senderName: actorName || 'Group System',
     senderIsAdmin: actorRole.isAdmin || actorRole.isSuperAdmin,
     isGroup: true,
@@ -1269,6 +1319,7 @@ async function emitGroupJoinContextEvent({
     quoted: null,
     attachments: [],
     mentionedJids: normalizedParticipants,
+    mentionedParticipants,
     location: null,
     contextOnly: true,
     triggerLlm1: true,
@@ -1323,6 +1374,7 @@ function emitBotActionContextEvent({
     quoted: null,
     attachments: [],
     mentionedJids: null,
+    mentionedParticipants: null,
     location: null,
     groupDescription: group?.description || null,
     groupPromptOveride: group?.promptOveride || null,
@@ -1426,6 +1478,9 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
         .filter(Boolean)
     ))
     : null;
+  const mentionedParticipants = Array.isArray(mentionedJids) && mentionedJids.length > 0
+    ? await buildMentionedParticipants(chatId, mentionedJids, botAliases)
+    : null;
   const botMentionedByJid = Boolean(
     Array.isArray(mentionedJids)
     && mentionedJids.some((jid) => botAliases.has(normalizeJid(jid) || jid))
@@ -1486,6 +1541,7 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
     quoted,
     attachments,
     mentionedJids,
+    mentionedParticipants,
     botMentioned,
     repliedToBot,
     location,
@@ -1930,6 +1986,82 @@ async function startWhatsApp() {
   return sock;
 }
 
+function mentionHandleForJid(jid) {
+  if (!jid || typeof jid !== 'string') return null;
+  const normalized = normalizeJid(jid) || jid;
+  const local = String(normalized).split('@')[0] || '';
+  const cleaned = local.replace(/[^0-9A-Za-z._-]/g, '');
+  if (!cleaned) return null;
+  return `@${cleaned}`;
+}
+
+function resolveMentionTargetBySenderRef(chatId, senderRef) {
+  if (!chatId || !senderRef) return null;
+  const senderId = resolveSenderByRef(chatId, senderRef);
+  if (!senderId) return null;
+  const participantFromRegistry = resolveParticipantBySenderId(chatId, senderId);
+  return normalizeJid(participantFromRegistry) || normalizeJid(senderId) || senderId || null;
+}
+
+async function renderOutboundMentions(chatId, rawText, groupContext = null) {
+  if (typeof rawText !== 'string' || !rawText.includes('@<')) {
+    return { text: rawText, mentions: [], groupContext };
+  }
+  const tokens = Array.from(rawText.matchAll(/@<([^<>\r\n]+)>/g));
+  if (tokens.length === 0) {
+    return { text: rawText, mentions: [], groupContext };
+  }
+
+  let resolvedGroup = groupContext;
+  let cursor = 0;
+  let rendered = '';
+  const mentionSet = new Set();
+
+  for (const token of tokens) {
+    const fullToken = token[0];
+    const rawValue = typeof token[1] === 'string' ? token[1].trim() : '';
+    const normalizedValue = rawValue.toLowerCase();
+    const index = Number.isInteger(token.index) ? token.index : -1;
+    if (index < 0) continue;
+
+    rendered += rawText.slice(cursor, index);
+    let replacement = rawValue ? `@${rawValue}` : '@';
+
+    if (normalizedValue === 'all') {
+      if (chatId?.endsWith('@g.us')) {
+        let participants = Array.isArray(resolvedGroup?.participants) ? resolvedGroup.participants : [];
+        if (participants.length === 0) {
+          resolvedGroup = await getGroupContext(chatId, { forceRefresh: true });
+          participants = Array.isArray(resolvedGroup?.participants) ? resolvedGroup.participants : [];
+        }
+        for (const participantJid of participants) {
+          const normalizedParticipant = normalizeJid(participantJid) || participantJid;
+          if (!normalizedParticipant) continue;
+          mentionSet.add(normalizedParticipant);
+        }
+      }
+      replacement = '@all';
+    } else if (normalizedValue) {
+      const participantJid = resolveMentionTargetBySenderRef(chatId, normalizedValue);
+      if (participantJid) {
+        const normalizedParticipant = normalizeJid(participantJid) || participantJid;
+        mentionSet.add(normalizedParticipant);
+        replacement = mentionHandleForJid(normalizedParticipant) || replacement;
+      }
+    }
+
+    rendered += replacement;
+    cursor = index + fullToken.length;
+  }
+
+  rendered += rawText.slice(cursor);
+  return {
+    text: rendered,
+    mentions: Array.from(mentionSet),
+    groupContext: resolvedGroup,
+  };
+}
+
 async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
   if (!sock) throw actionError('send_failed', 'WhatsApp socket not ready');
   if (!chatId) throw actionError('invalid_target', 'chatId is required');
@@ -1943,7 +2075,7 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
   }
 
   const isGroup = chatId.endsWith('@g.us');
-  const group = isGroup ? await getGroupContext(chatId) : null;
+  let group = isGroup ? await getGroupContext(chatId) : null;
   const botSenderId = normalizeJid(sock.user?.id) || 'bot@wazzap.local';
   const botSenderRef = rememberSenderRef(chatId, botSenderId, botSenderId) || 'unknown';
   const normalizedText = typeof text === 'string' ? text.trim() : '';
@@ -1965,7 +2097,14 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
     else if (kind === 'sticker') content.sticker = { url: filePath };
     else content.document = { url: filePath, fileName: att.fileName || path.basename(filePath) };
 
-    if (att.caption) content.caption = att.caption;
+    if (att.caption) {
+      const renderedCaption = await renderOutboundMentions(chatId, String(att.caption), group);
+      content.caption = renderedCaption.text;
+      if (renderedCaption.mentions.length > 0) {
+        content.mentions = renderedCaption.mentions;
+      }
+      group = renderedCaption.groupContext || group;
+    }
 
     const sentMsg = await sock.sendMessage(chatId, content, quoted ? { quoted } : {});
     const contextMsgId = nextContextMsgId(chatId);
@@ -1986,7 +2125,13 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
   }
 
   if (normalizedText) {
-    const sentMsg = await sock.sendMessage(chatId, { text: normalizedText }, quoted ? { quoted } : {});
+    const renderedText = await renderOutboundMentions(chatId, normalizedText, group);
+    group = renderedText.groupContext || group;
+    const textPayload = { text: renderedText.text };
+    if (renderedText.mentions.length > 0) {
+      textPayload.mentions = renderedText.mentions;
+    }
+    const sentMsg = await sock.sendMessage(chatId, textPayload, quoted ? { quoted } : {});
     const contextMsgId = nextContextMsgId(chatId);
     rememberMessage(sentMsg, {
       chatId,

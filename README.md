@@ -44,6 +44,13 @@ Node.js (ESM) gateway that connects a WhatsApp account via Baileys v7 and forwar
     "messageType": "extendedTextMessage",
     "text": "Hello world",
     "mentionedJids": ["123@s.whatsapp.net"],
+    "mentionedParticipants": [
+      {
+        "jid": "123@s.whatsapp.net",
+        "senderRef": "u1m9qa",
+        "name": "Bob"
+      }
+    ],
     "quoted": {
       "messageId": "wamid-quoted",
       "contextMsgId": "000124",
@@ -70,6 +77,7 @@ Node.js (ESM) gateway that connects a WhatsApp account via Baileys v7 and forwar
 Notes:
 - `contextMsgId` is a 6-digit per-chat sequence (`000000..999999`, wraps after `999999`).
 - `senderRef` is a short deterministic reference per sender in each chat; LLM moderation must use this, not JIDs.
+- `mentionedParticipants` resolves mentions into `{ jid, senderRef, name }` when available; keep using `mentionedJids` for backwards compatibility if needed.
 - Bot messages are forwarded as `contextOnly: true` and `triggerLlm1: false` so they enrich context without causing loops.
 - Gateway may emit synthetic bot context events with `messageType: "actionLog"` and `actionLog` details after successful moderation actions (`delete_message`, `kick_member`).
 - Backend bridge enforces moderation flags from `<prompt_override>`: `DELETE`/`KICK` actions are dropped unless matching `allow_*` flags are present and bot role is admin/superadmin.
@@ -81,7 +89,7 @@ Notes:
   "payload": {
     "requestId": "req-send-001",
     "chatId": "12345@g.us",
-    "text": "Reply text",
+    "text": "Reply text @<u8k2d1> @<all>",
     "replyTo": "000124",
     "attachments": [
       {
@@ -93,6 +101,11 @@ Notes:
   }
 }
 ```
+
+Notes:
+- Mention one user inside outgoing text/caption with `@<senderRef>`.
+- Mention all group members with `@<all>`.
+- Invalid `senderRef` mention tokens are silently skipped (message still sent).
 
 ### LLM -> Gateway: `delete_message`
 ```json
