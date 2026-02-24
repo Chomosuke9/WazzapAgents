@@ -181,7 +181,7 @@ def setup_logging() -> logging.Logger:
   handler = logging.StreamHandler(sys.stdout)
   formatter = ExtraFormatter(
     fmt="%(asctime)s %(levelname)s [%(name)s] [%(chat_scope)s] %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
+    datefmt="%H:%M:%S",
   )
   handler.setFormatter(formatter)
   logger.addHandler(handler)

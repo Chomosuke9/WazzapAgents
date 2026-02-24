@@ -1,8 +1,24 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable, Optional
+
+DEFAULT_ASSISTANT_NAME = "LLM"
+ASSISTANT_CONTEXT_SENDER_REF = "You"
+
+
+def assistant_name() -> str:
+  raw = os.getenv("ASSISTANT_NAME")
+  if raw is None:
+    return DEFAULT_ASSISTANT_NAME
+  cleaned = raw.strip()
+  return cleaned or DEFAULT_ASSISTANT_NAME
+
+
+def assistant_sender_ref() -> str:
+  return ASSISTANT_CONTEXT_SENDER_REF
 
 
 @dataclass
@@ -57,9 +73,14 @@ def format_history(messages: Iterable[WhatsAppMessage]) -> str:
   for msg in messages:
     context_msg_id = _normalize_context_msg_id(msg.context_msg_id, role=msg.role)
     time = _fmt_time(msg.timestamp_ms)
-    sender = _compact(msg.sender) or "unknown"
-    sender_ref = _compact(msg.sender_ref) or "unknown"
-    admin_prefix = "[Admin]" if msg.sender_is_admin else ""
+    if msg.role == "assistant":
+      sender = assistant_name()
+      sender_ref = assistant_sender_ref()
+      admin_prefix = ""
+    else:
+      sender = _compact(msg.sender) or "unknown"
+      sender_ref = _compact(msg.sender_ref) or "unknown"
+      admin_prefix = "[Admin]" if msg.sender_is_admin else ""
     message_text = _message_text(msg)
     lines.append(f"<{context_msg_id}>[{time}]{admin_prefix}{sender} ({sender_ref}):{message_text}".rstrip())
 
@@ -67,15 +88,18 @@ def format_history(messages: Iterable[WhatsAppMessage]) -> str:
     quote_text = _compact(msg.quoted_text)
     quote_media = _compact(msg.quoted_media)
     quote_id = _compact(msg.quoted_message_id)
+    quote_text_is_media_stub = bool(
+      quote_text and quote_text.startswith("<media:") and quote_text.endswith(">")
+    )
     quote_parts: list[str] = []
     if quote_sender:
       quote_parts.append(f"from={quote_sender}")
     if quote_id:
       quote_parts.append(f"id={quote_id}")
     if quote_media:
-      quote_parts.append(f"media={quote_media}")
-    if quote_text:
-      quote_parts.append(f"text={quote_text}")
+      quote_parts.append(f"quoted_media={quote_media}")
+    if quote_text and not (quote_media and quote_text_is_media_stub):
+      quote_parts.append(f"quoted_text={quote_text}")
     if quote_parts:
       lines.append(f"  > reply_to: {' | '.join(quote_parts)}")
   return "\n".join(lines)

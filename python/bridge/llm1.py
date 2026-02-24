@@ -14,14 +14,14 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field, ValidationError
 
 try:
-  from .history import WhatsAppMessage, format_history
+  from .history import WhatsAppMessage, assistant_name, format_history
   from .log import setup_logging, trunc, dump_json, env_flag
   from .media import build_visual_parts, llm1_media_enabled, redact_multimodal_content
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
   sys.path.append(str(Path(__file__).resolve().parent.parent))
-  from bridge.history import WhatsAppMessage, format_history  # type: ignore
+  from bridge.history import WhatsAppMessage, assistant_name, format_history  # type: ignore
   from bridge.log import setup_logging, trunc, dump_json, env_flag  # type: ignore
   from bridge.media import build_visual_parts, llm1_media_enabled, redact_multimodal_content  # type: ignore
 
@@ -247,6 +247,7 @@ def build_llm1_prompt(
   group_description: str | None = None,
   prompt_override: str | None = None,
 ):
+  configured_assistant_name = assistant_name()
   history_list = list(history)[-history_limit:]
   prompt_history = [_truncate_message(msg, message_max_chars) for msg in history_list]
   current_prompt_msg = _truncate_message(current, message_max_chars)
@@ -270,7 +271,7 @@ def build_llm1_prompt(
   base_system = f"""
 You are a WhatsApp router agent. Decide whether you should respond.
 
-Your name is Vivy. Sometimes people will refer to you as Vy, Ivy, Vivi, etc.
+Your name is {configured_assistant_name}.
 Call the tool `llm_should_response` exactly once with your decision.
 Do not write any other text outside the tool call.
 Your normalized mention token in context is @<bot>. If someone mentions @<bot>, respond to it.
@@ -686,6 +687,7 @@ def _metadata_block(current_payload: dict | None) -> str:
   human_window = payload.get("humanMessagesInWindow")
   explicit_join_events = payload.get("explicitJoinEventsInWindow")
   explicit_join_participants = payload.get("explicitJoinParticipantsInWindow")
+  quoted_has_media = payload.get("quotedHasMedia")
   raw_chat_type = str(payload.get("chatType") or "").strip().lower()
   if raw_chat_type not in {"private", "group"}:
     raw_chat_type = "group" if bool(payload.get("isGroup")) else "private"
@@ -732,6 +734,24 @@ def _metadata_block(current_payload: dict | None) -> str:
     reply_line = "- A message in this current message window replies to the bot."
   else:
     reply_line = "- No message in this current message window replies to the bot."
+
+  if quoted_has_media is None:
+    quoted_payload = payload.get("quoted")
+    if isinstance(quoted_payload, dict):
+      quoted_type = str(quoted_payload.get("type") or "").strip().lower()
+      quoted_has_media = any(
+        token in quoted_type
+        for token in ("sticker", "image", "video", "audio", "document")
+      )
+    else:
+      quoted_has_media = False
+  else:
+    quoted_has_media = bool(quoted_has_media)
+
+  if quoted_has_media:
+    quoted_media_line = "- Reply/quoted metadata includes quoted media."
+  else:
+    quoted_media_line = "- Reply/quoted metadata does not include quoted media."
 
   since_assistant_text = _count_phrase(since_assistant, "message", "messages")
   human_window_text = _count_phrase(human_window, "human message", "human messages")
@@ -784,6 +804,7 @@ def _metadata_block(current_payload: dict | None) -> str:
     "- `current message window` = only `current messages(burst)` (exclude `older messages`).\n"
     f"{mention_line}\n"
     f"{reply_line}\n"
+    f"{quoted_media_line}\n"
     f"- The last assistant reply was {since_assistant_text} ago.\n"
     f"{assistant_reply_block}\n"
     f"{human_window_line}\n"

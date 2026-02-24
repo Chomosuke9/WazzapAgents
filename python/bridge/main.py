@@ -15,7 +15,7 @@ import websockets
 from dotenv import load_dotenv
 
 try:
-  from .history import WhatsAppMessage
+  from .history import WhatsAppMessage, assistant_name, assistant_sender_ref
   from .log import setup_logging, set_chat_log_context, reset_chat_log_context
   from .llm1 import call_llm1
   from .llm2 import generate_reply
@@ -23,7 +23,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
   import sys
   from pathlib import Path
   sys.path.append(str(Path(__file__).resolve().parent.parent))
-  from bridge.history import WhatsAppMessage  # type: ignore
+  from bridge.history import WhatsAppMessage, assistant_name, assistant_sender_ref  # type: ignore
   from bridge.log import setup_logging, set_chat_log_context, reset_chat_log_context  # type: ignore
   from bridge.llm1 import call_llm1  # type: ignore
   from bridge.llm2 import generate_reply  # type: ignore
@@ -152,6 +152,9 @@ def _quoted_preview(payload: dict) -> str | None:
   quoted_context_id = _normalize_context_msg_id(quoted.get("contextMsgId"))
   quoted_text = _normalize_preview_text(quoted.get("text"))
   quoted_media = _infer_quoted_media(quoted)
+  quoted_text_is_media_stub = bool(
+    quoted_text and quoted_text.startswith("<media:") and quoted_text.endswith(">")
+  )
 
   if sender:
     parts.append(f"from={sender}")
@@ -160,9 +163,9 @@ def _quoted_preview(payload: dict) -> str | None:
   elif quoted_id:
     parts.append(f"id={quoted_id}")
   if quoted_media:
-    parts.append(f"media={quoted_media}")
-  if quoted_text:
-    parts.append(f"text={quoted_text}")
+    parts.append(f"quoted_media={quoted_media}")
+  if quoted_text and not (quoted_media and quoted_text_is_media_stub):
+    parts.append(f"quoted_text={quoted_text}")
 
   if not parts:
     return "reply_to:(present)"
@@ -360,12 +363,18 @@ def _payload_to_message(payload: dict) -> WhatsAppMessage:
   is_context_only = bool(payload.get("contextOnly"))
   normalized_context_msg_id = _normalize_context_msg_id(payload.get("contextMsgId"))
   context_msg_id = SYSTEM_CONTEXT_TOKEN if _is_system_payload(payload) else normalized_context_msg_id
-  sender_ref = _clean_text(payload.get("senderRef")) or None
-  sender_is_admin = bool(payload.get("senderIsAdmin"))
   role = "assistant" if bool(payload.get("fromMe")) else "user"
+  if role == "assistant":
+    sender = assistant_name()
+    sender_ref = assistant_sender_ref()
+    sender_is_admin = False
+  else:
+    sender = payload.get("senderName") or payload.get("senderId") or payload.get("chatId")
+    sender_ref = _clean_text(payload.get("senderRef")) or None
+    sender_is_admin = bool(payload.get("senderIsAdmin"))
   return WhatsAppMessage(
     timestamp_ms=int(payload["timestampMs"]),
-    sender=payload.get("senderName") or payload.get("senderId") or payload.get("chatId"),
+    sender=sender,
     context_msg_id=context_msg_id,
     sender_ref=sender_ref,
     sender_is_admin=sender_is_admin,
@@ -391,9 +400,14 @@ def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
   lines: list[str] = []
   for item in payloads:
     context_msg_id = _display_context_msg_id_from_payload(item)
-    sender = item.get("senderName") or item.get("senderId") or item.get("chatId") or "unknown"
-    sender_ref = _clean_text(item.get("senderRef")) or "unknown"
-    sender_admin = "[Admin]" if bool(item.get("senderIsAdmin")) else ""
+    if bool(item.get("fromMe")):
+      sender = assistant_name()
+      sender_ref = assistant_sender_ref()
+      sender_admin = ""
+    else:
+      sender = item.get("senderName") or item.get("senderId") or item.get("chatId") or "unknown"
+      sender_ref = _clean_text(item.get("senderRef")) or "unknown"
+      sender_admin = "[Admin]" if bool(item.get("senderIsAdmin")) else ""
     timestamp_ms = int(item.get("timestampMs") or last.get("timestampMs") or 0)
     formatted_time = time.strftime("%H:%M", time.gmtime(max(timestamp_ms, 0) / 1000))
     text = _normalize_preview_text(_payload_text_with_mentions(item))
@@ -748,6 +762,14 @@ def _build_llm1_context_metadata(
       if token:
         explicit_join_participants.add(token.lower())
 
+  trigger_payload = (
+    effective_window_payloads[-1]
+    if effective_window_payloads
+    else (trigger_window_payloads[-1] if trigger_window_payloads else {})
+  )
+  current_has_media = bool(_infer_media(trigger_payload))
+  quoted_has_media = bool(_infer_quoted_media(_quoted_from_payload(trigger_payload)))
+
   history_limit = _llm1_history_limit_for_metadata()
   standard_windows = [20, 50, 100, 200]
   assistant_reply_windows = [window for window in standard_windows if window <= history_limit]
@@ -766,6 +788,8 @@ def _build_llm1_context_metadata(
     "botMentionedInWindow": bot_mentioned_in_window,
     "repliedToBotInWindow": replied_to_bot_in_window,
     "botMentionCountInWindow": bot_mention_count_in_window,
+    "currentHasMedia": current_has_media,
+    "quotedHasMedia": quoted_has_media,
     "messagesSinceAssistantReply": _messages_since_last_assistant(
       history_before_current,
       effective_window_payloads,
@@ -1182,9 +1206,9 @@ async def handle_socket(ws):
               history,
               WhatsAppMessage(
                 timestamp_ms=int(time.time() * 1000),
-                sender="LLM",
+                sender=assistant_name(),
                 context_msg_id="pending",
-                sender_ref="llm",
+                sender_ref=assistant_sender_ref(),
                 sender_is_admin=False,
                 text=action_text or None,
                 media=None,
