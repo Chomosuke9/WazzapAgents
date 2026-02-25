@@ -67,6 +67,7 @@ Semantics:
 - Mention one person in reply text with `@<senderRef>`.
 - Mention all group members in reply text with `@<all>`.
 - Evaluate both sections, but prioritize `current messages(burst)` for immediate response decisions.
+- Send multiple messages if you want to reply to multiple person, do not answer multiple person with one messages.
 
 Examples:
 - Reply without quote:
