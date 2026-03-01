@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,7 +12,7 @@ PYTHON_DIR = Path(__file__).resolve().parents[1]
 if str(PYTHON_DIR) not in sys.path:
   sys.path.insert(0, str(PYTHON_DIR))
 
-from bridge.history import WhatsAppMessage, format_history
+from bridge.history import WhatsAppMessage, format_context_time, format_history
 from bridge.llm1 import _metadata_block, build_llm1_prompt
 from bridge.llm2 import _context_injection_block
 from bridge.main import (
@@ -84,6 +85,36 @@ class ReplyToSerializationTests(unittest.TestCase):
 
 
 class HistoryFormattingTests(unittest.TestCase):
+  def test_format_history_uses_env_utc_offset_when_set(self) -> None:
+    timestamp_ms = 1730000000000
+    messages = [
+      WhatsAppMessage(
+        timestamp_ms=timestamp_ms,
+        sender="Agus Kebab",
+        context_msg_id="001880",
+        sender_ref="12lttc",
+        text="pakai offset env",
+      )
+    ]
+
+    with patch.dict(os.environ, {"CONTEXT_TIME_UTC_OFFSET_HOURS": "4"}, clear=False):
+      rendered = format_history(messages)
+
+    expected_time = datetime.fromtimestamp(
+      timestamp_ms / 1000,
+      tz=timezone(timedelta(hours=4)),
+    ).strftime("%H:%M")
+    self.assertIn(f"[{expected_time}]", rendered)
+
+  def test_format_context_time_falls_back_to_local_timezone_when_env_empty(self) -> None:
+    timestamp_ms = 1730000000000
+
+    with patch.dict(os.environ, {"CONTEXT_TIME_UTC_OFFSET_HOURS": ""}, clear=False):
+      formatted = format_context_time(timestamp_ms)
+
+    expected_time = datetime.fromtimestamp(timestamp_ms / 1000).strftime("%H:%M")
+    self.assertEqual(formatted, expected_time)
+
   def test_format_history_single_comprehensive_mixed_messages(self) -> None:
     messages = [
       WhatsAppMessage(
@@ -157,6 +188,25 @@ class HistoryFormattingTests(unittest.TestCase):
     self.assertIn("Vivy Custom (You):assistant provisional", rendered)
     self.assertIn("<system>", rendered)
     self.assertIn("unknown (unknown):system event line", rendered)
+
+  def test_build_burst_current_uses_env_utc_offset_when_set(self) -> None:
+    payload = _base_payload()
+    payload["text"] = "pesan pertama"
+    payload["messageId"] = "wamid-burst-1"
+    payload2 = dict(payload)
+    payload2["contextMsgId"] = "001883"
+    payload2["messageId"] = "wamid-burst-2"
+    payload2["timestampMs"] = payload["timestampMs"] + 1000
+    payload2["text"] = "cek burst timezone"
+
+    with patch.dict(os.environ, {"CONTEXT_TIME_UTC_OFFSET_HOURS": "4"}, clear=False):
+      burst = _build_burst_current([payload, payload2])
+
+    expected_time = datetime.fromtimestamp(
+      payload["timestampMs"] / 1000,
+      tz=timezone(timedelta(hours=4)),
+    ).strftime("%H:%M")
+    self.assertIn(f"[{expected_time}]", burst.text or "")
 
 
 class MetadataFlagTests(unittest.TestCase):

@@ -21,7 +21,7 @@ Rules:
 - KICK targets must always include at least one anchor id (`senderRef@NNNNNN`), never senderRef alone.
 - KICK supports one sender with multiple anchors separated by comma in a single line, example: `KICK:<u8k2d1@000123,000124>`.
 - If you need to kick multiple senderRef targets, prefer separate `KICK:` lines (one senderRef per line).
-- Control lines MUST use the angle-bracket payload form shown above (legacy non-bracket forms are invalid).
+- Control lines MUST use the angle-bracket payload form shown above.
 - You may omit `DELETE` or `KICK` lines when no action is needed; use `<none>` only when you want to be explicit.
 - `REPLY_TO` opens a reply block. All non-control lines after it become the reply text until the next `REPLY_TO` or end of output.
 - You may emit multiple `REPLY_TO` blocks and multiple standalone `DELETE`/`KICK` lines in one output.

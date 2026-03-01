@@ -15,7 +15,12 @@ import websockets
 from dotenv import load_dotenv
 
 try:
-  from .history import WhatsAppMessage, assistant_name, assistant_sender_ref
+  from .history import (
+    WhatsAppMessage,
+    assistant_name,
+    assistant_sender_ref,
+    format_context_time,
+  )
   from .log import setup_logging, set_chat_log_context, reset_chat_log_context
   from .llm1 import call_llm1
   from .llm2 import generate_reply
@@ -23,7 +28,12 @@ except ImportError:  # allow running as `python python/bridge/main.py`
   import sys
   from pathlib import Path
   sys.path.append(str(Path(__file__).resolve().parent.parent))
-  from bridge.history import WhatsAppMessage, assistant_name, assistant_sender_ref  # type: ignore
+  from bridge.history import (  # type: ignore
+    WhatsAppMessage,
+    assistant_name,
+    assistant_sender_ref,
+    format_context_time,
+  )
   from bridge.log import setup_logging, set_chat_log_context, reset_chat_log_context  # type: ignore
   from bridge.llm1 import call_llm1  # type: ignore
   from bridge.llm2 import generate_reply  # type: ignore
@@ -409,7 +419,7 @@ def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
       sender_ref = _clean_text(item.get("senderRef")) or "unknown"
       sender_admin = "[Admin]" if bool(item.get("senderIsAdmin")) else ""
     timestamp_ms = int(item.get("timestampMs") or last.get("timestampMs") or 0)
-    formatted_time = time.strftime("%H:%M", time.gmtime(max(timestamp_ms, 0) / 1000))
+    formatted_time = format_context_time(timestamp_ms)
     text = _normalize_preview_text(_payload_text_with_mentions(item))
     media = _infer_media(item)
     quoted = _quoted_preview(item)

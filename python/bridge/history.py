@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 DEFAULT_ASSISTANT_NAME = "LLM"
@@ -38,8 +38,28 @@ class WhatsAppMessage:
   role: str = "user"  # "user" | "assistant"
 
 
-def _fmt_time(ts_ms: int) -> str:
-  dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+def _context_time_utc_offset_hours() -> float | None:
+  raw = os.getenv("CONTEXT_TIME_UTC_OFFSET_HOURS")
+  if raw is None:
+    return None
+  cleaned = "".join(str(raw).split())
+  if not cleaned:
+    return None
+  try:
+    return float(cleaned)
+  except (TypeError, ValueError):
+    return None
+
+
+def format_context_time(ts_ms: int) -> str:
+  timestamp_seconds = max(ts_ms, 0) / 1000
+  utc_offset_hours = _context_time_utc_offset_hours()
+  if utc_offset_hours is None:
+    return datetime.fromtimestamp(timestamp_seconds).strftime("%H:%M")
+  dt = datetime.fromtimestamp(
+    timestamp_seconds,
+    tz=timezone(timedelta(hours=utc_offset_hours)),
+  )
   return dt.strftime("%H:%M")
 
 
@@ -72,7 +92,7 @@ def format_history(messages: Iterable[WhatsAppMessage]) -> str:
   lines: list[str] = []
   for msg in messages:
     context_msg_id = _normalize_context_msg_id(msg.context_msg_id, role=msg.role)
-    time = _fmt_time(msg.timestamp_ms)
+    time = format_context_time(msg.timestamp_ms)
     if msg.role == "assistant":
       sender = assistant_name()
       sender_ref = assistant_sender_ref()
