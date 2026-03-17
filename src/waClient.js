@@ -1518,6 +1518,24 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
     }
   }
 
+  // Detect slash commands
+  const slashCommand = (!fromMe && typeof text === 'string')
+    ? parseSlashCommand(text)
+    : null;
+
+  // Handle /broadcast entirely on the gateway side
+  if (slashCommand && slashCommand.command === 'broadcast') {
+    await handleBroadcastCommand({
+      chatId,
+      senderId,
+      text: slashCommand.args,
+      quotedMessageId: quoted?.messageId || null,
+      contextMsgId,
+      msg,
+    });
+    return;
+  }
+
   const payload = {
     contextMsgId,
     messageId: msg.key.id,
@@ -1547,6 +1565,7 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
     location,
     groupDescription: group?.description || null,
     groupPromptOveride: group?.promptOveride || null,
+    slashCommand: slashCommand || null,
   };
 
   wsClient.send({ type: 'incoming_message', payload });
@@ -2158,9 +2177,148 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Slash command parsing
+// ---------------------------------------------------------------------------
+
+const SLASH_CMD_RE = /^\/(broadcast|prompt|reset|permission)\b\s*([\s\S]*)/i;
+
+function parseSlashCommand(text) {
+  if (!text || typeof text !== 'string') return null;
+  const m = text.trim().match(SLASH_CMD_RE);
+  if (!m) return null;
+  return {
+    command: m[1].toLowerCase(),
+    args: (m[2] || '').trim(),
+  };
+}
+
+function isOwnerJid(senderId) {
+  if (!senderId) return false;
+  const normalized = (normalizeJid(senderId) || senderId).toLowerCase();
+  return config.botOwnerJids.some((ownerJid) => {
+    if (normalized === ownerJid) return true;
+    const ownerLocal = ownerJid.split('@')[0];
+    const senderLocal = normalized.split('@')[0];
+    return ownerLocal && senderLocal && ownerLocal === senderLocal;
+  });
+}
+
+async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId, contextMsgId, msg }) {
+  if (!isOwnerJid(senderId)) {
+    logger.info({ senderId, chatId }, '/broadcast rejected: not owner');
+    try {
+      await sock.sendMessage(chatId, { text: 'Only bot owners can use /broadcast.' });
+    } catch (err) {
+      logger.warn({ err }, 'failed sending broadcast rejection');
+    }
+    return;
+  }
+
+  // Collect all groups where bot is present
+  let groupJids = [];
+  try {
+    const groups = await sock.groupFetchAllParticipating();
+    groupJids = Object.keys(groups || {});
+  } catch (err) {
+    logger.error({ err }, 'failed fetching groups for broadcast');
+    try {
+      await sock.sendMessage(chatId, { text: 'Failed to fetch group list.' });
+    } catch (e) { /* ignore */ }
+    return;
+  }
+
+  if (groupJids.length === 0) {
+    try {
+      await sock.sendMessage(chatId, { text: 'Bot is not in any groups.' });
+    } catch (e) { /* ignore */ }
+    return;
+  }
+
+  let sent = 0;
+  let failed = 0;
+
+  if (text) {
+    // Text broadcast: /broadcast <text>
+    for (const groupJid of groupJids) {
+      try {
+        await sock.sendMessage(groupJid, { text });
+        sent += 1;
+      } catch (err) {
+        logger.warn({ err, groupJid }, 'broadcast send failed');
+        failed += 1;
+      }
+    }
+  } else if (quotedMessageId) {
+    // Forward broadcast: /broadcast (replying to a message)
+    const cachedMsg = messageCache.get(quotedMessageId);
+    if (!cachedMsg) {
+      try {
+        await sock.sendMessage(chatId, { text: 'Replied message not found in cache. Try replying to a more recent message.' });
+      } catch (e) { /* ignore */ }
+      return;
+    }
+
+    for (const groupJid of groupJids) {
+      try {
+        await sock.sendMessage(groupJid, { forward: cachedMsg });
+        sent += 1;
+      } catch (err) {
+        logger.warn({ err, groupJid }, 'broadcast forward failed');
+        failed += 1;
+      }
+    }
+  } else {
+    try {
+      await sock.sendMessage(chatId, { text: 'Usage: /broadcast <text> or reply to a message with /broadcast.' });
+    } catch (e) { /* ignore */ }
+    return;
+  }
+
+  // Send confirmation
+  try {
+    const summary = `Broadcast complete: ${sent} group${sent !== 1 ? 's' : ''} sent${failed > 0 ? `, ${failed} failed` : ''}.`;
+    await sock.sendMessage(chatId, { text: summary });
+  } catch (err) {
+    logger.warn({ err }, 'failed sending broadcast confirmation');
+  }
+
+  logger.info({ sent, failed, total: groupJids.length, chatId, senderId }, 'broadcast completed');
+}
+
+// ---------------------------------------------------------------------------
+// Read receipt and typing presence
+// ---------------------------------------------------------------------------
+
+async function markChatRead({ chatId, messageId, participant }) {
+  if (!sock) return;
+  try {
+    const key = {
+      remoteJid: chatId,
+      id: messageId,
+    };
+    if (participant) key.participant = participant;
+    await sock.readMessages([key]);
+  } catch (err) {
+    logger.warn({ err, chatId, messageId }, 'markChatRead failed');
+  }
+}
+
+async function sendPresence({ chatId, type }) {
+  if (!sock) return;
+  try {
+    // type: 'composing' | 'paused' | 'recording'
+    await sock.sendPresenceUpdate(type || 'composing', chatId);
+  } catch (err) {
+    logger.warn({ err, chatId, type }, 'sendPresence failed');
+  }
+}
+
 export {
   startWhatsApp,
   sendOutgoing,
   deleteMessageByContextId,
   kickMembers,
+  markChatRead,
+  sendPresence,
 };

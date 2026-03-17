@@ -5,6 +5,8 @@ import {
   sendOutgoing,
   deleteMessageByContextId,
   kickMembers,
+  markChatRead,
+  sendPresence,
 } from './waClient.js';
 import config from './config.js';
 
@@ -125,6 +127,16 @@ async function dispatchCommand(msg) {
         action: 'kick_member',
       },
     });
+    return;
+  }
+
+  if (type === 'mark_read') {
+    await markChatRead(payload);
+    return;
+  }
+
+  if (type === 'send_presence') {
+    await sendPresence(payload);
     return;
   }
 
