@@ -26,6 +26,8 @@ except ImportError:
 
 logger = setup_logging()
 
+_PROMPT_MAX_CHARS = 4000
+
 # Match "/command" at start of text, optionally followed by arguments.
 _CMD_RE = re.compile(
   r"^/(prompt|reset|permission|broadcast)\b\s*(.*)",
@@ -125,6 +127,13 @@ def _handle_prompt(
       command="prompt",
       success=True,
       reply="Custom prompt cleared. Bot will use the default.",
+    )
+
+  if len(args) > _PROMPT_MAX_CHARS:
+    return CommandResult(
+      command="prompt",
+      success=False,
+      reply=f"Prompt too long ({len(args)} chars). Maximum is {_PROMPT_MAX_CHARS} characters.",
     )
 
   set_prompt(chat_id, args)

@@ -431,6 +431,7 @@ async def generate_reply(
   chat_type: str | None = None,
   bot_is_admin: bool = False,
   bot_is_super_admin: bool = False,
+  result_validator=None,
 ):
   targets = _llm2_targets()
   payload = current_payload if isinstance(current_payload, dict) else {}
@@ -686,6 +687,26 @@ async def generate_reply(
           "raw": dump_json(getattr(result, "model_dump", lambda: str(result))()),
         },
       )
+      # If a validator is provided, check whether the output is usable.
+      # An invalid result is treated like a provider failure so the next
+      # target gets a chance.
+      if result_validator is not None and not result_validator(result):
+        logger.warning(
+          "LLM2 result failed validation; treating as unusable",
+          extra={
+            "chat_id": log_chat_id,
+            "chat_name": log_chat_name,
+            "provider": target.name,
+            "model": target.model,
+            "endpoint": target.base_url,
+            "will_try_fallback_target": has_next_target,
+          },
+        )
+        if has_next_target:
+          continue
+        # No more targets – return the result anyway so the caller can
+        # log / handle the broken output as it sees fit.
+        return result
       return result
 
     if has_next_target:

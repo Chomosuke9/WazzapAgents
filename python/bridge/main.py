@@ -1239,6 +1239,15 @@ async def handle_socket(ws):
 
         llm2_started = time.perf_counter()
         try:
+          def _validate_llm2_result(result) -> bool:
+            """Return True if the LLM2 output contains at least one usable action."""
+            test_actions = _extract_actions(
+              result,
+              fallback_reply_to=fallback_reply_to,
+              allowed_context_ids=allowed_context_ids,
+            )
+            return len(test_actions) > 0
+
           reply_msg = await generate_reply(
             llm2_history,
             current,
@@ -1248,6 +1257,7 @@ async def handle_socket(ws):
             chat_type=chat_type,
             bot_is_admin=bot_is_admin,
             bot_is_super_admin=bot_is_super_admin,
+            result_validator=_validate_llm2_result,
           )
         finally:
           # Stop typing indicator after LLM2 finishes (success or failure)
