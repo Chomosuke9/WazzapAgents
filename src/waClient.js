@@ -1536,6 +1536,18 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
     return;
   }
 
+  if (slashCommand && slashCommand.command === 'info') {
+    await handleInfoCommand({
+      chatId,
+      senderId,
+      senderDisplay,
+      senderRole,
+      isGroup,
+      group,
+    });
+    return;
+  }
+
   const payload = {
     contextMsgId,
     messageId: msg.key.id,
@@ -2181,7 +2193,7 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
 // Slash command parsing
 // ---------------------------------------------------------------------------
 
-const SLASH_CMD_RE = /^\/(broadcast|prompt|reset|permission)\b\s*([\s\S]*)/i;
+const SLASH_CMD_RE = /^\/(broadcast|prompt|reset|permission|info)\b\s*([\s\S]*)/i;
 
 function parseSlashCommand(text) {
   if (!text || typeof text !== 'string') return null;
@@ -2195,12 +2207,45 @@ function parseSlashCommand(text) {
 
 function isOwnerJid(senderId) {
   if (!senderId) return false;
+  const candidates = new Set();
+  const raw = String(senderId).trim().toLowerCase();
   const normalized = (normalizeJid(senderId) || senderId).toLowerCase();
+  if (raw) candidates.add(raw);
+  if (normalized) candidates.add(normalized);
+
+  for (const candidate of Array.from(candidates)) {
+    if (!candidate) continue;
+    if (candidate.includes('@')) {
+      const [local, domain] = candidate.split('@');
+      if (local) {
+        candidates.add(local);
+        if (local.includes(':')) {
+          const base = local.split(':')[0];
+          if (base) {
+            candidates.add(base);
+            candidates.add(`${base}@${domain || 's.whatsapp.net'}`);
+          }
+        }
+      }
+    }
+    const digits = candidate.replace(/\D/g, '');
+    if (digits.length >= 5) {
+      candidates.add(digits);
+      candidates.add(`${digits}@s.whatsapp.net`);
+    }
+  }
+
   return config.botOwnerJids.some((ownerJid) => {
-    if (normalized === ownerJid) return true;
+    if (!ownerJid) return false;
     const ownerLocal = ownerJid.split('@')[0];
-    const senderLocal = normalized.split('@')[0];
-    return ownerLocal && senderLocal && ownerLocal === senderLocal;
+    const ownerDigits = ownerJid.replace(/\D/g, '');
+    for (const candidate of candidates) {
+      if (candidate === ownerJid) return true;
+      if (ownerLocal && candidate === ownerLocal) return true;
+      const candidateDigits = candidate.replace(/\D/g, '');
+      if (ownerDigits && candidateDigits && ownerDigits === candidateDigits) return true;
+    }
+    return false;
   });
 }
 
@@ -2284,6 +2329,53 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
   }
 
   logger.info({ sent, failed, total: groupJids.length, chatId, senderId }, 'broadcast completed');
+}
+
+function truncateText(value, maxChars = 300) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.length <= maxChars) return trimmed;
+  return `${trimmed.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+async function handleInfoCommand({ chatId, senderId, senderDisplay, senderRole, isGroup, group }) {
+  const isOwner = isOwnerJid(senderId);
+  const roleLabel = isOwner
+    ? 'owner'
+    : (senderRole?.isSuperAdmin ? 'superadmin' : (senderRole?.isAdmin ? 'admin' : 'member'));
+  const lines = [
+    'Info pengguna:',
+    `Nama: ${senderDisplay || 'unknown'}`,
+    `JID: ${senderId || 'unknown'}`,
+    `Peran: ${roleLabel}`,
+    `Owner bot: ${isOwner ? 'ya' : 'tidak'}`,
+  ];
+
+  if (isGroup) {
+    const groupName = group?.name || chatId;
+    const memberCount = Array.isArray(group?.participants) ? group.participants.length : null;
+    const description = truncateText(group?.description, 300);
+    lines.push('');
+    lines.push('Info grup:');
+    lines.push(`Nama grup: ${groupName || 'unknown'}`);
+    lines.push(`ID grup: ${chatId || 'unknown'}`);
+    lines.push(`Jumlah anggota: ${typeof memberCount === 'number' ? memberCount : 'unknown'}`);
+    lines.push(`Bot admin: ${group?.botIsAdmin ? 'ya' : 'tidak'}`);
+    lines.push(`Bot superadmin: ${group?.botIsSuperAdmin ? 'ya' : 'tidak'}`);
+    if (description) lines.push(`Deskripsi: ${description}`);
+  } else {
+    lines.push('');
+    lines.push('Info chat:');
+    lines.push('Tipe: private');
+    lines.push(`ID chat: ${chatId || 'unknown'}`);
+  }
+
+  try {
+    await sock.sendMessage(chatId, { text: lines.join('\n') });
+  } catch (err) {
+    logger.warn({ err, chatId }, 'failed sending /info response');
+  }
 }
 
 // ---------------------------------------------------------------------------
