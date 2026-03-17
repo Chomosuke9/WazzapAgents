@@ -2208,7 +2208,7 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
   if (!isOwnerJid(senderId)) {
     logger.info({ senderId, chatId }, '/broadcast rejected: not owner');
     try {
-      await sock.sendMessage(chatId, { text: 'Hanya owner bot yang bisa menggunakan /broadcast.' });
+      await sock.sendMessage(chatId, { text: 'Only bot owners can use /broadcast.' });
     } catch (err) {
       logger.warn({ err }, 'failed sending broadcast rejection');
     }
@@ -2223,14 +2223,14 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
   } catch (err) {
     logger.error({ err }, 'failed fetching groups for broadcast');
     try {
-      await sock.sendMessage(chatId, { text: 'Gagal mengambil daftar group.' });
+      await sock.sendMessage(chatId, { text: 'Failed to fetch group list.' });
     } catch (e) { /* ignore */ }
     return;
   }
 
   if (groupJids.length === 0) {
     try {
-      await sock.sendMessage(chatId, { text: 'Bot tidak berada di group manapun.' });
+      await sock.sendMessage(chatId, { text: 'Bot is not in any groups.' });
     } catch (e) { /* ignore */ }
     return;
   }
@@ -2254,7 +2254,7 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
     const cachedMsg = messageCache.get(quotedMessageId);
     if (!cachedMsg) {
       try {
-        await sock.sendMessage(chatId, { text: 'Pesan yang di-reply tidak ditemukan di cache. Coba reply pesan yang lebih baru.' });
+        await sock.sendMessage(chatId, { text: 'Replied message not found in cache. Try replying to a more recent message.' });
       } catch (e) { /* ignore */ }
       return;
     }
@@ -2270,14 +2270,14 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
     }
   } else {
     try {
-      await sock.sendMessage(chatId, { text: 'Gunakan /broadcast <teks> atau reply pesan dengan /broadcast.' });
+      await sock.sendMessage(chatId, { text: 'Usage: /broadcast <text> or reply to a message with /broadcast.' });
     } catch (e) { /* ignore */ }
     return;
   }
 
   // Send confirmation
   try {
-    const summary = `Broadcast selesai: ${sent} group berhasil${failed > 0 ? `, ${failed} gagal` : ''}.`;
+    const summary = `Broadcast complete: ${sent} group${sent !== 1 ? 's' : ''} sent${failed > 0 ? `, ${failed} failed` : ''}.`;
     await sock.sendMessage(chatId, { text: summary });
   } catch (err) {
     logger.warn({ err }, 'failed sending broadcast confirmation');

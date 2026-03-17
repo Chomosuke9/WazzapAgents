@@ -99,7 +99,7 @@ def _handle_prompt(
     return CommandResult(
       command="prompt",
       success=False,
-      reply="Hanya admin group yang bisa menggunakan /prompt.",
+      reply="Only group admins can use /prompt.",
     )
 
   if not args:
@@ -110,21 +110,21 @@ def _handle_prompt(
       return CommandResult(
         command="prompt",
         success=True,
-        reply=f"Prompt saat ini:\n{preview}",
+        reply=f"Current prompt:\n{preview}",
       )
     return CommandResult(
       command="prompt",
       success=True,
-      reply="Belum ada custom prompt untuk chat ini. Gunakan /prompt <teks> untuk mengatur.",
+      reply="No custom prompt set for this chat. Use /prompt <text> to set one.",
     )
 
   # Clear prompt if "-" or "clear"
-  if args.strip().lower() in {"-", "clear", "reset", "hapus"}:
+  if args.strip().lower() in {"-", "clear", "reset"}:
     set_prompt(chat_id, None)
     return CommandResult(
       command="prompt",
       success=True,
-      reply="Custom prompt dihapus. Bot akan menggunakan default.",
+      reply="Custom prompt cleared. Bot will use the default.",
     )
 
   set_prompt(chat_id, args)
@@ -132,7 +132,7 @@ def _handle_prompt(
   return CommandResult(
     command="prompt",
     success=True,
-    reply=f"Prompt diperbarui:\n{preview}",
+    reply=f"Prompt updated:\n{preview}",
   )
 
 
@@ -152,14 +152,14 @@ def _handle_reset(
     return CommandResult(
       command="reset",
       success=False,
-      reply="Hanya admin group yang bisa menggunakan /reset.",
+      reply="Only group admins can use /reset.",
     )
 
   # Memory clearing is done by the caller (main.py) based on this result.
   return CommandResult(
     command="reset",
     success=True,
-    reply="Memory bot di chat ini sudah direset.",
+    reply="Bot memory for this chat has been reset.",
   )
 
 
@@ -168,10 +168,10 @@ def _handle_reset(
 # ---------------------------------------------------------------------------
 
 _PERMISSION_LABELS = {
-  0: "0 (kick & delete dilarang)",
-  1: "1 (delete boleh, kick dilarang)",
-  2: "2 (kick boleh, delete dilarang)",
-  3: "3 (kick & delete boleh)",
+  0: "0 (kick & delete forbidden)",
+  1: "1 (delete allowed, kick forbidden)",
+  2: "2 (kick allowed, delete forbidden)",
+  3: "3 (kick & delete allowed)",
 }
 
 
@@ -186,14 +186,14 @@ def _handle_permission(
     return CommandResult(
       command="permission",
       success=False,
-      reply="/permission hanya bisa digunakan di group chat.",
+      reply="/permission can only be used in group chats.",
     )
 
   if not sender_is_admin:
     return CommandResult(
       command="permission",
       success=False,
-      reply="Hanya admin group yang bisa menggunakan /permission.",
+      reply="Only group admins can use /permission.",
     )
 
   if not args:
@@ -202,7 +202,7 @@ def _handle_permission(
     return CommandResult(
       command="permission",
       success=True,
-      reply=f"Permission level saat ini: {label}",
+      reply=f"Current permission level: {label}",
     )
 
   try:
@@ -211,14 +211,14 @@ def _handle_permission(
     return CommandResult(
       command="permission",
       success=False,
-      reply="Gunakan /permission 0, 1, 2, atau 3.",
+      reply="Usage: /permission 0, 1, 2, or 3.",
     )
 
   if level < 0 or level > 3:
     return CommandResult(
       command="permission",
       success=False,
-      reply="Level harus 0-3.\n0: tidak boleh kick/delete\n1: boleh delete\n2: boleh kick\n3: boleh kick & delete",
+      reply="Level must be 0-3.\n0: no kick/delete\n1: delete allowed\n2: kick allowed\n3: kick & delete allowed",
     )
 
   set_permission(chat_id, level)
@@ -226,5 +226,5 @@ def _handle_permission(
   return CommandResult(
     command="permission",
     success=True,
-    reply=f"Permission diperbarui: {label}",
+    reply=f"Permission updated: {label}",
   )

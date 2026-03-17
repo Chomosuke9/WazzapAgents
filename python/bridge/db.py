@@ -134,10 +134,10 @@ def clear_settings(chat_id: str) -> None:
 def permission_description(level: int) -> str:
   """Human-readable description of a permission level."""
   mapping = {
-    0: "kick dan delete DILARANG",
-    1: "delete BOLEH, kick DILARANG",
-    2: "kick BOLEH, delete DILARANG",
-    3: "kick dan delete BOLEH",
+    0: "kick and delete FORBIDDEN",
+    1: "delete ALLOWED, kick FORBIDDEN",
+    2: "kick ALLOWED, delete FORBIDDEN",
+    3: "kick and delete ALLOWED",
   }
   return mapping.get(level, mapping[0])
 
