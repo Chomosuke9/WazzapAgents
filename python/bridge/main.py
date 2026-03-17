@@ -24,6 +24,13 @@ try:
   from .log import setup_logging, set_chat_log_context, reset_chat_log_context
   from .llm1 import call_llm1
   from .llm2 import generate_reply
+  from .commands import parse_command, handle_command, CommandResult
+  from .db import (
+    get_prompt as db_get_prompt,
+    get_permission as db_get_permission,
+    permission_allows_kick,
+    permission_allows_delete,
+  )
 except ImportError:  # allow running as `python python/bridge/main.py`
   import sys
   from pathlib import Path
@@ -37,6 +44,13 @@ except ImportError:  # allow running as `python python/bridge/main.py`
   from bridge.log import setup_logging, set_chat_log_context, reset_chat_log_context  # type: ignore
   from bridge.llm1 import call_llm1  # type: ignore
   from bridge.llm2 import generate_reply  # type: ignore
+  from bridge.commands import parse_command, handle_command, CommandResult  # type: ignore
+  from bridge.db import (  # type: ignore
+    get_prompt as db_get_prompt,
+    get_permission as db_get_permission,
+    permission_allows_kick,
+    permission_allows_delete,
+  )
 
 load_dotenv()
 
@@ -831,8 +845,14 @@ def _extract_prompt_override(raw_description: str | None) -> tuple[str | None, s
 
 
 def _resolve_group_prompt_context(payload: dict) -> tuple[str | None, str | None]:
+  chat_id = payload.get("chatId")
   raw_description = payload.get("groupDescription")
   cleaned_description, extracted_overide = _extract_prompt_override(raw_description if isinstance(raw_description, str) else None)
+
+  # DB prompt takes priority over group description prompt_override
+  db_prompt = db_get_prompt(chat_id) if chat_id else None
+  if db_prompt:
+    return cleaned_description, db_prompt
 
   payload_overide_raw = payload.get("groupPromptOveride")
   if not payload_overide_raw:
@@ -866,9 +886,25 @@ def _moderation_permissions(
   *,
   bot_is_admin: bool,
   bot_is_super_admin: bool,
+  chat_id: str | None = None,
 ) -> dict:
-  flags = _extract_allow_flags(prompt_override)
   admin_ok = bool(bot_is_admin or bot_is_super_admin)
+
+  # Use DB permission level (fully replaces prompt_override allow_* flags)
+  if chat_id:
+    db_level = db_get_permission(chat_id)
+    allow_kick = admin_ok and permission_allows_kick(db_level)
+    allow_delete = admin_ok and permission_allows_delete(db_level)
+    return {
+      "allowKick": allow_kick,
+      "allowDelete": allow_delete,
+      "adminOk": admin_ok,
+      "permissionLevel": db_level,
+      "flags": [],
+    }
+
+  # Fallback to legacy flags when no chat_id (shouldn't happen)
+  flags = _extract_allow_flags(prompt_override)
   allow_both = ALLOW_BOTH_FLAG in flags
   allow_kick = admin_ok and (allow_both or ALLOW_KICK_FLAG in flags)
   allow_delete = admin_ok and (allow_both or ALLOW_DELETE_FLAG in flags)
@@ -876,6 +912,7 @@ def _moderation_permissions(
     "allowKick": allow_kick,
     "allowDelete": allow_delete,
     "adminOk": admin_ok,
+    "permissionLevel": None,
     "flags": sorted(flags),
   }
 
@@ -973,6 +1010,63 @@ async def handle_socket(ws):
           "message_ids": [p.get("messageId") for p in payloads],
         },
       )
+      return
+
+    # --- Slash command handling ---
+    # Check each payload for slash commands. Process them, add to history, skip LLM.
+    remaining_payloads: list[dict] = []
+    for payload in non_empty_payloads:
+      slash_cmd = payload.get("slashCommand")
+      if not slash_cmd or not isinstance(slash_cmd, dict):
+        remaining_payloads.append(payload)
+        continue
+
+      cmd_name = slash_cmd.get("command") or ""
+      cmd_args = slash_cmd.get("args") or ""
+      p_chat_id = payload.get("chatId") or "unknown"
+      p_chat_type, _, _ = _chat_state_from_payload(payload)
+      p_sender_is_admin = bool(payload.get("senderIsAdmin"))
+      p_sender_jid = payload.get("senderId")
+
+      # Add command message to history
+      history = per_chat[p_chat_id]
+      _append_or_merge_history_payload(history, payload)
+
+      # Handle /reset specially: clear memory
+      if cmd_name == "reset":
+        result = handle_command(
+          cmd_name, cmd_args,
+          chat_id=p_chat_id,
+          chat_type=p_chat_type,
+          sender_is_admin=p_sender_is_admin,
+          sender_jid=p_sender_jid,
+        )
+        if result and result.success:
+          per_chat[p_chat_id].clear()
+          logger.info("Memory cleared for chat_id=%s via /reset", p_chat_id)
+        if result and result.reply:
+          reply_to = _normalize_context_msg_id(payload.get("contextMsgId"))
+          await send_message(ws, p_chat_id, result.reply, reply_to, request_id=_make_request_id("cmd"))
+        continue
+
+      # Handle /prompt, /permission
+      result = handle_command(
+        cmd_name, cmd_args,
+        chat_id=p_chat_id,
+        chat_type=p_chat_type,
+        sender_is_admin=p_sender_is_admin,
+        sender_jid=p_sender_jid,
+      )
+      if result is not None and result.reply:
+        reply_to = _normalize_context_msg_id(payload.get("contextMsgId"))
+        await send_message(ws, p_chat_id, result.reply, reply_to, request_id=_make_request_id("cmd"))
+      elif result is None:
+        # Command not handled here (e.g. /broadcast handled by gateway); still skip LLM
+        pass
+      continue
+
+    non_empty_payloads = remaining_payloads
+    if not non_empty_payloads:
       return
 
     context_only_payloads = [payload for payload in non_empty_payloads if _is_context_only_payload(payload)]
@@ -1111,6 +1205,12 @@ async def handle_socket(ws):
           prompt_override=prompt_override,
         )
         llm1_ms = int((time.perf_counter() - llm1_started) * 1000)
+
+        # Send read receipt after LLM1 processes (regardless of decision)
+        last_message_id = last_payload.get("messageId")
+        last_participant = last_payload.get("senderId") if last_payload.get("isGroup") else None
+        await send_mark_read(ws, chat_id, last_message_id, last_participant)
+
         for payload in non_empty_payloads:
           _append_or_merge_history_payload(history, payload)
         if not decision.should_response:
@@ -1133,17 +1233,26 @@ async def handle_socket(ws):
             "llm1Reason": " ".join((decision.reason or "").split()),
           }
         )
+
+        # Send typing indicator before LLM2
+        await send_typing(ws, chat_id, composing=True)
+
         llm2_started = time.perf_counter()
-        reply_msg = await generate_reply(
-          llm2_history,
-          current,
-          current_payload=llm2_payload,
-          group_description=group_description,
-          prompt_override=prompt_override,
-          chat_type=chat_type,
-          bot_is_admin=bot_is_admin,
-          bot_is_super_admin=bot_is_super_admin,
-        )
+        try:
+          reply_msg = await generate_reply(
+            llm2_history,
+            current,
+            current_payload=llm2_payload,
+            group_description=group_description,
+            prompt_override=prompt_override,
+            chat_type=chat_type,
+            bot_is_admin=bot_is_admin,
+            bot_is_super_admin=bot_is_super_admin,
+          )
+        finally:
+          # Stop typing indicator after LLM2 finishes (success or failure)
+          await send_typing(ws, chat_id, composing=False)
+
         llm2_ms = int((time.perf_counter() - llm2_started) * 1000)
         if reply_msg is None:
           logger.warning("llm2 failed to produce reply", extra={"chat_id": chat_id})
@@ -1158,6 +1267,7 @@ async def handle_socket(ws):
           prompt_override,
           bot_is_admin=bot_is_admin,
           bot_is_super_admin=bot_is_super_admin,
+          chat_id=chat_id,
         )
         actions, blocked_actions = _enforce_moderation_permissions(actions, permissions)
         blocked_total = blocked_actions["kick_member"] + blocked_actions["delete_message"]
@@ -1509,6 +1619,35 @@ async def send_kick_member(
       }
     )
   )
+
+
+async def send_mark_read(
+  ws,
+  chat_id: str,
+  message_id: str | None,
+  participant: str | None = None,
+):
+  """Send a read receipt signal to the gateway."""
+  if not message_id:
+    return
+  payload: dict = {"chatId": chat_id, "messageId": message_id}
+  if participant:
+    payload["participant"] = participant
+  try:
+    await ws.send(json.dumps({"type": "mark_read", "payload": payload}))
+  except Exception as err:
+    logger.debug("send_mark_read failed: %s", err)
+
+
+async def send_typing(ws, chat_id: str, composing: bool = True):
+  """Send typing presence to the gateway."""
+  presence_type = "composing" if composing else "paused"
+  try:
+    await ws.send(
+      json.dumps({"type": "send_presence", "payload": {"chatId": chat_id, "type": presence_type}})
+    )
+  except Exception as err:
+    logger.debug("send_typing failed: %s", err)
 
 
 def _infer_media(payload: dict) -> str | None:

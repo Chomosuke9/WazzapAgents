@@ -14,6 +14,7 @@ try:
   from .history import WhatsAppMessage, assistant_name, format_history
   from .log import setup_logging, trunc, dump_json, env_flag
   from .media import build_visual_parts, llm2_media_enabled, redact_multimodal_content
+  from .db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
@@ -21,6 +22,7 @@ except ImportError:  # allow running as script
   from bridge.history import WhatsAppMessage, assistant_name, format_history  # type: ignore
   from bridge.log import setup_logging, trunc, dump_json, env_flag  # type: ignore
   from bridge.media import build_visual_parts, llm2_media_enabled, redact_multimodal_content  # type: ignore
+  from bridge.db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete  # type: ignore
 
 logger = setup_logging()
 SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent.parent / "systemprompt.txt"
@@ -221,6 +223,7 @@ def _context_injection_block(
   chat_type: str,
   bot_is_admin: bool,
   bot_is_super_admin: bool,
+  chat_id: str | None = None,
 ) -> str:
   payload = current_payload if isinstance(current_payload, dict) else {}
   bot_mentioned = bool(payload.get("botMentionedInWindow", payload.get("botMentioned")))
@@ -350,6 +353,25 @@ def _context_injection_block(
 
   assistant_reply_block = "\n".join(assistant_reply_lines)
   chat_state_text = _chat_state_header(chat_type, bot_is_admin, bot_is_super_admin)
+
+  # Permission info from DB
+  permission_line = ""
+  if chat_id:
+    perm_level = db_get_permission(chat_id)
+    admin_ok = bool(bot_is_admin or bot_is_super_admin)
+    can_kick = admin_ok and permission_allows_kick(perm_level)
+    can_delete = admin_ok and permission_allows_delete(perm_level)
+    perm_parts: list[str] = []
+    if can_delete:
+      perm_parts.append("can delete messages")
+    else:
+      perm_parts.append("cannot delete messages")
+    if can_kick:
+      perm_parts.append("can kick members")
+    else:
+      perm_parts.append("cannot kick members")
+    permission_line = f"\nBot permissions: {', '.join(perm_parts)}."
+
   return (
     "Current message metadata:\n"
     "Helper:\n"
@@ -364,6 +386,7 @@ def _context_injection_block(
     f"{llm1_reason_line}"
     "Chat state:\n"
     f"{chat_state_text}"
+    f"{permission_line}"
   )
 
 
@@ -438,6 +461,7 @@ async def generate_reply(
     chat_type=chat_type or "private",
     bot_is_admin=bot_is_admin,
     bot_is_super_admin=bot_is_super_admin,
+    chat_id=log_chat_id,
   )
   messages_content_text = (
     "older messages:\n"

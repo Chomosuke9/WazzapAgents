@@ -28,6 +28,14 @@ function nonNegativeInt(value, fallback) {
   return Math.max(0, Math.floor(parsed));
 }
 
+function parseJidList(raw) {
+  if (!raw || typeof raw !== 'string') return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 const config = {
   instanceId: process.env.INSTANCE_ID || 'default',
   wsEndpoint: process.env.LLM_WS_ENDPOINT,
@@ -42,6 +50,7 @@ const config = {
   upsertConcurrency: positiveInt(process.env.UPSERT_CONCURRENCY, 2),
   perfLogEnabled: process.env.PERF_LOG_ENABLED !== '0',
   perfLogThresholdMs: nonNegativeInt(process.env.PERF_LOG_THRESHOLD_MS, 400),
+  botOwnerJids: parseJidList(process.env.BOT_OWNER_JIDS),
 };
 
 export default config;

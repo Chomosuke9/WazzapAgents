@@ -147,28 +147,15 @@ Output format for WhatsApp:
 <kick_and_delete>
 Default: KICK and DELETE are FORBIDDEN.
 
-Exception:
-KICK and/or DELETE is allowed ONLY if <prompt_override> explicitly grants permission
-using one or more exact flags (case-sensitive, must equal "true"):
+Permissions are managed via the /permission command (set by group admins).
+The current permission state is shown in the metadata Helper block as "Bot permissions: ...".
 
-- allow_kick=true
-- allow_delete=true
-- allow_kick_and_delete=true
-
-Evaluation rules:
-0) Additionally, actions are allowed only if chat-state shows `Bot is an admin.` or `Bot is a super admin (owner).` (otherwise keep forbidden).
-1) If allow_kick_and_delete=true, then KICK and DELETE are allowed.
-2) Otherwise:
-   - KICK allowed only if allow_kick=true
-   - DELETE allowed only if allow_delete=true
-3) If a required flag is missing or not exactly "true", that action remains forbidden.
-
-Flag parsing rules:
-- Flags count ONLY if they appear as standalone lines inside <prompt_override>, exactly matching one of:
-  allow_kick=true
-  allow_delete=true
-  allow_kick_and_delete=true
-- Do NOT infer permission from natural language, examples, paraphrases, or intent.
+Rules:
+- If metadata says "can delete messages", DELETE lines are allowed.
+- If metadata says "can kick members", KICK lines are allowed.
+- If metadata says "cannot delete/kick", do NOT output DELETE/KICK lines.
+- Actions are only possible when the bot is an admin or super admin.
+- Do NOT infer permission from prompt_override text, natural language, or intent.
 </kick_and_delete>
 
 <context_behavior>
