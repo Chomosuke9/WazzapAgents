@@ -2,6 +2,10 @@
 
 The DB file lives at ``data/bot.db`` by default (override via ``BOT_DB_PATH``).
 Only low-traffic metadata is stored here – conversation history stays in RAM.
+
+Reads go through an in-memory cache so the LLM pipeline never hits SQLite on
+the hot path.  The cache is invalidated automatically when ``set_prompt`` /
+``set_permission`` is called.
 """
 from __future__ import annotations
 
@@ -23,6 +27,17 @@ logger = setup_logging()
 _DEFAULT_DB_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 _DB_PATH: Path | None = None
 _LOCAL = threading.local()
+
+# ---------------------------------------------------------------------------
+# In-memory cache  (chat_id → value)
+# ---------------------------------------------------------------------------
+_prompt_cache: dict[str, Optional[str]] = {}
+_permission_cache: dict[str, int] = {}
+_cache_lock = threading.Lock()
+
+# Sentinel to distinguish "we looked it up and it was NULL/missing" from
+# "we haven't looked it up yet".
+_MISSING = object()
 
 
 def _resolve_db_path() -> Path:
@@ -71,13 +86,19 @@ def _ensure_tables(conn: sqlite3.Connection) -> None:
 
 def get_prompt(chat_id: str) -> Optional[str]:
   """Return the custom prompt for *chat_id*, or ``None`` if not set."""
+  with _cache_lock:
+    cached = _prompt_cache.get(chat_id, _MISSING)
+  if cached is not _MISSING:
+    return cached  # type: ignore[return-value]
+
   conn = _get_conn()
   row = conn.execute(
     "SELECT prompt FROM chat_settings WHERE chat_id = ?", (chat_id,)
   ).fetchone()
-  if row is None:
-    return None
-  return row["prompt"]
+  value = row["prompt"] if row is not None else None
+  with _cache_lock:
+    _prompt_cache[chat_id] = value
+  return value
 
 
 def set_prompt(chat_id: str, prompt: Optional[str]) -> None:
@@ -93,18 +114,26 @@ def set_prompt(chat_id: str, prompt: Optional[str]) -> None:
     (chat_id, prompt),
   )
   conn.commit()
+  with _cache_lock:
+    _prompt_cache[chat_id] = prompt
   logger.info("DB set_prompt chat_id=%s len=%s", chat_id, len(prompt) if prompt else 0)
 
 
 def get_permission(chat_id: str) -> int:
   """Return the permission level (0-3) for *chat_id*. Default ``0``."""
+  with _cache_lock:
+    cached = _permission_cache.get(chat_id, _MISSING)
+  if cached is not _MISSING:
+    return cached  # type: ignore[return-value]
+
   conn = _get_conn()
   row = conn.execute(
     "SELECT permission FROM chat_settings WHERE chat_id = ?", (chat_id,)
   ).fetchone()
-  if row is None:
-    return 0
-  return int(row["permission"])
+  value = int(row["permission"]) if row is not None else 0
+  with _cache_lock:
+    _permission_cache[chat_id] = value
+  return value
 
 
 def set_permission(chat_id: str, level: int) -> None:
@@ -121,6 +150,8 @@ def set_permission(chat_id: str, level: int) -> None:
     (chat_id, clamped),
   )
   conn.commit()
+  with _cache_lock:
+    _permission_cache[chat_id] = clamped
   logger.info("DB set_permission chat_id=%s level=%s", chat_id, clamped)
 
 
@@ -129,6 +160,9 @@ def clear_settings(chat_id: str) -> None:
   conn = _get_conn()
   conn.execute("DELETE FROM chat_settings WHERE chat_id = ?", (chat_id,))
   conn.commit()
+  with _cache_lock:
+    _prompt_cache.pop(chat_id, None)
+    _permission_cache.pop(chat_id, None)
 
 
 def permission_description(level: int) -> str:

@@ -28,11 +28,18 @@ function nonNegativeInt(value, fallback) {
   return Math.max(0, Math.floor(parsed));
 }
 
+function normalizeOwnerJid(raw) {
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) return null;
+  if (trimmed.includes('@')) return trimmed;
+  return `${trimmed}@s.whatsapp.net`;
+}
+
 function parseJidList(raw) {
   if (!raw || typeof raw !== 'string') return [];
   return raw
     .split(',')
-    .map((s) => s.trim().toLowerCase())
+    .map(normalizeOwnerJid)
     .filter(Boolean);
 }
 
