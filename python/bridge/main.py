@@ -97,7 +97,7 @@ ASSISTANT_ECHO_MERGE_WINDOW_MS = _parse_non_negative_int(
 logger = setup_logging()
 # Accept both canonical <prompt_override> and legacy typo <prompt_overide>.
 PROMPT_OVERIDE_TAG = re.compile(r"<prompt_overr?ide>([\s\S]*?)</prompt_overr?ide>", re.IGNORECASE)
-ACTION_LINE_RE = re.compile(r"^\[?\s*(REPLY_TO|DELETE|KICK|REACT)\s*[:=]\s*(.*?)\s*\]?$", re.IGNORECASE)
+ACTION_LINE_RE = re.compile(r"^\[?\s*(REPLY_TO|DELETE|KICK|REACT_TO)\s*[:=]\s*(.*?)\s*\]?$", re.IGNORECASE)
 CONTEXT_MSG_ID_RE = re.compile(r"^<?\s*(\d{6})\s*>?$")
 SENDER_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$")
 EMPTY_TARGET_TOKENS = {"none", "null", "no", "nil", "-", ""}
@@ -1879,7 +1879,7 @@ def _parse_react_context_ids(
   *,
   allowed_context_ids: set[str],
 ) -> list[str]:
-  """Parse ``REACT:<NNNNNN,NNNNNN,...>`` value into a list of context message IDs."""
+  """Parse ``REACT_TO:<NNNNNN,NNNNNN,...>`` value into a list of context message IDs."""
   token_value = _unwrap_required_angle_group(token)
   if token_value is None:
     return []
@@ -2007,7 +2007,7 @@ def _extract_actions(
         )
       continue
 
-    if control == "REACT":
+    if control == "REACT_TO":
       flush_reply_block()
       ctx_ids = _parse_react_context_ids(
         value,
