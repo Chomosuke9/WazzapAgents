@@ -22,7 +22,7 @@ try:
     format_context_time,
   )
   from .log import setup_logging, set_chat_log_context, reset_chat_log_context
-  from .llm1 import call_llm1
+  from .llm1 import call_llm1, LLM1Decision
   from .llm2 import generate_reply
   from .commands import parse_command, handle_command, CommandResult
   from .db import (
@@ -42,7 +42,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     format_context_time,
   )
   from bridge.log import setup_logging, set_chat_log_context, reset_chat_log_context  # type: ignore
-  from bridge.llm1 import call_llm1  # type: ignore
+  from bridge.llm1 import call_llm1, LLM1Decision  # type: ignore
   from bridge.llm2 import generate_reply  # type: ignore
   from bridge.commands import parse_command, handle_command, CommandResult  # type: ignore
   from bridge.db import (  # type: ignore
@@ -1189,6 +1189,7 @@ async def handle_socket(ws):
           _log_slow_batch("stale_skip")
           return
         group_description, prompt_override = _resolve_group_prompt_context(last_payload)
+        chat_type, bot_is_admin, bot_is_super_admin = _chat_state_from_payload(last_payload)
         llm_context_metadata = _build_llm1_context_metadata(
           history_before_current,
           trigger_window_payloads,
@@ -1196,15 +1197,24 @@ async def handle_socket(ws):
         llm1_payload = dict(last_payload)
         llm1_payload.update(llm_context_metadata)
 
-        llm1_started = time.perf_counter()
-        decision = await call_llm1(
-          llm1_history,
-          llm1_current,
-          current_payload=llm1_payload,
-          group_description=group_description,
-          prompt_override=prompt_override,
-        )
-        llm1_ms = int((time.perf_counter() - llm1_started) * 1000)
+        if chat_type == "private":
+          decision = LLM1Decision(
+            should_response=True,
+            confidence=100,
+            reason="Private chat: always respond to direct messages.",
+          )
+          llm1_ms = 0
+          logger.info("private chat; skipping LLM1", extra={"chat_id": chat_id})
+        else:
+          llm1_started = time.perf_counter()
+          decision = await call_llm1(
+            llm1_history,
+            llm1_current,
+            current_payload=llm1_payload,
+            group_description=group_description,
+            prompt_override=prompt_override,
+          )
+          llm1_ms = int((time.perf_counter() - llm1_started) * 1000)
 
         # Send read receipt after LLM1 processes (regardless of decision)
         last_message_id = last_payload.get("messageId")
@@ -1223,7 +1233,6 @@ async def handle_socket(ws):
 
         allowed_context_ids = _collect_context_ids(history)
         fallback_reply_to = _normalize_context_msg_id(last_payload.get("contextMsgId"))
-        chat_type, bot_is_admin, bot_is_super_admin = _chat_state_from_payload(last_payload)
         llm2_payload = _merge_payload_attachments(trigger_window_payloads, last_payload)
         llm2_payload.update(llm_context_metadata)
         llm2_payload.update(
