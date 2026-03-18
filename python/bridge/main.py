@@ -1025,7 +1025,7 @@ async def handle_socket(ws):
       cmd_args = slash_cmd.get("args") or ""
       p_chat_id = payload.get("chatId") or "unknown"
       p_chat_type, _, _ = _chat_state_from_payload(payload)
-      p_sender_is_admin = bool(payload.get("senderIsAdmin"))
+      p_sender_is_admin = bool(payload.get("senderIsAdmin")) or bool(payload.get("senderIsOwner"))
       p_sender_jid = payload.get("senderId")
 
       # Add command message to history
