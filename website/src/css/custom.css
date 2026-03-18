@@ -1,0 +1,119 @@
+:root {
+  --ifm-color-primary: #25D366;
+  --ifm-color-primary-dark: #20be5b;
+  --ifm-color-primary-darker: #1eb456;
+  --ifm-color-primary-darkest: #189447;
+  --ifm-color-primary-light: #2ae871;
+  --ifm-color-primary-lighter: #3bea7e;
+  --ifm-color-primary-lightest: #5eed96;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #25D366;
+  --ifm-color-primary-dark: #20be5b;
+  --ifm-color-primary-darker: #1eb456;
+  --ifm-color-primary-darkest: #189447;
+  --ifm-color-primary-light: #2ae871;
+  --ifm-color-primary-lighter: #3bea7e;
+  --ifm-color-primary-lightest: #5eed96;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Landing page hero */
+.hero--primary {
+  background: linear-gradient(135deg, #128C7E 0%, #25D366 100%);
+}
+
+/* ===== IMPROVISATIONS ===== */
+
+/* Feature cards with shadow and hover effect */
+.feature-card {
+  background: var(--ifm-card-background-color, #fff);
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  height: 100%;
+}
+
+.feature-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 24px rgba(37, 211, 102, 0.15);
+}
+
+[data-theme='dark'] .feature-card {
+  background: var(--ifm-card-background-color, #1e1e1e);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme='dark'] .feature-card:hover {
+  box-shadow: 0 8px 24px rgba(37, 211, 102, 0.2);
+}
+
+/* Hero button enhancements */
+.hero .button--secondary {
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  font-weight: 600;
+}
+
+.hero .button--secondary:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+/* Step number badges */
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #128C7E, #25D366);
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.1rem;
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
+}
+
+/* How it works section */
+.how-it-works {
+  background: var(--ifm-background-surface-color, #f8f9fa);
+  padding: 3rem 0;
+}
+
+[data-theme='dark'] .how-it-works {
+  background: var(--ifm-background-surface-color, #1a1a1a);
+}
+
+/* Smooth page transitions */
+.main-wrapper {
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Better admonition styling */
+.alert--warning {
+  border-left-color: #f0ad4e;
+}
+
+.alert--danger {
+  border-left-color: #d9534f;
+}
+
+/* Navbar subtle shadow */
+.navbar {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Footer link hover */
+.footer__link-item:hover {
+  color: #25D366;
+}

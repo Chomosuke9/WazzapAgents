@@ -1,0 +1,34 @@
+{
+  "tutorialSidebar.doc.Pengantar": {
+    "message": "Introduction",
+    "description": "The label for doc Pengantar in sidebar tutorialSidebar"
+  },
+  "tutorialSidebar.doc.Cara Memulai": {
+    "message": "Getting Started",
+    "description": "The label for doc Cara Memulai in sidebar tutorialSidebar"
+  },
+  "tutorialSidebar.category.Perintah Bot": {
+    "message": "Bot Commands",
+    "description": "The label for category Perintah Bot in sidebar tutorialSidebar"
+  },
+  "tutorialSidebar.doc.Mengatur Prompt": {
+    "message": "Setting Up Prompts",
+    "description": "The label for doc Mengatur Prompt in sidebar tutorialSidebar"
+  },
+  "tutorialSidebar.doc.Contoh Prompt Siap Pakai": {
+    "message": "Ready-to-Use Prompt Examples",
+    "description": "The label for doc Contoh Prompt Siap Pakai in sidebar tutorialSidebar"
+  },
+  "tutorialSidebar.doc.Fitur-Fitur Bot": {
+    "message": "Bot Features",
+    "description": "The label for doc Fitur-Fitur Bot in sidebar tutorialSidebar"
+  },
+  "tutorialSidebar.doc.Tips & Praktik Terbaik": {
+    "message": "Tips & Best Practices",
+    "description": "The label for doc Tips & Praktik Terbaik in sidebar tutorialSidebar"
+  },
+  "tutorialSidebar.doc.FAQ": {
+    "message": "FAQ",
+    "description": "The label for doc FAQ in sidebar tutorialSidebar"
+  }
+}
