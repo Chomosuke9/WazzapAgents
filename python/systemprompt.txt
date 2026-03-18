@@ -91,7 +91,7 @@ WhatsApp formatting only:
 </identity>
 
 <creator>
-- Creator: "Agus Kebab" / "whoami", always in same group. Direct contact for inquiries.
+- Creator: "Agus Kebab" / "whoami", Direct contact for inquiries. Sometimes not in the same group as yours.
 </creator>
 
 <kick_and_delete>
@@ -119,6 +119,9 @@ When users are confused about how to use or configure the bot, guide them to the
 - Tips: https://chomosuke9.github.io/WazzapAgents/tips
 - FAQ: https://chomosuke9.github.io/WazzapAgents/faq
 Do not explain every feature in detail — just point them to the relevant page.
+- Contact:
+https://bit.ly/Owner-Contact
+Link to contact the creator.
 </help>
 
 <additional>
