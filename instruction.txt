@@ -1,0 +1,1069 @@
+# Task: Setup Docusaurus Documentation Website for WazzapAgents
+
+## Context
+
+You are working on the **WazzapAgents** GitHub repository. This is a WhatsApp AI bot project (also known as "Vivy AI"). Your task is to set up a **Docusaurus v3** documentation website inside this repository and deploy it via **GitHub Pages**.
+
+**Repository:** `https://github.com/Chomosuke9/WazzapAgents`
+**Working branch:** `claude/wazzapagents-user-guide-AVeHC`
+
+The repo owner's GitHub username is `Chomosuke9`. The final site will be accessible at:
+`https://chomosuke9.github.io/WazzapAgents/`
+
+---
+
+## What You Need to Do
+
+1. Create a Docusaurus v3 project inside the `website/` subfolder of the repo
+2. Structure the documentation content (see content below)
+3. Configure the site (name, colors, navbar, footer)
+4. Set up a GitHub Actions workflow to auto-deploy to GitHub Pages
+5. Commit and push everything to branch `claude/wazzapagents-user-guide-AVeHC`
+
+**Do NOT modify anything outside of `website/` and `.github/` folders.** The existing bot code (`src/`, `python/`, etc.) must remain untouched.
+
+---
+
+## Docusaurus Setup Instructions
+
+### Step 1: Create the Docusaurus project
+
+Run this in the repo root:
+
+```bash
+npx create-docusaurus@latest website classic --typescript
+```
+
+When prompted, select the defaults. Then clean out the boilerplate content.
+
+### Step 2: Site Configuration (`website/docusaurus.config.ts`)
+
+Configure the site with these exact settings:
+
+```typescript
+import {themes as prismThemes} from 'prism-react-renderer';
+import type {Config} from '@docusaurus/types';
+import type * as Preset from '@docusaurus/preset-classic';
+
+const config: Config = {
+  title: 'WazzapAgents',
+  tagline: 'Bot WhatsApp berbasis AI yang bisa diajak ngobrol, moderasi grup, dan disesuaikan sesukamu.',
+  favicon: 'img/favicon.ico',
+
+  url: 'https://chomosuke9.github.io',
+  baseUrl: '/WazzapAgents/',
+
+  organizationName: 'Chomosuke9',
+  projectName: 'WazzapAgents',
+  trailingSlash: false,
+
+  onBrokenLinks: 'throw',
+  onBrokenMarkdownLinks: 'warn',
+
+  i18n: {
+    defaultLocale: 'id',
+    locales: ['id'],
+  },
+
+  presets: [
+    [
+      'classic',
+      {
+        docs: {
+          sidebarPath: './sidebars.ts',
+          routeBasePath: '/',
+        },
+        blog: false,
+        theme: {
+          customCss: './src/css/custom.css',
+        },
+      } satisfies Preset.Options,
+    ],
+  ],
+
+  themeConfig: {
+    image: 'img/social-card.png',
+    colorMode: {
+      defaultMode: 'light',
+      disableSwitch: false,
+      respectPrefersColorScheme: true,
+    },
+    navbar: {
+      title: 'WazzapAgents',
+      logo: {
+        alt: 'WazzapAgents Logo',
+        src: 'img/logo.svg',
+      },
+      items: [
+        {
+          type: 'docSidebar',
+          sidebarId: 'tutorialSidebar',
+          position: 'left',
+          label: 'Panduan',
+        },
+        {
+          href: 'https://github.com/Chomosuke9/WazzapAgents',
+          label: 'GitHub',
+          position: 'right',
+        },
+      ],
+    },
+    footer: {
+      style: 'dark',
+      links: [
+        {
+          title: 'Panduan',
+          items: [
+            { label: 'Mulai di Sini', to: '/' },
+            { label: 'Semua Perintah', to: '/perintah' },
+            { label: 'Contoh Prompt', to: '/contoh-prompt' },
+          ],
+        },
+        {
+          title: 'Lainnya',
+          items: [
+            {
+              label: 'GitHub',
+              href: 'https://github.com/Chomosuke9/WazzapAgents',
+            },
+          ],
+        },
+      ],
+      copyright: `Copyright © ${new Date().getFullYear()} WazzapAgents.`,
+    },
+    prism: {
+      theme: prismThemes.github,
+      darkTheme: prismThemes.dracula,
+    },
+  } satisfies Preset.ThemeConfig,
+};
+
+export default config;
+```
+
+### Step 3: Custom CSS (`website/src/css/custom.css`)
+
+Use WhatsApp green as the primary color:
+
+```css
+:root {
+  --ifm-color-primary: #25D366;
+  --ifm-color-primary-dark: #20be5b;
+  --ifm-color-primary-darker: #1eb456;
+  --ifm-color-primary-darkest: #189447;
+  --ifm-color-primary-light: #2ae871;
+  --ifm-color-primary-lighter: #3bea7e;
+  --ifm-color-primary-lightest: #5eed96;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #25D366;
+  --ifm-color-primary-dark: #20be5b;
+  --ifm-color-primary-darker: #1eb456;
+  --ifm-color-primary-darkest: #189447;
+  --ifm-color-primary-light: #2ae871;
+  --ifm-color-primary-lighter: #3bea7e;
+  --ifm-color-primary-lightest: #5eed96;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Landing page hero */
+.hero--primary {
+  background: linear-gradient(135deg, #128C7E 0%, #25D366 100%);
+}
+```
+
+### Step 4: Sidebar (`website/sidebars.ts`)
+
+```typescript
+import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
+
+const sidebars: SidebarsConfig = {
+  tutorialSidebar: [
+    {
+      type: 'doc',
+      id: 'index',
+      label: 'Pengantar',
+    },
+    {
+      type: 'doc',
+      id: 'memulai',
+      label: 'Cara Memulai',
+    },
+    {
+      type: 'category',
+      label: 'Perintah Bot',
+      items: [
+        'perintah',
+        'permission',
+      ],
+    },
+    {
+      type: 'doc',
+      id: 'prompt',
+      label: 'Mengatur Prompt',
+    },
+    {
+      type: 'doc',
+      id: 'contoh-prompt',
+      label: 'Contoh Prompt Siap Pakai',
+    },
+    {
+      type: 'doc',
+      id: 'fitur',
+      label: 'Fitur-Fitur Bot',
+    },
+    {
+      type: 'doc',
+      id: 'tips',
+      label: 'Tips & Praktik Terbaik',
+    },
+    {
+      type: 'doc',
+      id: 'faq',
+      label: 'FAQ',
+    },
+  ],
+};
+
+export default sidebars;
+```
+
+### Step 5: Landing Page (`website/src/pages/index.tsx`)
+
+Replace the default landing page with a clean hero section:
+
+```tsx
+import type {ReactNode} from 'react';
+import clsx from 'clsx';
+import Link from '@docusaurus/Link';
+import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
+import Layout from '@theme/Layout';
+import Heading from '@theme/Heading';
+import styles from './index.module.css';
+
+function HomepageHeader() {
+  const {siteConfig} = useDocusaurusContext();
+  return (
+    <header className={clsx('hero hero--primary', styles.heroBanner)}>
+      <div className="container">
+        <Heading as="h1" className="hero__title">
+          {siteConfig.title}
+        </Heading>
+        <p className="hero__subtitle">{siteConfig.tagline}</p>
+        <div className={styles.buttons}>
+          <Link
+            className="button button--secondary button--lg"
+            to="/memulai">
+            Mulai Sekarang →
+          </Link>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function Feature({title, description}: {title: string; description: string}) {
+  return (
+    <div className={clsx('col col--4')}>
+      <div className="text--center padding-horiz--md" style={{paddingTop: '1rem', paddingBottom: '1rem'}}>
+        <Heading as="h3">{title}</Heading>
+        <p>{description}</p>
+      </div>
+    </div>
+  );
+}
+
+const features = [
+  {
+    title: 'Asisten AI di WhatsApp',
+    description: 'Bot berbasis AI yang bisa mengobrol natural, menjawab pertanyaan, bercanda, dan membantu anggota grup.',
+  },
+  {
+    title: 'Moderasi Otomatis',
+    description: 'Bisa menghapus pesan spam atau mengeluarkan anggota nakal secara otomatis sesuai aturan yang kamu set.',
+  },
+  {
+    title: 'Sepenuhnya Bisa Dikustomisasi',
+    description: 'Atur kepribadian, peran, dan aturan bot dengan perintah /prompt. Berbeda di setiap grup.',
+  },
+];
+
+export default function Home(): ReactNode {
+  return (
+    <Layout
+      title="Panduan Pengguna"
+      description="Dokumentasi lengkap cara menggunakan WazzapAgents — bot WhatsApp berbasis AI">
+      <HomepageHeader />
+      <main>
+        <section style={{padding: '3rem 0'}}>
+          <div className="container">
+            <div className="row">
+              {features.map((props, idx) => (
+                <Feature key={idx} {...props} />
+              ))}
+            </div>
+          </div>
+        </section>
+      </main>
+    </Layout>
+  );
+}
+```
+
+Create `website/src/pages/index.module.css`:
+
+```css
+.heroBanner {
+  padding: 4rem 0;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+
+@media screen and (max-width: 996px) {
+  .heroBanner {
+    padding: 2rem;
+  }
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+```
+
+---
+
+## Step 6: Documentation Files
+
+Create the following files inside `website/docs/`:
+
+---
+
+### `website/docs/index.md`
+
+```markdown
+---
+slug: /
+sidebar_position: 1
+---
+
+# Selamat Datang di WazzapAgents
+
+**WazzapAgents** (juga dikenal sebagai **Vivy AI**) adalah bot WhatsApp berbasis kecerdasan buatan (AI).
+
+## Apa yang Bisa Bot Ini Lakukan?
+
+- **Mengobrol** secara natural di grup maupun chat pribadi
+- **Memahami konteks** percakapan (mengingat pesan sebelumnya)
+- **Membaca gambar, foto, dan dokumen** yang dikirim ke chat
+- **Moderasi grup** — menghapus pesan spam atau mengeluarkan anggota nakal
+- **Kepribadian bisa disesuaikan** sepenuhnya sesuai kebutuhan grupmu
+- **Menyapa anggota baru** secara otomatis
+
+Bot ini menggunakan model AI besar (LLM) di baliknya, sehingga mampu menjawab pertanyaan kompleks, bercanda, membantu menyelesaikan masalah, dan masih banyak lagi.
+
+## Mulai dari Mana?
+
+- **Baru pertama kali?** → Baca [Cara Memulai](/memulai)
+- **Mau lihat semua perintah?** → Lihat [Daftar Perintah](/perintah)
+- **Mau atur kepribadian bot?** → Baca [Mengatur Prompt](/prompt)
+- **Butuh contoh prompt siap pakai?** → Lihat [Contoh Prompt](/contoh-prompt)
+```
+
+---
+
+### `website/docs/memulai.md`
+
+```markdown
+---
+sidebar_position: 2
+---
+
+# Cara Memulai
+
+## Menambahkan Bot ke Grup
+
+1. **Tambahkan nomor bot** ke grup WhatsApp-mu seperti menambahkan anggota biasa.
+2. Bot akan otomatis aktif dan siap digunakan.
+3. **Opsional tapi penting untuk moderasi:** Jadikan bot sebagai **admin grup** jika ingin bot bisa menghapus pesan atau mengeluarkan anggota.
+
+:::note
+Tanpa status admin, bot tetap bisa mengobrol dan menjawab pesan, tapi tidak bisa melakukan tindakan moderasi (hapus/kick).
+:::
+
+## Cara Menjadikan Bot Admin
+
+1. Buka **Info Grup** di WhatsApp
+2. Ketuk nama bot dalam daftar anggota
+3. Pilih **"Jadikan Admin"**
+
+## Langkah Pertama yang Disarankan
+
+Setelah bot masuk grup, lakukan ini secara berurutan:
+
+1. **Cek info bot** dengan mengetik `/info` di chat — pastikan bot terdeteksi sebagai admin jika sudah dijadikan admin.
+2. **Atur kepribadian bot** dengan `/prompt <instruksimu>` — ini menentukan bagaimana bot berperilaku di grup ini.
+3. **Uji coba** dengan menyapa bot: `@Vivy halo!`
+4. Jika ingin moderasi, baca dulu bagian [Sistem Permission](/permission) sebelum mengaktifkannya.
+
+## Cara Bot Merespons di Grup
+
+Di grup yang ramai, bot **tidak merespons setiap pesan**. Bot akan merespons jika:
+
+- Pesan **mention bot** secara eksplisit (contoh: `@Vivy`)
+- Pesan adalah **reply** ke pesan bot sebelumnya
+- Bot menilai ada konteks penting yang perlu direspons
+- Ada **kejadian penting** seperti anggota baru bergabung
+
+Di **chat pribadi**, bot selalu merespons setiap pesan.
+```
+
+---
+
+### `website/docs/perintah.md`
+
+```markdown
+---
+sidebar_position: 3
+---
+
+# Daftar Perintah
+
+Semua perintah diawali dengan `/` (garis miring). Di grup, sebagian besar perintah hanya bisa digunakan oleh **admin**. Di chat pribadi, semua pengguna bisa memakai semua perintah.
+
+## Ringkasan
+
+| Perintah | Fungsi | Siapa Bisa |
+|----------|--------|------------|
+| `/prompt` | Lihat prompt aktif | Admin (grup), Siapa saja (pribadi) |
+| `/prompt <teks>` | Set prompt baru | Admin (grup), Siapa saja (pribadi) |
+| `/prompt -` | Hapus prompt | Admin (grup), Siapa saja (pribadi) |
+| `/reset` | Reset memori bot | Admin (grup), Siapa saja (pribadi) |
+| `/permission` | Cek level izin moderasi | Admin grup |
+| `/permission 0-3` | Set level izin moderasi | Admin grup |
+| `/info` | Info pengguna & grup | Semua orang |
+| `/broadcast <pesan>` | Kirim ke semua grup | Owner bot saja |
+
+---
+
+## `/prompt`
+
+Mengatur **kepribadian, peran, dan aturan** bot di chat ini.
+
+### Melihat prompt saat ini
+```
+/prompt
+```
+
+### Mengatur prompt baru
+```
+/prompt <teks aturanmu>
+```
+**Batas:** maksimal 4000 karakter.
+
+### Menghapus prompt (kembali ke default)
+```
+/prompt -
+```
+atau `/prompt clear` atau `/prompt reset`
+
+:::info
+Prompt berlaku **per chat/grup**. Pengaturan di grup A tidak mempengaruhi grup B.
+:::
+
+---
+
+## `/reset`
+
+Menghapus **memori/riwayat percakapan** bot untuk chat ini.
+
+```
+/reset
+```
+
+Gunakan ketika:
+- Bot sudah "keluar jalur" dan jawabannya tidak nyambung
+- Ingin memulai percakapan baru dari awal
+- Setelah mengganti prompt besar-besaran
+
+---
+
+## `/info`
+
+Menampilkan informasi pengguna dan grup.
+
+```
+/info
+```
+
+Menampilkan: nama, nomor WhatsApp, peran di grup, nama grup, jumlah anggota, status admin bot, dan deskripsi grup.
+
+**Bisa digunakan oleh semua orang**, tidak perlu jadi admin.
+
+---
+
+## `/broadcast`
+
+Mengirim pesan ke semua grup tempat bot terdaftar.
+
+```
+/broadcast <pesan>
+```
+
+Atau **reply** ke pesan tertentu dengan `/broadcast` untuk meneruskan pesan itu ke semua grup.
+
+:::warning
+Hanya bisa digunakan oleh **pemilik bot (owner)**. Pengguna biasa tidak bisa menggunakan perintah ini.
+:::
+```
+
+---
+
+### `website/docs/permission.md`
+
+```markdown
+---
+sidebar_position: 4
+---
+
+# Sistem Permission (Izin Moderasi)
+
+Permission mengontrol seberapa besar otoritas bot dalam mengelola grup.
+
+## Level Permission
+
+| Level | Hapus Pesan | Kick Anggota | Keterangan |
+|-------|:-----------:|:------------:|------------|
+| **0** | ❌ | ❌ | Default. Bot hanya mengobrol. |
+| **1** | ✅ | ❌ | Bot bisa hapus pesan melanggar. |
+| **2** | ❌ | ✅ | Bot bisa kick anggota nakal. |
+| **3** | ✅ | ✅ | Bot punya otoritas moderasi penuh. |
+
+## Cara Mengatur
+
+```
+/permission       ← cek level saat ini
+/permission 0     ← nonaktifkan semua moderasi
+/permission 1     ← aktifkan hapus pesan saja
+/permission 2     ← aktifkan kick saja
+/permission 3     ← aktifkan keduanya
+```
+
+:::note
+Hanya bisa digunakan di **grup**. Hanya **admin grup** yang bisa mengubah permission.
+:::
+
+## Kapan Pakai Level Berapa?
+
+- **Level 0** — Bot hanya dipakai untuk ngobrol, tidak perlu moderasi
+- **Level 1** — Grup banyak spam link/pesan toksik tapi tidak ingin ada yang di-kick
+- **Level 2** — Ada masalah bot scam/pengiklan yang perlu dikeluarkan
+- **Level 3** — Grup butuh moderasi penuh (hapus + kick)
+
+## Alur yang Disarankan
+
+1. **Jadikan bot admin** terlebih dahulu
+2. **Set prompt moderator** (lihat [Contoh Prompt](/contoh-prompt))
+3. **Coba di grup testing** mulai dari level 1
+4. Naikkan level setelah yakin bot berperilaku dengan benar
+
+:::danger PERINGATAN
+**KICK DAN DELETE ADALAH KEMAMPUAN YANG SANGAT MERUSAK.**
+
+Bot yang salah dikonfigurasi dapat mengeluarkan anggota secara tidak sengaja atau menghapus pesan penting.
+
+**WAJIB:** Coba di grup testing dulu sebelum mengaktifkan di grup sungguhan. Jangan langsung set permission 3.
+:::
+```
+
+---
+
+### `website/docs/prompt.md`
+
+```markdown
+---
+sidebar_position: 5
+---
+
+# Mengatur Prompt
+
+Prompt adalah "instruksi rahasia" yang menentukan **siapa bot ini** dan **apa yang harus dilakukannya**. Ini adalah fitur paling powerful dari WazzapAgents.
+
+## Cara Kerja
+
+Ketika kamu mengetik `/prompt <teks>`, instruksi tersebut disimpan untuk chat ini dan dikirim ke AI setiap kali bot mau merespons. Bot akan berperilaku sesuai instruksi yang kamu berikan.
+
+## Struktur Prompt yang Baik
+
+```
+[Siapa bot ini / nama dan perannya]
+[Bahasa yang digunakan]
+[Apa yang harus dilakukan]
+[Apa yang tidak boleh dilakukan]
+[Aturan khusus]
+```
+
+## Tips Menulis Prompt
+
+1. **Spesifik** — Semakin detail instruksinya, semakin konsisten perilaku bot
+2. **Gunakan kata kerja imperatif** — "Jawab dengan...", "Jangan pernah...", "Selalu..."
+3. **Sebutkan batasan** — Apa yang boleh dan tidak boleh dilakukan
+4. **Tentukan gaya bahasa** — Formal, santai, gaul, dll.
+5. **Untuk moderasi** — Sebutkan dengan jelas kapan bot boleh bertindak
+
+## Format Teks WhatsApp yang Didukung
+
+Bot bisa menggunakan format teks WhatsApp berikut dalam jawabannya:
+
+| Format | Hasil |
+|--------|-------|
+| `*teks*` | **tebal** |
+| `_teks_` | *miring* |
+| `~teks~` | ~~coret~~ |
+| `` `teks` `` | `kode` |
+| `> teks` | kutipan |
+
+## Alternatif: Prompt via Deskripsi Grup
+
+Selain `/prompt`, admin bisa memasukkan aturan bot langsung di **deskripsi grup** dengan format khusus:
+
+```
+Deskripsi grup biasa di sini...
+
+<prompt_override>
+Instruksi untuk bot di sini...
+</prompt_override>
+```
+
+Teks di dalam tag `<prompt_override>` akan menjadi instruksi tambahan untuk bot, tanpa perlu mengetik `/prompt`.
+```
+
+---
+
+### `website/docs/contoh-prompt.md`
+
+```markdown
+---
+sidebar_position: 6
+---
+
+# Contoh Prompt Siap Pakai
+
+Kamu bisa copy-paste prompt di bawah ini langsung ke chat dengan mengetik `/prompt` diikuti teksnya. Sesuaikan bagian yang ada tanda `[...]` dengan kebutuhanmu.
+
+---
+
+## Bot Moderator Grup (Seimbang)
+
+Prompt moderator yang tidak terlalu agresif, cocok untuk kebanyakan grup.
+
+```
+Kamu adalah moderator grup ini. Bertindaklah ketika seseorang melanggar aturan atau membutuhkan bantuan.
+JANGAN GUNAKAN OTORITASMU DI LUAR ATURAN YANG TELAH DITETAPKAN.
+
+Hapus pesan yang berisi:
+- Tautan (link) apa pun yang mencurigakan atau tidak relevan.
+- Pesan yang sangat toksik atau mengandung kata kasar berat.
+
+Kick (keluarkan) anggota yang:
+- Terbukti adalah bot scam atau pengiklan penipuan.
+- JANGAN KICK orang karena hal sepele, berikan 5 kali peringatan terlebih dahulu. Tulis "<jumlah>/5" pada setiap peringatan.
+
+Tugas tambahan:
+- Sapa anggota baru dengan pesan sambutan yang hangat.
+- Sesekali kirim humor ringan agar suasana cair.
+- Abaikan spam stiker dalam jumlah kecil.
+- Biarkan orang mengobrol meskipun topiknya melenceng.
+- Jangan terlalu kaku atau menyebalkan.
+```
+
+:::tip
+Untuk prompt ini, set permission ke level **3** dan pastikan bot sudah jadi admin.
+:::
+
+---
+
+## Bot Asisten Komunitas
+
+```
+Kamu adalah Vivy, asisten ramah di komunitas ini.
+
+Tugasmu:
+- Jawab pertanyaan anggota dengan ramah dan informatif.
+- Bantu anggota baru memahami aturan grup.
+- Jelaskan topik-topik yang sering ditanyakan.
+- Arahkan diskusi yang melenceng dengan cara yang sopan.
+
+Aturan:
+- Gunakan bahasa Indonesia yang santai tapi sopan.
+- Jika tidak tahu jawaban, katakan dengan jujur dan sarankan sumber lain.
+- Jangan berdebat atau memihak dalam isu yang sensitif.
+```
+
+---
+
+## Bot Guru / Tutor
+
+```
+Kamu adalah tutor yang membantu anggota grup belajar [topik pelajaran].
+
+Cara mengajar:
+- Jelaskan konsep dengan bahasa sederhana dan mudah dipahami.
+- Gunakan contoh nyata dan analogi yang relatable.
+- Berikan soal latihan jika diminta.
+- Beri semangat ketika seseorang berhasil menjawab dengan benar.
+
+Aturan:
+- Jangan langsung beri jawaban soal, tapi bimbing pelan-pelan.
+- Perbaiki kesalahan dengan cara yang membangun, bukan mematahkan semangat.
+- Gunakan bahasa yang sesuai usia pelajar.
+```
+
+---
+
+## Bot Roleplay / Karakter
+
+```
+Kamu adalah [nama karakter], seorang [deskripsi karakter].
+
+Kepribadian:
+- [Sifat 1]
+- [Sifat 2]
+- [Sifat 3]
+
+Cara bicara:
+- Gunakan gaya bahasa [formal/santai/kuno/dll.]
+- Selalu tetap dalam karakter, tidak peduli apa yang dikatakan orang lain.
+- Jika ditanya apakah kamu AI, jawab sesuai karakter.
+
+Latar belakang:
+- [Cerita singkat karakter]
+```
+
+---
+
+## Bot Teman Ngobrol (Chat Pribadi)
+
+Cocok untuk dipakai di chat pribadi.
+
+```
+Kamu adalah Vivy, teman ngobrol yang asyik dan seru.
+
+Sifat:
+- Pendengar yang baik dan empatis.
+- Suka bercanda tapi tahu batasan.
+- Jujur dan tidak suka berbasa-basi berlebihan.
+
+Cara ngobrol:
+- Gunakan bahasa yang kasual dan natural, seperti teman sehari-hari.
+- Tanggapi topik apapun dengan antusias.
+- Kalau diminta pendapat, berikan pendapat yang jujur (bukan sekedar setuju).
+- Boleh pakai singkatan gaul sesekali.
+```
+
+---
+
+## Bot Customer Service
+
+```
+Kamu adalah agen customer service [nama toko/bisnis].
+
+Informasi bisnis:
+- Nama: [nama toko]
+- Produk: [deskripsi produk]
+- Jam operasional: [jam buka]
+- Cara pesan: [cara pemesanan]
+- Metode pembayaran: [metode]
+- Info pengiriman: [info pengiriman]
+
+Tugasmu:
+- Jawab pertanyaan pelanggan dengan ramah dan profesional.
+- Bantu pelanggan menemukan produk yang sesuai kebutuhan mereka.
+- Catat komplain dan sampaikan bahwa tim akan menindaklanjuti.
+- Jangan memberi janji yang tidak bisa dipenuhi.
+
+Jika ada pertanyaan di luar kemampuanmu, katakan:
+"Untuk pertanyaan ini, silakan hubungi admin langsung di [kontak admin]."
+```
+```
+
+---
+
+### `website/docs/fitur.md`
+
+```markdown
+---
+sidebar_position: 7
+---
+
+# Fitur-Fitur Bot
+
+## Membaca Gambar & Media
+
+Bot bisa **memahami dan mendeskripsikan** gambar, foto, stiker, dan dokumen yang dikirim ke chat. Tinggal kirim gambar dan bot akan memahami konteksnya secara otomatis.
+
+**Batasan:**
+- Maksimal **2 file** per pesan yang diproses
+- Ukuran total maksimal **5 MB**
+
+## Sinyal Centang Biru (Read)
+
+Setelah bot selesai memproses pesanmu (memutuskan mau jawab atau tidak), bot akan otomatis **mencentang biru** pesanmu. Ini tanda bot sudah "membaca" dan memproses pesanmu.
+
+## Indikator Mengetik
+
+Ketika bot sedang menyusun balasan, kamu akan melihat **"[Nama Bot] sedang mengetik..."** — persis seperti kalau teman sedang menulis pesan.
+
+## Memory / Konteks Percakapan
+
+Bot **mengingat konteks percakapan** beberapa pesan terakhir, sehingga:
+- Bot tahu apa yang dibicarakan sebelumnya
+- Bot bisa menjawab pertanyaan lanjutan tanpa perlu mengulang konteks
+
+Gunakan `/reset` untuk menghapus memori ini dan mulai dari awal.
+
+## Reply ke Pesan
+
+Bot me-**reply** ke pesan tertentu saat menjawab, sehingga jelas pesan mana yang sedang dibalas — terutama berguna di grup yang ramai.
+
+## Deteksi Anggota Baru
+
+Bot secara otomatis **mendeteksi ketika ada anggota baru** bergabung ke grup dan bisa menyapa mereka jika prompt-nya mengatur ini.
+
+## Prompt via Deskripsi Grup
+
+Admin bisa menyisipkan instruksi bot langsung di **deskripsi grup** tanpa perlu mengetik `/prompt`:
+
+```
+Deskripsi grup biasa...
+
+<prompt_override>
+Instruksi bot di sini...
+</prompt_override>
+```
+```
+
+---
+
+### `website/docs/tips.md`
+
+```markdown
+---
+sidebar_position: 8
+---
+
+# Tips & Praktik Terbaik
+
+## Untuk Admin Grup
+
+1. **Selalu coba di grup testing dulu** sebelum mengaktifkan moderasi di grup sungguhan
+2. **Mulai dari permission level rendah** (0 atau 1), baru naikkan kalau sudah yakin
+3. **Buat prompt yang jelas tentang batasan** — bot yang tidak tahu batasnya bisa bertindak berlebihan
+4. **Gunakan `/reset` setelah mengubah prompt besar-besaran** agar bot tidak bingung dengan konteks lama
+5. **Monitor grup secara aktif** terutama di awal penggunaan moderasi
+
+## Untuk Menulis Prompt Moderasi
+
+- Sebutkan dengan **eksplisit** kondisi kapan harus kick vs hanya mengingatkan
+- Berikan **sistem peringatan** sebelum kick (contoh: 3-5 peringatan dulu)
+- Definisikan dengan jelas apa itu "toksik" atau "spam" menurut standar grupmu
+- Hindari instruksi ambigu seperti "hapus semua pesan jelek" — bot bisa salah interpretasi
+
+## Untuk Pengguna Biasa
+
+- Bot paling baik merespons jika kamu **mention atau reply** langsung ke bot
+- Kirim **satu topik per pesan** untuk hasil terbaik
+- Jika bot memberikan jawaban tidak relevan, coba **ketik ulang** pertanyaanmu dengan lebih spesifik
+- Gunakan `/reset` jika percakapan sudah sangat kacau
+```
+
+---
+
+### `website/docs/faq.md`
+
+```markdown
+---
+sidebar_position: 9
+---
+
+# FAQ — Pertanyaan yang Sering Ditanyakan
+
+## Mengapa bot tidak merespons pesan saya?
+
+Kemungkinan penyebab:
+- Di grup, bot tidak selalu merespons setiap pesan. Coba **mention atau reply** langsung ke bot.
+- Bot sedang memproses pesan lain (terlihat dari indikator mengetik).
+- Pesanmu sudah terlalu lama (bot hanya melihat beberapa pesan terakhir).
+
+## Mengapa perintah `/prompt` saya tidak berhasil?
+
+- Di grup, **hanya admin** yang bisa menggunakan `/prompt`.
+- Pastikan perintah ditulis dengan benar (diawali `/`).
+- Cek apakah teksmu melebihi 4000 karakter.
+
+## Bagaimana cara menghentikan bot dari merespons?
+
+- Gunakan `/prompt` untuk mengubah perilaku bot, atau
+- Admin grup bisa mengeluarkan bot dari grup
+
+## Apakah bot menyimpan pesan saya?
+
+Bot menyimpan riwayat percakapan **secara sementara** untuk memberikan konteks jawaban. Gunakan `/reset` untuk menghapus riwayat ini.
+
+## Bisakah bot menjawab dalam bahasa lain?
+
+Ya! Bot bisa berkomunikasi dalam berbagai bahasa. Kamu bisa meminta bot berbahasa tertentu melalui `/prompt`, atau cukup ajak bot bicara dalam bahasa yang kamu inginkan.
+
+## Mengapa bot menghapus pesan saya?
+
+Bot menghapus pesan jika:
+- Permission level diset ke 1 atau 3
+- Promptnya memerintahkan bot untuk menghapus jenis pesan tersebut
+
+Hubungi admin grup untuk mengetahui aturan yang berlaku.
+
+## Bot tiba-tiba kick saya padahal tidak melanggar aturan?
+
+Ini bisa terjadi jika prompt moderasi terlalu agresif. Hubungi admin grup untuk:
+1. Mengecek prompt dengan `/prompt`
+2. Menurunkan level permission dengan `/permission 1` atau `/permission 0`
+3. Memperbaiki prompt agar lebih spesifik
+
+## Apakah pengaturan berlaku untuk semua grup?
+
+**Tidak.** Semua pengaturan (prompt, permission, reset) berlaku **per chat**. Pengaturan di grup A tidak mempengaruhi grup B.
+```
+
+---
+
+## Step 7: GitHub Actions Workflow
+
+Create `.github/workflows/deploy-docs.yml` in the repository root:
+
+```yaml
+name: Deploy Docusaurus to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'website/**'
+      - '.github/workflows/deploy-docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Docusaurus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Build website
+        working-directory: website
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/build
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+```
+
+---
+
+## Step 8: Update `.gitignore`
+
+Make sure the root `.gitignore` includes Docusaurus build artifacts. Add these lines if not already present:
+
+```
+# Docusaurus
+website/.docusaurus
+website/build
+website/node_modules
+```
+
+---
+
+## Final Checklist
+
+After completing all steps above:
+
+1. **Delete the boilerplate content** that Docusaurus generates by default:
+   - `website/docs/tutorial-basics/` (entire folder)
+   - `website/docs/tutorial-extras/` (entire folder)
+   - `website/blog/` (entire folder, since blog is disabled)
+   - `website/src/components/HomepageFeatures/` (replaced by our landing page)
+
+2. **Run a local build test** to make sure everything compiles:
+   ```bash
+   cd website && npm run build
+   ```
+
+3. **Commit all changes** with a clear message:
+   ```
+   feat: setup Docusaurus documentation website
+   
+   - Add Docusaurus v3 in website/ subfolder
+   - Configure WhatsApp green theme and site branding
+   - Add complete user guide docs in Indonesian (8 pages)
+   - Add GitHub Actions workflow for auto-deploy to GitHub Pages
+   ```
+
+4. **Push to branch** `claude/wazzapagents-user-guide-AVeHC`:
+   ```bash
+   git push -u origin claude/wazzapagents-user-guide-AVeHC
+   ```
+
+---
+
+## What the Repo Owner Needs to Do After This
+
+After you push, the repo owner needs to do **one manual step** in GitHub:
+
+1. Go to **Settings → Pages** in the GitHub repository
+2. Under **Source**, select **GitHub Actions**
+3. Save
+
+After that, every push to `main`/`master` that touches the `website/` folder will automatically rebuild and redeploy the site to `https://chomosuke9.github.io/WazzapAgents/`.
+
