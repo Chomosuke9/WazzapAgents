@@ -24,33 +24,26 @@ Node.js (ESM) gateway that connects a WhatsApp account via Baileys v7 and forwar
 {
   "type": "incoming_message",
   "payload": {
-    "instanceId": "dev-gateway-1",
     "contextMsgId": "000125",
     "messageId": "wamid-abc",
+    "instanceId": "dev-gateway-1",
     "chatId": "12345@g.us",
     "chatName": "Group Name",
     "chatType": "group",
-    "isGroup": true,
-    "botIsAdmin": true,
-    "botIsSuperAdmin": false,
     "senderId": "98765@s.whatsapp.net",
     "senderRef": "u8k2d1",
     "senderName": "Alice",
     "senderIsAdmin": false,
+    "senderIsOwner": false,
+    "isGroup": true,
+    "botIsAdmin": true,
+    "botIsSuperAdmin": false,
     "fromMe": false,
     "contextOnly": false,
     "triggerLlm1": false,
     "timestampMs": 1738560000000,
     "messageType": "extendedTextMessage",
     "text": "Hello world",
-    "mentionedJids": ["123@s.whatsapp.net"],
-    "mentionedParticipants": [
-      {
-        "jid": "123@s.whatsapp.net",
-        "senderRef": "u1m9qa",
-        "name": "Bob"
-      }
-    ],
     "quoted": {
       "messageId": "wamid-quoted",
       "contextMsgId": "000124",
@@ -68,8 +61,20 @@ Node.js (ESM) gateway that connects a WhatsApp account via Baileys v7 and forwar
         "isAnimated": false
       }
     ],
+    "mentionedJids": ["123@s.whatsapp.net"],
+    "mentionedParticipants": [
+      {
+        "jid": "123@s.whatsapp.net",
+        "senderRef": "u1m9qa",
+        "name": "Bob"
+      }
+    ],
+    "botMentioned": false,
+    "repliedToBot": false,
+    "location": null,
     "groupDescription": "Rules and context for this group (without prompt_override block)",
-    "groupPromptOveride": "Extra instructions extracted from <prompt_override>...</prompt_override>"
+    "groupPromptOveride": "Extra instructions extracted from <prompt_override>...</prompt_override>",
+    "slashCommand": null
   }
 }
 ```
@@ -77,7 +82,11 @@ Node.js (ESM) gateway that connects a WhatsApp account via Baileys v7 and forwar
 Notes:
 - `contextMsgId` is a 6-digit per-chat sequence (`000000..999999`, wraps after `999999`).
 - `senderRef` is a short deterministic reference per sender in each chat; LLM moderation must use this, not JIDs.
+- `senderIsOwner` indicates whether the sender is a bot owner (configured via `BOT_OWNER_JIDS`).
 - `mentionedParticipants` resolves mentions into `{ jid, senderRef, name }` when available; keep using `mentionedJids` for backwards compatibility if needed.
+- `botMentioned` / `repliedToBot` signal whether the bot was explicitly mentioned or replied to.
+- `location` contains location data when a location message is shared, otherwise `null`.
+- `slashCommand` contains `{ command, args }` when the message is a recognized slash command, otherwise `null`.
 - Bot messages are forwarded as `contextOnly: true` and `triggerLlm1: false` so they enrich context without causing loops.
 - Gateway may emit synthetic bot context events with `messageType: "actionLog"` and `actionLog` details after successful moderation actions (`delete_message`, `kick_member`).
 - Backend bridge enforces moderation flags from `<prompt_override>`: `DELETE`/`KICK` actions are dropped unless matching `allow_*` flags are present and bot role is admin/superadmin.
@@ -148,6 +157,35 @@ Notes:
   }
 }
 ```
+
+### LLM -> Gateway: `mark_read`
+```json
+{
+  "type": "mark_read",
+  "payload": {
+    "chatId": "12345@g.us",
+    "messageId": "wamid-abc",
+    "participant": "98765@s.whatsapp.net"
+  }
+}
+```
+
+Notes:
+- `participant` is optional; include it for group messages.
+
+### LLM -> Gateway: `send_presence`
+```json
+{
+  "type": "send_presence",
+  "payload": {
+    "chatId": "12345@g.us",
+    "type": "composing"
+  }
+}
+```
+
+Notes:
+- `type` can be `"composing"` (typing indicator) or `"paused"` (stop typing). Defaults to `"composing"`.
 
 ## Acknowledgements and errors
 
