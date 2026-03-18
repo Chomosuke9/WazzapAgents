@@ -3,3 +3,8 @@ pnpm-lock.yaml
 data/
 .env
 *.pyc
+
+# Docusaurus
+website/.docusaurus
+website/build
+website/node_modules
