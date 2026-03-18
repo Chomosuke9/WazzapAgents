@@ -107,6 +107,19 @@ Notes:
 - Mention all group members with `@<all>`.
 - Invalid `senderRef` mention tokens are silently skipped (message still sent).
 
+### LLM -> Gateway: `react_message`
+```json
+{
+  "type": "react_message",
+  "payload": {
+    "requestId": "req-react-001",
+    "chatId": "12345@g.us",
+    "contextMsgId": "000125",
+    "emoji": "👍"
+  }
+}
+```
+
 ### LLM -> Gateway: `delete_message`
 ```json
 {
@@ -171,7 +184,7 @@ Notes:
 See `examples/llm_ws_echo.py` for a minimal server that:
 - Listens on `ws://0.0.0.0:8080/ws`.
 - Logs `incoming_message` payload including `contextMsgId` and `senderRef`.
-- Sends `send_message`, `delete_message`, and `kick_member` examples.
+- Sends `send_message`, `delete_message`, `react_message`, and `kick_member` examples.
 
 Run:
 ```bash

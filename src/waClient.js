@@ -1616,6 +1616,47 @@ function actionError(code, message, detail = null) {
   return err;
 }
 
+async function reactToMessage({ chatId, contextMsgId, emoji }) {
+  if (!sock) throw actionError('send_failed', 'WhatsApp socket not ready');
+  if (typeof emoji !== 'string' || !emoji.trim()) {
+    throw actionError('invalid_target', 'missing or empty emoji');
+  }
+  const normalizedContextMsgId = normalizeContextMsgId(contextMsgId);
+  if (!normalizedContextMsgId) {
+    throw actionError('invalid_target', 'invalid contextMsgId');
+  }
+  const indexed = getIndexedMessageByContextId(chatId, normalizedContextMsgId);
+  if (!indexed) {
+    throw actionError('not_found', 'context message not found');
+  }
+  if (indexed.chatId !== chatId) {
+    throw actionError('invalid_target', 'context message belongs to a different chat');
+  }
+  try {
+    await sock.sendMessage(chatId, {
+      react: {
+        text: emoji.trim(),
+        key: indexed.key,
+      },
+    });
+    emitBotActionContextEvent({
+      chatId,
+      action: 'react_message',
+      text: `Action log: reacted ${emoji.trim()} to message <${normalizedContextMsgId}>.`,
+      result: {
+        contextMsgId: normalizedContextMsgId,
+        emoji: emoji.trim(),
+      },
+    });
+    return {
+      contextMsgId: normalizedContextMsgId,
+      emoji: emoji.trim(),
+    };
+  } catch (err) {
+    throw actionError('send_failed', err?.message || 'failed to react to message');
+  }
+}
+
 async function deleteMessageByContextId({ chatId, contextMsgId }) {
   if (!sock) throw actionError('send_failed', 'WhatsApp socket not ready');
   const normalizedContextMsgId = normalizeContextMsgId(contextMsgId);
@@ -2410,6 +2451,7 @@ async function sendPresence({ chatId, type }) {
 export {
   startWhatsApp,
   sendOutgoing,
+  reactToMessage,
   deleteMessageByContextId,
   kickMembers,
   markChatRead,
