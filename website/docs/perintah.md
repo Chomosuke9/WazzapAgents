@@ -16,7 +16,7 @@ Semua perintah diawali dengan `/` (garis miring). Di grup, sebagian besar perint
 | `/reset` | Reset memori bot | Admin (grup), Siapa saja (pribadi) |
 | `/permission` | Cek level izin moderasi | Admin grup |
 | `/permission 0-3` | Set level izin moderasi | Admin grup |
-| `/info` | Info pengguna & grup | Semua orang |
+| `/info` | Info pengguna & chat/grup | Semua orang |
 | `/broadcast <pesan>` | Kirim ke semua grup | Owner bot saja |
 
 ---
@@ -65,13 +65,16 @@ Gunakan ketika:
 
 ## `/info`
 
-Menampilkan informasi pengguna dan grup.
+Menampilkan informasi pengguna dan chat/grup.
 
 ```
 /info
 ```
 
-Menampilkan: nama, nomor WhatsApp, peran di grup, nama grup, jumlah anggota, status admin bot, dan deskripsi grup.
+Menampilkan:
+- **Info pengguna:** nama, JID (ID WhatsApp), peran (member/admin/superadmin/owner)
+- **Info grup** (jika di grup): nama grup, ID grup, jumlah anggota, status admin bot, status superadmin bot, deskripsi grup
+- **Info chat** (jika di chat pribadi): tipe chat, ID chat
 
 **Bisa digunakan oleh semua orang**, tidak perlu jadi admin.
 

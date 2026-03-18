@@ -16,7 +16,7 @@ All commands start with `/` (forward slash). In groups, most commands can only b
 | `/reset` | Reset bot memory | Admin (group), Anyone (private) |
 | `/permission` | Check moderation permission level | Group admin |
 | `/permission 0-3` | Set moderation permission level | Group admin |
-| `/info` | User & group info | Everyone |
+| `/info` | User & chat/group info | Everyone |
 | `/broadcast <message>` | Send to all groups | Bot owner only |
 
 ---
@@ -65,13 +65,16 @@ Use when:
 
 ## `/info`
 
-Displays user and group information.
+Displays user and chat/group information.
 
 ```
 /info
 ```
 
-Shows: name, WhatsApp number, group role, group name, member count, bot admin status, and group description.
+Shows:
+- **User info:** name, JID (WhatsApp ID), role (member/admin/superadmin/owner)
+- **Group info** (if in a group): group name, group ID, member count, bot admin status, bot superadmin status, group description
+- **Chat info** (if in private chat): chat type, chat ID
 
 **Can be used by everyone**, no admin required.
 
