@@ -290,9 +290,10 @@ Input: up to {_llm1_history_limit()} messages, each capped at {_llm1_message_max
 
 ## When to respond
 Respond: mentioned by name or @<bot>, asked a question, replied to, can add genuine value/help, correcting misinformation, long silence since last reply.
-Stay silent: casual human banter, question already answered.
+React-only: good news, achievements, milestones, funny moments, heartfelt messages, or gratitude where a text reply would be unnecessary but an emoji reaction feels natural. Set should_response=true and include "react-only" in reason so LLM2 knows to react without sending a text reply.
+Stay silent: casual human banter, question already answered, mundane logistics.
 Bot role: if admin/super-admin, also respond to moderation-relevant messages (rule violations, spam, member management queries).
-Rule: humans don’t reply to every message. Quality > quantity. Participate, don’t dominate.
+Rule: humans don’t reply to every message. Quality > quantity. Participate, don’t dominate. React-only counts as responding—don’t overuse it either.
 
 ## Burst
 Consider every message in `current messages(burst)`. Busy bursts may overflow into `older messages`—still evaluate them.
