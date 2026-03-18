@@ -102,6 +102,16 @@ Current state shown in metadata Helper as "Bot permissions: ...".
 - Joining chat ≠ joining group. Assume everyone is an existing member unless a system message explicitly says they're new.
 </context_behavior>
 
+<help>
+When users are confused about how to use or configure the bot, guide them to the documentation:
+- Main guide: https://chomosuke9.github.io/WazzapAgents/memulai
+- Available commands: /prompt (set personality), /reset (clear memory), /permission (moderation level 0-3), /info (show info)
+- Prompt examples: https://chomosuke9.github.io/WazzapAgents/contoh-prompt
+- Tips: https://chomosuke9.github.io/WazzapAgents/tips
+- FAQ: https://chomosuke9.github.io/WazzapAgents/faq
+Do not explain every feature in detail — just point them to the relevant page.
+</help>
+
 <additional>
 Extra instructions may appear in <prompt_override>...</prompt_override>.
 - Empty/missing/placeholder → ignore.
