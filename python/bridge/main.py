@@ -97,7 +97,7 @@ ASSISTANT_ECHO_MERGE_WINDOW_MS = _parse_non_negative_int(
 logger = setup_logging()
 # Accept both canonical <prompt_override> and legacy typo <prompt_overide>.
 PROMPT_OVERIDE_TAG = re.compile(r"<prompt_overr?ide>([\s\S]*?)</prompt_overr?ide>", re.IGNORECASE)
-ACTION_LINE_RE = re.compile(r"^\[?\s*(REPLY_TO|DELETE|KICK)\s*[:=]\s*(.*?)\s*\]?$", re.IGNORECASE)
+ACTION_LINE_RE = re.compile(r"^\[?\s*(REPLY_TO|DELETE|KICK|REACT)\s*[:=]\s*(.*?)\s*\]?$", re.IGNORECASE)
 CONTEXT_MSG_ID_RE = re.compile(r"^<?\s*(\d{6})\s*>?$")
 SENDER_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$")
 EMPTY_TARGET_TOKENS = {"none", "null", "no", "nil", "-", ""}
@@ -1381,6 +1381,16 @@ async def handle_socket(ws):
             )
             action_counts[action_type] += 1
             continue
+          if action_type == "react_message":
+            await send_react_message(
+              ws,
+              chat_id,
+              action.get("contextMsgId"),
+              action.get("emoji"),
+              request_id=_make_request_id("react"),
+            )
+            action_counts[action_type] += 1
+            continue
           logger.warning(
             "unknown action type from parser: %s",
             action_type,
@@ -1640,6 +1650,42 @@ async def send_kick_member(
   )
 
 
+async def send_react_message(
+  ws,
+  chat_id: str,
+  context_msg_id: str | None,
+  emoji: str | None,
+  *,
+  request_id: str,
+):
+  normalized_context_msg_id = _normalize_context_msg_id(context_msg_id)
+  if not normalized_context_msg_id or not emoji:
+    return
+  logger.debug(
+    "outbound",
+    extra={
+      "chat_id": chat_id,
+      "action": "react_message",
+      "request_id": request_id,
+      "context_msg_id": normalized_context_msg_id,
+      "emoji": emoji,
+    },
+  )
+  await ws.send(
+    json.dumps(
+      {
+        "type": "react_message",
+        "payload": {
+          "requestId": request_id,
+          "chatId": chat_id,
+          "contextMsgId": normalized_context_msg_id,
+          "emoji": emoji,
+        },
+      }
+    )
+  )
+
+
 async def send_mark_read(
   ws,
   chat_id: str,
@@ -1825,6 +1871,45 @@ def _parse_kick_targets(
   return parsed_targets
 
 
+REACT_TOKEN_RE = re.compile(r"^(.+?)@(\d{6})$")
+
+
+def _parse_react_targets(
+  token: str | None,
+  *,
+  allowed_context_ids: set[str],
+) -> list[dict[str, str]]:
+  """Parse ``REACT=<emoji@NNNNNN,...>`` value into a list of {emoji, contextMsgId}."""
+  token_value = _unwrap_required_angle_group(token)
+  if token_value is None:
+    return []
+  if _is_empty_target_token(token_value):
+    return []
+
+  targets: list[dict[str, str]] = []
+  dedup: set[tuple[str, str]] = set()
+  for segment in token_value.split(","):
+    segment = segment.strip()
+    cleaned = _unwrap_angle_group(segment)
+    if not cleaned:
+      continue
+    m = REACT_TOKEN_RE.match(cleaned)
+    if not m:
+      continue
+    emoji = m.group(1).strip()
+    context_msg_id = _normalize_context_msg_id(m.group(2))
+    if not emoji or not context_msg_id:
+      continue
+    if allowed_context_ids and context_msg_id not in allowed_context_ids:
+      continue
+    dedup_key = (emoji, context_msg_id)
+    if dedup_key in dedup:
+      continue
+    dedup.add(dedup_key)
+    targets.append({"emoji": emoji, "contextMsgId": context_msg_id})
+  return targets
+
+
 def _extract_actions(
   msg,
   *,
@@ -1901,6 +1986,21 @@ def _extract_actions(
             "targets": kick_targets,
             "mode": "partial_success",
             "autoReplyAnchor": True,
+          }
+        )
+      continue
+
+    if control == "REACT":
+      react_targets = _parse_react_targets(
+        value,
+        allowed_context_ids=allowed_context_ids,
+      )
+      for rt in react_targets:
+        actions.append(
+          {
+            "type": "react_message",
+            "contextMsgId": rt["contextMsgId"],
+            "emoji": rt["emoji"],
           }
         )
 

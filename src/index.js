@@ -3,6 +3,7 @@ import wsClient from './wsClient.js';
 import {
   startWhatsApp,
   sendOutgoing,
+  reactToMessage,
   deleteMessageByContextId,
   kickMembers,
   markChatRead,
@@ -91,6 +92,12 @@ async function dispatchCommand(msg) {
   if (type === 'send_message') {
     const result = await sendOutgoing(payload);
     emitActionAck({ requestId, action: 'send_message', ok: true, detail: 'sent', result });
+    return;
+  }
+
+  if (type === 'react_message') {
+    const result = await reactToMessage(payload);
+    emitActionAck({ requestId, action: 'react_message', ok: true, detail: 'reacted', result });
     return;
   }
 
