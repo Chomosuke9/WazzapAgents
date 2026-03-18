@@ -4,6 +4,7 @@ import Link from '@docusaurus/Link';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
 import Heading from '@theme/Heading';
+import Translate, {translate} from '@docusaurus/Translate';
 import styles from './index.module.css';
 
 function HomepageHeader() {
@@ -14,18 +15,22 @@ function HomepageHeader() {
         <Heading as="h1" className="hero__title">
           {siteConfig.title}
         </Heading>
-        <p className="hero__subtitle">{siteConfig.tagline}</p>
+        <p className="hero__subtitle">
+          <Translate id="homepage.tagline">
+            Bot WhatsApp berbasis AI yang bisa diajak ngobrol, moderasi grup, dan disesuaikan sesukamu.
+          </Translate>
+        </p>
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"
             to="/memulai">
-            Mulai Sekarang
+            <Translate id="homepage.cta.getStarted">Mulai Sekarang</Translate>
           </Link>
           <Link
             className="button button--outline button--lg"
             to="/perintah"
             style={{color: '#fff', borderColor: '#fff'}}>
-            Lihat Perintah
+            <Translate id="homepage.cta.viewCommands">Lihat Perintah</Translate>
           </Link>
         </div>
       </div>
@@ -47,16 +52,28 @@ function Feature({title, description, icon}: {title: string; description: string
 
 function HowItWorks() {
   const steps = [
-    { num: '1', title: 'Tambahkan Bot', desc: 'Masukkan nomor bot ke grup WhatsApp-mu seperti menambah anggota biasa.' },
-    { num: '2', title: 'Atur Prompt', desc: 'Tentukan kepribadian dan aturan bot dengan perintah /prompt.' },
-    { num: '3', title: 'Siap Digunakan!', desc: 'Bot langsung aktif dan bisa diajak ngobrol oleh semua anggota grup.' },
+    {
+      num: '1',
+      title: translate({id: 'homepage.howItWorks.step1.title', message: 'Tambahkan Bot'}),
+      desc: translate({id: 'homepage.howItWorks.step1.desc', message: 'Masukkan nomor bot ke grup WhatsApp-mu seperti menambah anggota biasa.'}),
+    },
+    {
+      num: '2',
+      title: translate({id: 'homepage.howItWorks.step2.title', message: 'Atur Prompt'}),
+      desc: translate({id: 'homepage.howItWorks.step2.desc', message: 'Tentukan kepribadian dan aturan bot dengan perintah /prompt.'}),
+    },
+    {
+      num: '3',
+      title: translate({id: 'homepage.howItWorks.step3.title', message: 'Siap Digunakan!'}),
+      desc: translate({id: 'homepage.howItWorks.step3.desc', message: 'Bot langsung aktif dan bisa diajak ngobrol oleh semua anggota grup.'}),
+    },
   ];
 
   return (
     <section className="how-it-works">
       <div className="container">
         <Heading as="h2" style={{textAlign: 'center', marginBottom: '2rem'}}>
-          Cara Kerja
+          <Translate id="homepage.howItWorks.title">Cara Kerja</Translate>
         </Heading>
         <div className="row" style={{justifyContent: 'center'}}>
           {steps.map((step, idx) => (
@@ -74,18 +91,18 @@ function HowItWorks() {
 
 const features = [
   {
-    title: 'Asisten AI di WhatsApp',
-    description: 'Bot berbasis AI yang bisa mengobrol natural, menjawab pertanyaan, bercanda, dan membantu anggota grup.',
+    title: translate({id: 'homepage.feature1.title', message: 'Asisten AI di WhatsApp'}),
+    description: translate({id: 'homepage.feature1.desc', message: 'Bot berbasis AI yang bisa mengobrol natural, menjawab pertanyaan, bercanda, dan membantu anggota grup.'}),
     icon: '🤖',
   },
   {
-    title: 'Moderasi Otomatis',
-    description: 'Bisa menghapus pesan spam atau mengeluarkan anggota nakal secara otomatis sesuai aturan yang kamu set.',
+    title: translate({id: 'homepage.feature2.title', message: 'Moderasi Otomatis'}),
+    description: translate({id: 'homepage.feature2.desc', message: 'Bisa menghapus pesan spam atau mengeluarkan anggota nakal secara otomatis sesuai aturan yang kamu set.'}),
     icon: '🛡️',
   },
   {
-    title: 'Sepenuhnya Bisa Dikustomisasi',
-    description: 'Atur kepribadian, peran, dan aturan bot dengan perintah /prompt. Berbeda di setiap grup.',
+    title: translate({id: 'homepage.feature3.title', message: 'Sepenuhnya Bisa Dikustomisasi'}),
+    description: translate({id: 'homepage.feature3.desc', message: 'Atur kepribadian, peran, dan aturan bot dengan perintah /prompt. Berbeda di setiap grup.'}),
     icon: '🎨',
   },
 ];
@@ -93,8 +110,8 @@ const features = [
 export default function Home(): ReactNode {
   return (
     <Layout
-      title="Panduan Pengguna"
-      description="Dokumentasi lengkap cara menggunakan WazzapAgents — bot WhatsApp berbasis AI">
+      title={translate({id: 'homepage.layout.title', message: 'Panduan Pengguna'})}
+      description={translate({id: 'homepage.layout.description', message: 'Dokumentasi lengkap cara menggunakan WazzapAgents — bot WhatsApp berbasis AI'})}>
       <HomepageHeader />
       <main>
         <section style={{padding: '3rem 0'}}>

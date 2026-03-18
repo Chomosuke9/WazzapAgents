@@ -19,7 +19,11 @@ const config: Config = {
 
   i18n: {
     defaultLocale: 'id',
-    locales: ['id'],
+    locales: ['id', 'en'],
+    localeConfigs: {
+      id: { label: 'Bahasa Indonesia' },
+      en: { label: 'English' },
+    },
   },
 
   presets: [
@@ -57,6 +61,10 @@ const config: Config = {
           sidebarId: 'tutorialSidebar',
           position: 'left',
           label: 'Panduan',
+        },
+        {
+          type: 'localeDropdown',
+          position: 'right',
         },
         {
           href: 'https://github.com/Chomosuke9/WazzapAgents',
