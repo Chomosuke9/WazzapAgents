@@ -12,13 +12,14 @@ Control lines (output as needed):
 REPLY_TO:<NNNNNN|none>
 DELETE:<NNNNNN,NNNNNN,...>
 KICK:<senderRef@NNNNNN,NNNNNN,...>
-REACT:<emoji@NNNNNN,...>
+REACT:<NNNNNN,...>
+emoji
 
 Rules:
 - `NNNNNN` = 6-digit context message id from chat context.
 - `senderRef` must match one shown in chat context.
 - KICK requires at least one anchor id (`senderRef@NNNNNN`); for multiple senderRefs, use separate KICK lines.
-- REACT adds an emoji reaction to a message; use sparingly for acknowledgement or appreciation. Multiple targets allowed, comma-separated.
+- REACT opens a reaction block; the first non-empty line after it is the emoji applied to the target message(s). Use sparingly for acknowledgement or appreciation.
 - Control lines MUST use the angle-bracket payload form above.
 - Omit `DELETE`/`KICK`/`REACT` when no action needed.
 - `REPLY_TO` opens a reply block; text after it becomes reply content until next `REPLY_TO` or end.
@@ -38,7 +39,8 @@ Examples:
   REPLY_TO:<000123>
   @<u8k2d1> please re-check your last message.
 
-  REACT:<👍@000123>
+  REACT:<000123>
+  👍
 
   KICK:<u8k2d1@000123,000124>
   DELETE:<000123,000124>

@@ -1874,40 +1874,34 @@ def _parse_kick_targets(
 REACT_TOKEN_RE = re.compile(r"^(.+?)@(\d{6})$")
 
 
-def _parse_react_targets(
+def _parse_react_context_ids(
   token: str | None,
   *,
   allowed_context_ids: set[str],
-) -> list[dict[str, str]]:
-  """Parse ``REACT=<emoji@NNNNNN,...>`` value into a list of {emoji, contextMsgId}."""
+) -> list[str]:
+  """Parse ``REACT:<NNNNNN,NNNNNN,...>`` value into a list of context message IDs."""
   token_value = _unwrap_required_angle_group(token)
   if token_value is None:
     return []
   if _is_empty_target_token(token_value):
     return []
 
-  targets: list[dict[str, str]] = []
-  dedup: set[tuple[str, str]] = set()
+  result: list[str] = []
+  seen: set[str] = set()
   for segment in token_value.split(","):
-    segment = segment.strip()
-    cleaned = _unwrap_angle_group(segment)
+    cleaned = _unwrap_angle_group(segment.strip())
     if not cleaned:
       continue
-    m = REACT_TOKEN_RE.match(cleaned)
-    if not m:
-      continue
-    emoji = m.group(1).strip()
-    context_msg_id = _normalize_context_msg_id(m.group(2))
-    if not emoji or not context_msg_id:
+    context_msg_id = _normalize_context_msg_id(cleaned)
+    if not context_msg_id:
       continue
     if allowed_context_ids and context_msg_id not in allowed_context_ids:
       continue
-    dedup_key = (emoji, context_msg_id)
-    if dedup_key in dedup:
+    if context_msg_id in seen:
       continue
-    dedup.add(dedup_key)
-    targets.append({"emoji": emoji, "contextMsgId": context_msg_id})
-  return targets
+    seen.add(context_msg_id)
+    result.append(context_msg_id)
+  return result
 
 
 def _extract_actions(
@@ -1925,6 +1919,8 @@ def _extract_actions(
   reply_declared = False
   reply_target = fallback_reply_to
   reply_lines: list[str] = []
+  react_declared = False
+  react_context_ids: list[str] = []
 
   def flush_reply_block() -> None:
     nonlocal reply_declared, reply_target, reply_lines
@@ -1943,12 +1939,30 @@ def _extract_actions(
     reply_target = fallback_reply_to
     reply_lines = []
 
+  def flush_react_block() -> None:
+    nonlocal react_declared, react_context_ids
+    if not react_declared:
+      return
+    react_declared = False
+    react_context_ids = []
+
   lines = text.splitlines()
   for raw_line in lines:
     stripped = raw_line.strip()
     marker = ACTION_LINE_RE.match(stripped)
     if not marker:
-      if reply_declared:
+      if react_declared and stripped:
+        emoji = stripped
+        for ctx_id in react_context_ids:
+          actions.append(
+            {
+              "type": "react_message",
+              "contextMsgId": ctx_id,
+              "emoji": emoji,
+            }
+          )
+        flush_react_block()
+      elif reply_declared:
         reply_lines.append(raw_line)
       else:
         orphan_lines.append(raw_line)
@@ -1956,6 +1970,9 @@ def _extract_actions(
 
     control = marker.group(1).upper()
     value = marker.group(2).strip()
+
+    flush_react_block()
+
     if control == "REPLY_TO":
       flush_reply_block()
       reply_declared = True
@@ -1991,20 +2008,17 @@ def _extract_actions(
       continue
 
     if control == "REACT":
-      react_targets = _parse_react_targets(
+      flush_reply_block()
+      ctx_ids = _parse_react_context_ids(
         value,
         allowed_context_ids=allowed_context_ids,
       )
-      for rt in react_targets:
-        actions.append(
-          {
-            "type": "react_message",
-            "contextMsgId": rt["contextMsgId"],
-            "emoji": rt["emoji"],
-          }
-        )
+      if ctx_ids:
+        react_declared = True
+        react_context_ids = ctx_ids
 
   flush_reply_block()
+  flush_react_block()
 
   orphan_text = "\n".join(orphan_lines).strip()
   if orphan_text:
