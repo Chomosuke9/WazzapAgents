@@ -1217,9 +1217,10 @@ async def handle_socket(ws):
           llm1_ms = int((time.perf_counter() - llm1_started) * 1000)
 
         # Send read receipt after LLM1 processes (regardless of decision)
-        last_message_id = last_payload.get("messageId")
-        last_participant = last_payload.get("senderId") if last_payload.get("isGroup") else None
-        await send_mark_read(ws, chat_id, last_message_id, last_participant)
+        for _p in trigger_window_payloads:
+          _msg_id = _p.get("messageId")
+          _participant = _p.get("senderId") if _p.get("isGroup") else None
+          await send_mark_read(ws, chat_id, _msg_id, _participant)
 
         for payload in non_empty_payloads:
           _append_or_merge_history_payload(history, payload)
