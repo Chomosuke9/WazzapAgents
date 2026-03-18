@@ -108,11 +108,10 @@ def _handle_prompt(
     # Show current prompt
     current = get_prompt(chat_id)
     if current:
-      preview = current[:200] + ("..." if len(current) > 200 else "")
       return CommandResult(
         command="prompt",
         success=True,
-        reply=f"Current prompt:\n{preview}",
+        reply=f"Current prompt:\n{current}",
       )
     return CommandResult(
       command="prompt",
