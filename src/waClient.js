@@ -162,6 +162,11 @@ function makeSenderRef(chatId, senderId, attempt = 0) {
   return numeric.toString(36).padStart(6, '0').slice(0, 6);
 }
 
+function isPhoneJid(jid) {
+  return typeof jid === 'string'
+    && (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us'));
+}
+
 function rememberSenderRef(chatId, senderId, participantJid = null) {
   if (!chatId || !senderId) return null;
   const canonicalSenderId = normalizeJid(senderId) || senderId;
@@ -170,7 +175,12 @@ function rememberSenderRef(chatId, senderId, participantJid = null) {
 
   const existingRef = registry.senderToRef.get(canonicalSenderId);
   if (existingRef) {
-    registry.senderToParticipant.set(canonicalSenderId, canonicalParticipant);
+    const existingParticipant = registry.senderToParticipant.get(canonicalSenderId);
+    // Don't overwrite a phone-number JID with a non-phone JID (e.g. LID).
+    // WhatsApp mentions require phone-number JIDs to render correctly.
+    if (!isPhoneJid(existingParticipant) || isPhoneJid(canonicalParticipant)) {
+      registry.senderToParticipant.set(canonicalSenderId, canonicalParticipant);
+    }
     return existingRef;
   }
 
@@ -390,6 +400,7 @@ function hydrateGroupParticipantCaches(chatId, participants) {
   if (!chatId || !Array.isArray(participants)) return;
   for (const participant of participants) {
     const aliases = extractParticipantAliases(participant);
+    const preferred = choosePreferredParticipantJid(aliases);
     const name = participantDisplayName(participant);
     if (name) {
       for (const alias of aliases) {
@@ -398,7 +409,7 @@ function hydrateGroupParticipantCaches(chatId, participants) {
       }
     }
     for (const alias of aliases) {
-      rememberSenderRef(chatId, alias, alias);
+      rememberSenderRef(chatId, alias, preferred || alias);
     }
   }
 }
