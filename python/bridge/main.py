@@ -311,14 +311,27 @@ def _replace_mentions_in_text(base_text: str, rows: list[dict], labels: list[str
   return rendered, replaced
 
 
-def _ensure_bot_token_in_text(text: str, *, bot_mentioned: bool) -> str:
+def _bot_jid_from_rows(rows: list[dict]) -> str | None:
+  for row in rows:
+    if bool(row.get("isBot")):
+      return _clean_text(row.get("jid"))
+  return None
+
+
+def _ensure_bot_token_in_text(
+  text: str,
+  *,
+  bot_mentioned: bool,
+  bot_jid: str | None = None,
+) -> str:
   if not bot_mentioned:
     return text
   if "@<bot>" in text:
     return text
-  replaced = re.sub(r"@[0-9]{5,}", "@<bot>", text, count=1)
-  if replaced != text:
-    return replaced
+  if bot_jid:
+    for candidate in _mention_number_candidates({"jid": bot_jid}):
+      if candidate in text:
+        return text.replace(candidate, "@<bot>", 1)
   stripped = text.strip()
   if stripped:
     return f"@<bot> {text}"
@@ -333,21 +346,23 @@ def _payload_text_with_mentions(payload: dict) -> str | None:
 
   rows = _mentioned_participant_rows(payload)
   labels = _mention_labels(payload)
+  bot_mentioned = bool(payload.get("botMentioned"))
+  bot_jid = _bot_jid_from_rows(rows) if rows else None
   if not rows or not labels:
-    normalized = _ensure_bot_token_in_text(base_text, bot_mentioned=bool(payload.get("botMentioned")))
+    normalized = _ensure_bot_token_in_text(base_text, bot_mentioned=bot_mentioned, bot_jid=bot_jid)
     return normalized if normalized else None
 
   rendered, replaced = _replace_mentions_in_text(base_text, rows, labels)
   if replaced > 0:
-    normalized = _ensure_bot_token_in_text(rendered, bot_mentioned=bool(payload.get("botMentioned")))
+    normalized = _ensure_bot_token_in_text(rendered, bot_mentioned=bot_mentioned, bot_jid=bot_jid)
     return normalized
 
   mention_tokens = [f"@{label}" for label in labels]
   if base_text and base_text.strip():
     normalized = f"{' '.join(mention_tokens)} {base_text}"
-    return _ensure_bot_token_in_text(normalized, bot_mentioned=bool(payload.get("botMentioned")))
+    return _ensure_bot_token_in_text(normalized, bot_mentioned=bot_mentioned, bot_jid=bot_jid)
   normalized = " ".join(mention_tokens)
-  return _ensure_bot_token_in_text(normalized, bot_mentioned=bool(payload.get("botMentioned")))
+  return _ensure_bot_token_in_text(normalized, bot_mentioned=bot_mentioned, bot_jid=bot_jid)
 
 
 def _normalize_context_msg_id(value) -> str | None:
