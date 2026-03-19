@@ -366,7 +366,7 @@ class PromptContextTests(unittest.TestCase):
     context_text = prompt[3]["content"]
 
     self.assertNotIn("The latest trigger message has no attached media.", metadata_text)
-    self.assertIn("Reply/quoted metadata includes quoted media.", metadata_text)
+    # quotedHasMedia is surfaced in llm2 context, not in llm1 metadata block
     self.assertIn("quoted_media=image", context_text)
     self.assertNotIn("| media=image", context_text)
 

@@ -278,20 +278,22 @@ Mention token: @<bot>. Always respond when mentioned.
 Input: up to {_llm1_history_limit()} messages, each capped at {_llm1_message_max_chars()} chars.
 
 ## Input format
-- `Current message metadata`: Helper section (mention/reply signals, recency, window size, join-event counts) + Chat state.
-- `Group description`: Topic/rules set by admins. Use it to judge relevance—respond when the message aligns with the group's stated purpose; lean silent when it doesn't.
+- `Current message metadata`: Helper section (mention/reply signals, recency, window size, join-event counts, conversation continuity) + Chat state.
+- `Group description`: Topic/rules set by admins. Use it to judge relevance—respond when the message aligns with the group’s stated purpose; lean silent when it doesn’t.
 - `older messages`: background history. `current messages(burst)`: trigger window.
 - `current message window` = only `current messages(burst)`, not `older messages`.
 - Message ids: 6-digit. `<system>`/`<pending>` = non-actionable markers.
 - Burst may contain multiple combined messages—evaluate all, not just the last line.
 - Sticker-only or media-without-text messages: treat as casual/non-verbal. Stay silent unless the bot is mentioned, replied to, or the media is a direct question (e.g., photo asking "what is this?").
 - New member = explicit system join signal only (not first appearance or "hi").
-- Conversation signals are hints: recently replied + no mention → lean quiet; long silence + active chat → lean helpful.
+- Conversation signals are hints, not hard rules. Use them together with message content to decide.
 
 ## When to respond
 Respond: mentioned by name or @<bot>, asked a question, replied to, can add genuine value/help, correcting misinformation, long silence since last reply.
+Respond (name in text): if the bot’s name appears in message text (even without @mention), the user is likely talking to or about the bot. Lean toward responding unless the context is clearly not directed at the bot.
+Respond (conversation continuity): if the bot recently replied and the current messages continue the same topic, follow up on the bot’s answer, or ask a related question — respond. Do not go silent mid-conversation just because there is no explicit @mention.
 React-only: good news, achievements, milestones, funny moments, heartfelt messages, or gratitude where a text reply would be unnecessary but an emoji reaction feels natural. Set should_response=true and include "react-only" in reason so LLM2 knows to react without sending a text reply.
-Stay silent: casual human banter, question already answered, mundane logistics.
+Stay silent: casual human banter unrelated to the bot, question already answered by someone else, mundane logistics that don’t involve the bot.
 Bot role: if admin/super-admin, also respond to moderation-relevant messages (rule violations, spam, member management queries).
 Rule: humans don’t reply to every message. Quality > quantity. Participate, don’t dominate. React-only counts as responding—don’t overuse it either.
 
@@ -628,20 +630,12 @@ def _metadata_block(current_payload: dict | None) -> str:
   payload = current_payload if isinstance(current_payload, dict) else {}
   bot_mentioned = bool(payload.get("botMentionedInWindow", payload.get("botMentioned")))
   replied_to_bot = bool(payload.get("repliedToBotInWindow", payload.get("repliedToBot")))
-  mention_count = payload.get("botMentionCountInWindow")
-  if mention_count is None:
-    if payload.get("botMentionedInWindow") is not None:
-      mention_count = 1 if bool(payload.get("botMentionedInWindow")) else 0
-    elif payload.get("botMentioned") is not None:
-      mention_count = 1 if bool(payload.get("botMentioned")) else 0
-    else:
-      mention_count = None
+  bot_name_in_text = bool(payload.get("botNameMentionedInText"))
   since_assistant = payload.get("messagesSinceAssistantReply")
   assistant_replies_by_window = payload.get("assistantRepliesByWindow")
   human_window = payload.get("humanMessagesInWindow")
   explicit_join_events = payload.get("explicitJoinEventsInWindow")
   explicit_join_participants = payload.get("explicitJoinParticipantsInWindow")
-  quoted_has_media = payload.get("quotedHasMedia")
   raw_chat_type = str(payload.get("chatType") or "").strip().lower()
   if raw_chat_type not in {"private", "group"}:
     raw_chat_type = "group" if bool(payload.get("isGroup")) else "private"
@@ -666,20 +660,7 @@ def _metadata_block(current_payload: dict | None) -> str:
   def _is_singular_count(value) -> bool:
     return isinstance(value, int) and value == 1
 
-  try:
-    mention_count = int(mention_count)
-  except (TypeError, ValueError):
-    pass
-
-  mention_count_text = _count_phrase(mention_count, "time", "times")
-  if isinstance(mention_count, int):
-    if mention_count > 0:
-      mention_line = f"- Bot is mentioned {mention_count_text} in this current message window."
-    elif bot_mentioned:
-      mention_line = "- Bot is mentioned in this current message window."
-    else:
-      mention_line = "- Bot is not mentioned in this current message window."
-  elif bot_mentioned:
+  if bot_mentioned:
     mention_line = "- Bot is mentioned in this current message window."
   else:
     mention_line = "- Bot is not mentioned in this current message window."
@@ -689,23 +670,12 @@ def _metadata_block(current_payload: dict | None) -> str:
   else:
     reply_line = "- No message in this current message window replies to the bot."
 
-  if quoted_has_media is None:
-    quoted_payload = payload.get("quoted")
-    if isinstance(quoted_payload, dict):
-      quoted_type = str(quoted_payload.get("type") or "").strip().lower()
-      quoted_has_media = any(
-        token in quoted_type
-        for token in ("sticker", "image", "video", "audio", "document")
-      )
-    else:
-      quoted_has_media = False
+  if bot_name_in_text and not bot_mentioned:
+    name_line = "- Bot's name is mentioned in the message text (without explicit @mention). Treat this as a soft mention — the user is likely talking to or about the bot."
+  elif bot_name_in_text and bot_mentioned:
+    name_line = "- Bot's name appears in the message text (already counted as @mention above)."
   else:
-    quoted_has_media = bool(quoted_has_media)
-
-  if quoted_has_media:
-    quoted_media_line = "- Reply/quoted metadata includes quoted media."
-  else:
-    quoted_media_line = "- Reply/quoted metadata does not include quoted media."
+    name_line = None
 
   since_assistant_text = _count_phrase(since_assistant, "message", "messages")
   human_window_text = _count_phrase(human_window, "human message", "human messages")
@@ -752,17 +722,20 @@ def _metadata_block(current_payload: dict | None) -> str:
     join_event_line = "- Explicit system member-join signal count is unknown for this current message window."
 
   assistant_reply_block = "\n".join(assistant_reply_lines)
+  extra_signal_block = ""
+  if name_line:
+    extra_signal_block = f"\n{name_line}"
   return (
     "Current message metadata:\n"
     "Helper:\n"
     "- `current message window` = only `current messages(burst)` (exclude `older messages`).\n"
     f"{mention_line}\n"
     f"{reply_line}\n"
-    f"{quoted_media_line}\n"
     f"- The last assistant reply was {since_assistant_text} ago.\n"
     f"{assistant_reply_block}\n"
     f"{human_window_line}\n"
-    f"{join_event_line}\n"
+    f"{join_event_line}"
+    f"{extra_signal_block}\n"
     "Chat state:\n"
     f"{scope_line}\n"
     f"{role_line}"
