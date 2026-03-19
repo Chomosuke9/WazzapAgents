@@ -639,7 +639,6 @@ def _metadata_block(current_payload: dict | None) -> str:
     else:
       mention_count = None
   bot_name_in_text = bool(payload.get("botNameMentionedInText"))
-  recently_active = bool(payload.get("recentlyActiveInConversation"))
   since_assistant = payload.get("messagesSinceAssistantReply")
   assistant_replies_by_window = payload.get("assistantRepliesByWindow")
   human_window = payload.get("humanMessagesInWindow")
@@ -699,11 +698,6 @@ def _metadata_block(current_payload: dict | None) -> str:
     name_line = "- Bot's name appears in the message text (already counted as @mention above)."
   else:
     name_line = None
-
-  if recently_active:
-    continuity_line = "- Bot recently participated in this conversation (conversation continuity). If the current messages continue the same topic or follow up on the bot's previous reply, lean toward responding."
-  else:
-    continuity_line = None
 
   if quoted_has_media is None:
     quoted_payload = payload.get("quoted")
@@ -768,14 +762,9 @@ def _metadata_block(current_payload: dict | None) -> str:
     join_event_line = "- Explicit system member-join signal count is unknown for this current message window."
 
   assistant_reply_block = "\n".join(assistant_reply_lines)
-  extra_signal_lines: list[str] = []
+  extra_signal_block = ""
   if name_line:
-    extra_signal_lines.append(name_line)
-  if continuity_line:
-    extra_signal_lines.append(continuity_line)
-  extra_signal_block = "\n".join(extra_signal_lines)
-  if extra_signal_block:
-    extra_signal_block = f"\n{extra_signal_block}"
+    extra_signal_block = f"\n{name_line}"
   return (
     "Current message metadata:\n"
     "Helper:\n"

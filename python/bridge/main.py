@@ -793,16 +793,6 @@ def _bot_name_mentioned_in_payloads(payloads: list[dict], bot_name: str) -> bool
   return False
 
 
-def _recently_active_in_conversation(
-  history_messages: list[WhatsAppMessage],
-  window_payloads: list[dict] | None = None,
-  threshold: int = 6,
-) -> bool:
-  """Check if the bot recently participated in the conversation (within last N messages)."""
-  msgs_since = _messages_since_last_assistant(history_messages, window_payloads)
-  return msgs_since <= threshold
-
-
 def _build_llm1_context_metadata(
   history_before_current: list[WhatsAppMessage],
   trigger_window_payloads: list[dict],
@@ -824,16 +814,6 @@ def _build_llm1_context_metadata(
   # Detect bot name mentioned in text (without explicit @mention)
   configured_bot_name = assistant_name()
   bot_name_in_text = _bot_name_mentioned_in_payloads(human_payloads, configured_bot_name)
-
-  # Detect if bot was recently active in the conversation
-  messages_since = _messages_since_last_assistant(
-    history_before_current,
-    effective_window_payloads,
-  )
-  recently_active = _recently_active_in_conversation(
-    history_before_current,
-    effective_window_payloads,
-  )
 
   explicit_join_payloads = [
     payload for payload in effective_window_payloads if _payload_has_explicit_join_event(payload)
@@ -878,10 +858,12 @@ def _build_llm1_context_metadata(
     "repliedToBotInWindow": replied_to_bot_in_window,
     "botMentionCountInWindow": bot_mention_count_in_window,
     "botNameMentionedInText": bot_name_in_text,
-    "recentlyActiveInConversation": recently_active,
     "currentHasMedia": current_has_media,
     "quotedHasMedia": quoted_has_media,
-    "messagesSinceAssistantReply": messages_since,
+    "messagesSinceAssistantReply": _messages_since_last_assistant(
+      history_before_current,
+      effective_window_payloads,
+    ),
     "assistantRepliesByWindow": assistant_replies_by_window,
     "humanMessagesInWindow": len(human_payloads),
     "explicitJoinEventsInWindow": len(explicit_join_payloads),
