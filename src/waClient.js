@@ -389,12 +389,16 @@ function participantDisplayName(participant) {
 function hydrateGroupParticipantCaches(chatId, participants) {
   if (!chatId || !Array.isArray(participants)) return;
   for (const participant of participants) {
-    const name = participantDisplayName(participant);
-    if (!name) continue;
     const aliases = extractParticipantAliases(participant);
+    const name = participantDisplayName(participant);
+    if (name) {
+      for (const alias of aliases) {
+        rememberParticipantName(alias, name);
+        cacheSetBounded(groupParticipantNameCache, groupParticipantKey(chatId, alias), name);
+      }
+    }
     for (const alias of aliases) {
-      rememberParticipantName(alias, name);
-      cacheSetBounded(groupParticipantNameCache, groupParticipantKey(chatId, alias), name);
+      rememberSenderRef(chatId, alias, alias);
     }
   }
 }
@@ -2062,6 +2066,8 @@ async function startWhatsApp() {
 function mentionHandleForJid(jid) {
   if (!jid || typeof jid !== 'string') return null;
   const normalized = normalizeJid(jid) || jid;
+  const name = lookupParticipantName(normalized);
+  if (name) return `@${name}`;
   const local = String(normalized).split('@')[0] || '';
   const cleaned = local.replace(/[^0-9A-Za-z._-]/g, '');
   if (!cleaned) return null;
