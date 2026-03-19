@@ -2062,6 +2062,8 @@ async function startWhatsApp() {
 function mentionHandleForJid(jid) {
   if (!jid || typeof jid !== 'string') return null;
   const normalized = normalizeJid(jid) || jid;
+  const name = lookupParticipantName(normalized);
+  if (name) return `@${name}`;
   const local = String(normalized).split('@')[0] || '';
   const cleaned = local.replace(/[^0-9A-Za-z._-]/g, '');
   if (!cleaned) return null;
