@@ -630,21 +630,12 @@ def _metadata_block(current_payload: dict | None) -> str:
   payload = current_payload if isinstance(current_payload, dict) else {}
   bot_mentioned = bool(payload.get("botMentionedInWindow", payload.get("botMentioned")))
   replied_to_bot = bool(payload.get("repliedToBotInWindow", payload.get("repliedToBot")))
-  mention_count = payload.get("botMentionCountInWindow")
-  if mention_count is None:
-    if payload.get("botMentionedInWindow") is not None:
-      mention_count = 1 if bool(payload.get("botMentionedInWindow")) else 0
-    elif payload.get("botMentioned") is not None:
-      mention_count = 1 if bool(payload.get("botMentioned")) else 0
-    else:
-      mention_count = None
   bot_name_in_text = bool(payload.get("botNameMentionedInText"))
   since_assistant = payload.get("messagesSinceAssistantReply")
   assistant_replies_by_window = payload.get("assistantRepliesByWindow")
   human_window = payload.get("humanMessagesInWindow")
   explicit_join_events = payload.get("explicitJoinEventsInWindow")
   explicit_join_participants = payload.get("explicitJoinParticipantsInWindow")
-  quoted_has_media = payload.get("quotedHasMedia")
   raw_chat_type = str(payload.get("chatType") or "").strip().lower()
   if raw_chat_type not in {"private", "group"}:
     raw_chat_type = "group" if bool(payload.get("isGroup")) else "private"
@@ -669,20 +660,7 @@ def _metadata_block(current_payload: dict | None) -> str:
   def _is_singular_count(value) -> bool:
     return isinstance(value, int) and value == 1
 
-  try:
-    mention_count = int(mention_count)
-  except (TypeError, ValueError):
-    pass
-
-  mention_count_text = _count_phrase(mention_count, "time", "times")
-  if isinstance(mention_count, int):
-    if mention_count > 0:
-      mention_line = f"- Bot is mentioned {mention_count_text} in this current message window."
-    elif bot_mentioned:
-      mention_line = "- Bot is mentioned in this current message window."
-    else:
-      mention_line = "- Bot is not mentioned in this current message window."
-  elif bot_mentioned:
+  if bot_mentioned:
     mention_line = "- Bot is mentioned in this current message window."
   else:
     mention_line = "- Bot is not mentioned in this current message window."
@@ -698,24 +676,6 @@ def _metadata_block(current_payload: dict | None) -> str:
     name_line = "- Bot's name appears in the message text (already counted as @mention above)."
   else:
     name_line = None
-
-  if quoted_has_media is None:
-    quoted_payload = payload.get("quoted")
-    if isinstance(quoted_payload, dict):
-      quoted_type = str(quoted_payload.get("type") or "").strip().lower()
-      quoted_has_media = any(
-        token in quoted_type
-        for token in ("sticker", "image", "video", "audio", "document")
-      )
-    else:
-      quoted_has_media = False
-  else:
-    quoted_has_media = bool(quoted_has_media)
-
-  if quoted_has_media:
-    quoted_media_line = "- Reply/quoted metadata includes quoted media."
-  else:
-    quoted_media_line = "- Reply/quoted metadata does not include quoted media."
 
   since_assistant_text = _count_phrase(since_assistant, "message", "messages")
   human_window_text = _count_phrase(human_window, "human message", "human messages")
@@ -771,7 +731,6 @@ def _metadata_block(current_payload: dict | None) -> str:
     "- `current message window` = only `current messages(burst)` (exclude `older messages`).\n"
     f"{mention_line}\n"
     f"{reply_line}\n"
-    f"{quoted_media_line}\n"
     f"- The last assistant reply was {since_assistant_text} ago.\n"
     f"{assistant_reply_block}\n"
     f"{human_window_line}\n"

@@ -815,6 +815,14 @@ def _build_llm1_context_metadata(
   configured_bot_name = assistant_name()
   bot_name_in_text = _bot_name_mentioned_in_payloads(human_payloads, configured_bot_name)
 
+  trigger_payload = (
+    effective_window_payloads[-1]
+    if effective_window_payloads
+    else (trigger_window_payloads[-1] if trigger_window_payloads else {})
+  )
+  current_has_media = bool(_infer_media(trigger_payload))
+  quoted_has_media = bool(_infer_quoted_media(_quoted_from_payload(trigger_payload)))
+
   explicit_join_payloads = [
     payload for payload in effective_window_payloads if _payload_has_explicit_join_event(payload)
   ]
@@ -830,14 +838,6 @@ def _build_llm1_context_metadata(
       token = _clean_text(participant)
       if token:
         explicit_join_participants.add(token.lower())
-
-  trigger_payload = (
-    effective_window_payloads[-1]
-    if effective_window_payloads
-    else (trigger_window_payloads[-1] if trigger_window_payloads else {})
-  )
-  current_has_media = bool(_infer_media(trigger_payload))
-  quoted_has_media = bool(_infer_quoted_media(_quoted_from_payload(trigger_payload)))
 
   history_limit = _llm1_history_limit_for_metadata()
   standard_windows = [20, 50, 100, 200]
