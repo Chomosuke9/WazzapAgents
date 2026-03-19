@@ -389,12 +389,16 @@ function participantDisplayName(participant) {
 function hydrateGroupParticipantCaches(chatId, participants) {
   if (!chatId || !Array.isArray(participants)) return;
   for (const participant of participants) {
-    const name = participantDisplayName(participant);
-    if (!name) continue;
     const aliases = extractParticipantAliases(participant);
+    const name = participantDisplayName(participant);
+    if (name) {
+      for (const alias of aliases) {
+        rememberParticipantName(alias, name);
+        cacheSetBounded(groupParticipantNameCache, groupParticipantKey(chatId, alias), name);
+      }
+    }
     for (const alias of aliases) {
-      rememberParticipantName(alias, name);
-      cacheSetBounded(groupParticipantNameCache, groupParticipantKey(chatId, alias), name);
+      rememberSenderRef(chatId, alias, alias);
     }
   }
 }
