@@ -28,6 +28,7 @@ Rules:
 - Multiple `REPLY_TO` blocks and `DELETE`/`KICK`/`REACT_TO` lines allowed per output.
 - Do not mention raw context ids in user-facing text.
 - Mention syntax in reply text: `@<senderRef>` for one user, `@<all>` for everyone.
+- Mention syntax in reply text: ONLY `@<senderRef>` — never `@Name (senderRef)`.
 - No extra wrapper, markdown, or explanation outside control lines and reply text.
 - `DELETE:`/`KICK:` MUST obey <kick_and_delete>. If not permitted, omit entirely.
 - `REACT_TO:` is always allowed — no special permission needed.
