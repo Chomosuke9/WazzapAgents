@@ -314,9 +314,9 @@ Input: up to {_llm1_history_limit()} messages, each capped at {_llm1_message_max
 Respond (conversation continuity): ONLY if the bot recently replied AND the current message is a direct follow-up question specifically to the bot’s last reply. The topic still being active is NOT sufficient reason to respond. If humans have taken over the topic, exit the conversation.
 Respond (name in text): ONLY if the bot’s name appears in a sentence directed AT the bot (e.g., "[name], bisa tolong...?", "hey [name] what is...").
 MUST NOT respond if the bot’s name appears in third-person reference:
-- "tadi si [name] bilang..." → talking ABOUT the bot, not TO it
-- "[name] udah jawab itu" → referencing bot’s prior message
-- "kata [name]..." → quoting the bot in human conversation
+- "[name] said earlier..." → talking ABOUT the bot, not TO it
+- "[name] already answered that" → referencing bot’s prior message
+- "according to [name]..." → quoting the bot in human conversation
 These are S2 (referenced, not addressed) per Goffman (1981) — ratified bystander, not addressee.
 Respond (gap coverage): if `messagesSinceAssistantReply >= 8` AND the latest message is an unanswered question or help request. Do NOT use "long silence" as a reason to respond to non-question messages.
 React-only: good news, achievements, milestones, funny moments, heartfelt messages, or gratitude where a text reply would be unnecessary but an emoji reaction feels natural. Set should_response=true and include "react-only" in reason so LLM2 knows to react without sending a text reply.
