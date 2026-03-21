@@ -214,7 +214,7 @@ LLM1_REACT_SCHEMA = {
         "type": "string",
         "description": "A single emoji to react with (e.g. 👍, 😂, ❤️, 🔥, 😢).",
         "minLength": 1,
-        "maxLength": 16,
+        "maxLength": 1,
       },
       "context_msg_id": {
         "type": "string",
@@ -253,8 +253,7 @@ LLM1_REACT_TOOL = {
     "name": LLM1_REACT_SCHEMA["name"],
     "description": (
       "React to a message with an emoji instead of sending a text reply. "
-      "Use this when the situation calls for an emoji reaction only (no text response needed). "
-      "This skips the response generator entirely."
+      "Use this when the situation calls for an emoji reaction only (no text response needed)."
     ),
     "parameters": LLM1_REACT_SCHEMA["parameters"],
     "strict": True,
@@ -338,9 +337,7 @@ Call exactly one tool — either `llm_should_response` or `llm_react_only`. No o
 Args: should_response (bool), confidence (0-100), reason (1-3 sentences, 12-60 words, max 320 chars).
 Reason is forwarded to LLM2—keep it specific and actionable, no generic phrases or chain-of-thought.
 
-`llm_react_only` — send an emoji reaction directly, skipping the response generator entirely. Much faster than a full response.
-Args: emoji (single emoji), context_msg_id (6-digit id of the target message), confidence (0-100), reason (1-2 sentences, max 320 chars).
-Use this for REACT-ONLY tier situations instead of routing through llm_should_response with "react-only" in reason.
+`llm_react_only` — react to a message with an emoji instead of sending a text reply.
 
 Mention token: @<bot>. Always respond when mentioned.
 Input: up to {_llm1_history_limit()} messages, each capped at {_llm1_message_max_chars()} chars.
@@ -387,7 +384,7 @@ Respond (conversation continuity): ONLY if the bot recently replied AND the curr
 Respond (name in text): ONLY if the bot’s name appears in a sentence directed AT the bot (e.g., "[name], can you help...?", "hey [name] what is...").
 If the bot’s name appears in third-person reference ("[name] said earlier...", "[name] already answered that", "according to [name]..."), use react-only — do not send a text reply.
 Respond (gap coverage): if the last assistant reply was 8+ messages ago AND the latest message is an unanswered question or help request. Do NOT use "long silence" as a reason to respond to non-question messages.
-React-only: Use `llm_react_only` tool to send an emoji reaction directly. Pick the most fitting single emoji and target the relevant message by its 6-digit contextMsgId. This skips LLM2 entirely for faster reactions.
+React-only: Use `llm_react_only` tool. Pick the most fitting single emoji and target the relevant message by its 6-digit contextMsgId.
 Bot role: check the "Chat state" in metadata. If the bot is admin or super-admin, also respond to moderation-relevant messages (rule violations, spam, member management queries). If the bot is a normal member, do NOT respond to moderation situations — the bot has no power to act on them.
 Rule: humans don’t reply to every message. Quality > quantity. Participate, don’t dominate.
 
