@@ -2101,6 +2101,7 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   }
 
   let resolvedGroup = groupContext;
+  let retried = false;
   let cursor = 0;
   let rendered = '';
   const mentionSet = new Set();
@@ -2129,14 +2130,14 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
         }
       }
       replacement = '@all';
-    } else if (normalizedValue === 'bot') {
-      const botJid = normalizeJid(sock?.user?.id);
-      if (botJid) {
-        mentionSet.add(botJid);
-        replacement = mentionHandleForJid(botJid) || '@bot';
-      }
     } else if (normalizedValue) {
-      const participantJid = resolveMentionTargetBySenderRef(chatId, normalizedValue);
+      let participantJid = resolveMentionTargetBySenderRef(chatId, normalizedValue);
+      if (!participantJid && !retried && chatId?.endsWith('@g.us')) {
+        logger.debug({ chatId, senderRef: normalizedValue }, 'senderRef not found — force-refreshing group metadata');
+        resolvedGroup = await getGroupContext(chatId, { forceRefresh: true });
+        retried = true;
+        participantJid = resolveMentionTargetBySenderRef(chatId, normalizedValue);
+      }
       if (participantJid) {
         const normalizedParticipant = normalizeJid(participantJid) || participantJid;
         mentionSet.add(normalizedParticipant);
