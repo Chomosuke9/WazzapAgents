@@ -2129,12 +2129,20 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
         }
       }
       replacement = '@all';
+    } else if (normalizedValue === 'bot') {
+      const botJid = normalizeJid(sock?.user?.id);
+      if (botJid) {
+        mentionSet.add(botJid);
+        replacement = mentionHandleForJid(botJid) || '@bot';
+      }
     } else if (normalizedValue) {
       const participantJid = resolveMentionTargetBySenderRef(chatId, normalizedValue);
       if (participantJid) {
         const normalizedParticipant = normalizeJid(participantJid) || participantJid;
         mentionSet.add(normalizedParticipant);
         replacement = mentionHandleForJid(normalizedParticipant) || replacement;
+      } else {
+        logger.warn({ chatId, senderRef: normalizedValue }, 'outbound mention resolution failed — token will render as plain text');
       }
     }
 
@@ -2143,9 +2151,15 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   }
 
   rendered += rawText.slice(cursor);
+  const mentionsArray = Array.from(mentionSet);
+  for (const jid of mentionsArray) {
+    if (!isPhoneJid(jid)) {
+      logger.warn({ chatId, jid }, 'outbound mention contains non-phone JID — may not render as clickable');
+    }
+  }
   return {
     text: rendered,
-    mentions: Array.from(mentionSet),
+    mentions: mentionsArray,
     groupContext: resolvedGroup,
   };
 }
