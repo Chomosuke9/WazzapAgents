@@ -2101,6 +2101,7 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   }
 
   let resolvedGroup = groupContext;
+  let retried = false;
   let cursor = 0;
   let rendered = '';
   const mentionSet = new Set();
@@ -2130,11 +2131,19 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
       }
       replacement = '@all';
     } else if (normalizedValue) {
-      const participantJid = resolveMentionTargetBySenderRef(chatId, normalizedValue);
+      let participantJid = resolveMentionTargetBySenderRef(chatId, normalizedValue);
+      if (!participantJid && !retried && chatId?.endsWith('@g.us')) {
+        logger.debug({ chatId, senderRef: normalizedValue }, 'senderRef not found — force-refreshing group metadata');
+        resolvedGroup = await getGroupContext(chatId, { forceRefresh: true });
+        retried = true;
+        participantJid = resolveMentionTargetBySenderRef(chatId, normalizedValue);
+      }
       if (participantJid) {
         const normalizedParticipant = normalizeJid(participantJid) || participantJid;
         mentionSet.add(normalizedParticipant);
         replacement = mentionHandleForJid(normalizedParticipant) || replacement;
+      } else {
+        logger.warn({ chatId, senderRef: normalizedValue }, 'outbound mention resolution failed — token will render as plain text');
       }
     }
 
@@ -2143,9 +2152,15 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   }
 
   rendered += rawText.slice(cursor);
+  const mentionsArray = Array.from(mentionSet);
+  for (const jid of mentionsArray) {
+    if (!isPhoneJid(jid)) {
+      logger.warn({ chatId, jid }, 'outbound mention contains non-phone JID — may not render as clickable');
+    }
+  }
   return {
     text: rendered,
-    mentions: Array.from(mentionSet),
+    mentions: mentionsArray,
     groupContext: resolvedGroup,
   };
 }
