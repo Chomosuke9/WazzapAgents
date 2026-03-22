@@ -205,11 +205,70 @@ LLM1_TOOL = {
   },
 }
 
+LLM1_REACT_SCHEMA = {
+  "name": "llm_react_only",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "emoji": {
+        "type": "string",
+        "description": "A single emoji to react with (e.g. 👍, 😂, ❤️, 🔥, 😢).",
+        "minLength": 1,
+        "maxLength": 1,
+      },
+      "context_msg_id": {
+        "type": "string",
+        "description": (
+          "The 6-digit contextMsgId of the message to react to. "
+          "Use the id from current messages(burst). "
+          "Use the last message id if reacting to the most recent message."
+        ),
+        "minLength": 6,
+        "maxLength": 6,
+      },
+      "confidence": {
+        "type": "integer",
+        "description": "Confidence percentage (0-100) about the reaction decision.",
+        "minimum": 0,
+        "maximum": 100,
+      },
+      "reason": {
+        "type": "string",
+        "description": (
+          "A concise reason for reacting. "
+          "1-2 short sentences (max 320 chars)."
+        ),
+        "minLength": 2,
+        "maxLength": 320,
+      },
+    },
+    "required": ["emoji", "context_msg_id", "confidence", "reason"],
+    "additionalProperties": False,
+  },
+}
+
+LLM1_REACT_TOOL = {
+  "type": "function",
+  "function": {
+    "name": LLM1_REACT_SCHEMA["name"],
+    "description": (
+      "React to a message with an emoji instead of sending a text reply. "
+      "Use this when the situation calls for an emoji reaction only (no text response needed)."
+    ),
+    "parameters": LLM1_REACT_SCHEMA["parameters"],
+    "strict": True,
+  },
+}
+
+LLM1_TOOLS = [LLM1_TOOL, LLM1_REACT_TOOL]
+
 
 class LLM1Decision(BaseModel):
   should_response: bool = Field(..., description="Whether to respond")
   confidence: int = Field(..., ge=0, le=100)
   reason: str = Field(..., min_length=2, max_length=320)
+  react_emoji: str | None = Field(default=None, description="Emoji for react-only decisions")
+  react_context_msg_id: str | None = Field(default=None, description="Target message contextMsgId for react-only")
 
 
 def _render_prompt_override(base_system: str, prompt_override: str | None) -> str:
@@ -272,9 +331,14 @@ def build_llm1_prompt(
 You are a WhatsApp router agent ({configured_assistant_name}). Decide whether to respond.
 Core rule: Default state is SILENT. Respond only when evidence clearly justifies it. Being talked ABOUT is not being talked TO. An active conversation you were not invited into is not yours to join. When in doubt, stay silent — silence is the correct behavior for most messages.
 
-Call `llm_should_response` exactly once. No other text output.
+Call exactly one tool — either `llm_should_response` or `llm_react_only`. No other text output.
+
+`llm_should_response` — route to response generator or skip entirely.
 Args: should_response (bool), confidence (0-100), reason (1-3 sentences, 12-60 words, max 320 chars).
 Reason is forwarded to LLM2—keep it specific and actionable, no generic phrases or chain-of-thought.
+
+`llm_react_only` — react to a message with an emoji instead of sending a text reply.
+
 Mention token: @<bot>. Always respond when mentioned.
 Input: up to {_llm1_history_limit()} messages, each capped at {_llm1_message_max_chars()} chars.
 
@@ -302,11 +366,11 @@ Input: up to {_llm1_history_limit()} messages, each capped at {_llm1_message_max
 **MAY RESPOND** (confidence 40–60) — use careful judgment:
 - Bot is in an active thread (last assistant reply was recent, within ~2 messages) AND the message is a direct follow-up question to the bot’s last reply specifically
 
-**REACT-ONLY** — set should_response=true with "react-only" in reason:
+**REACT-ONLY** — call `llm_react_only` with the appropriate emoji and target message id:
 - Emotional/social content: jokes, congratulations, venting, grief, excitement — a reaction acknowledges without intruding
 - Memes or humor between humans — a reaction fits naturally
 - Bot’s name appears in third-person reference ("[name] said earlier...", "according to [name]...") — react to confirm presence, do not reply
-- Question already answered correctly by a human — react to confirm the answer. But if the human’s answer is wrong, respond with a correction instead
+- Question already answered correctly by a human — react to confirm the answer. But if the human’s answer is wrong, respond with a correction instead (use `llm_should_response` with should_response=true)
 - Good news, achievements, milestones, heartfelt messages, or gratitude where a text reply is unnecessary
 
 **MUST NOT RESPOND (text or react)** — this is the DEFAULT when no tier above matches:
@@ -320,7 +384,7 @@ Respond (conversation continuity): ONLY if the bot recently replied AND the curr
 Respond (name in text): ONLY if the bot’s name appears in a sentence directed AT the bot (e.g., "[name], can you help...?", "hey [name] what is...").
 If the bot’s name appears in third-person reference ("[name] said earlier...", "[name] already answered that", "according to [name]..."), use react-only — do not send a text reply.
 Respond (gap coverage): if the last assistant reply was 8+ messages ago AND the latest message is an unanswered question or help request. Do NOT use "long silence" as a reason to respond to non-question messages.
-React-only: LLM1 only decides WHETHER to react. LLM2 decides which messages to react to and what emoji to use. When routing as react-only, include "react-only" in reason so LLM2 knows not to send a text reply.
+React-only: Use `llm_react_only` tool. Pick the most fitting single emoji and target the relevant message by its 6-digit contextMsgId.
 Bot role: check the "Chat state" in metadata. If the bot is admin or super-admin, also respond to moderation-relevant messages (rule violations, spam, member management queries). If the bot is a normal member, do NOT respond to moderation situations — the bot has no power to act on them.
 Rule: humans don’t reply to every message. Quality > quantity. Participate, don’t dominate.
 
@@ -895,26 +959,26 @@ async def call_llm1(
         "temperature": llm1_temperature,
         "max_tokens": llm1_max_tokens,
         "reasoning_effort": reasoning_effort,
-        "tool_name": LLM1_TOOL["function"]["name"],
+        "tool_names": [t["function"]["name"] for t in LLM1_TOOLS],
       },
     )
 
     async def _invoke_once(llm_client: ChatOpenAI):
       try:
         llm_with_tool = llm_client.bind_tools(
-          [LLM1_TOOL],
-          tool_choice=LLM1_TOOL["function"]["name"],
+          LLM1_TOOLS,
+          tool_choice="required",
         )
       except Exception as err:
         logger.warning(
-          "LLM1 bind_tools with explicit tool_choice failed; retrying default bind_tools",
+          "LLM1 bind_tools with tool_choice=required failed; retrying default bind_tools",
           exc_info=err,
           extra={
             **ctx,
             "error_type": type(err).__name__,
           },
         )
-        llm_with_tool = llm_client.bind_tools([LLM1_TOOL])
+        llm_with_tool = llm_client.bind_tools(LLM1_TOOLS)
       return await llm_with_tool.ainvoke(_prompt_to_langchain_messages(prompt))
 
     try:
@@ -1086,22 +1150,39 @@ async def call_llm1(
         continue
       return last_failure
 
-    tool_name = LLM1_TOOL["function"]["name"]
-    tool_call = next(
-      (
-        tc
-        for tc in tool_calls
-        if isinstance(tc, dict)
-        and (
-          tc.get("name") == tool_name
-          or (
-            isinstance(tc.get("function"), dict)
-            and tc["function"].get("name") == tool_name
-          )
-        )
-      ),
-      tool_calls[0],
-    )
+    # Detect which tool was called: llm_should_response or llm_react_only
+    respond_tool_name = LLM1_TOOL["function"]["name"]
+    react_tool_name = LLM1_REACT_TOOL["function"]["name"]
+
+    def _get_tool_call_name(tc) -> str | None:
+      if isinstance(tc, dict):
+        name = tc.get("name")
+        if name:
+          return str(name)
+        fn = tc.get("function")
+        if isinstance(fn, dict):
+          return fn.get("name")
+      else:
+        name = getattr(tc, "name", None)
+        if name:
+          return str(name)
+        fn = getattr(tc, "function", None)
+        if isinstance(fn, dict):
+          return fn.get("name")
+      return None
+
+    # Find the first recognized tool call
+    tool_call = None
+    called_tool_name = None
+    for tc in tool_calls:
+      tc_name = _get_tool_call_name(tc)
+      if tc_name in (respond_tool_name, react_tool_name):
+        tool_call = tc
+        called_tool_name = tc_name
+        break
+    if tool_call is None:
+      tool_call = tool_calls[0]
+      called_tool_name = _get_tool_call_name(tool_call)
 
     args = _extract_tool_args(tool_call)
     if not args:
@@ -1125,6 +1206,49 @@ async def call_llm1(
         continue
       return last_failure
 
+    # Handle llm_react_only tool call
+    if called_tool_name == react_tool_name:
+      react_emoji = str(args.get("emoji") or "").strip()
+      react_context_msg_id = str(args.get("context_msg_id") or "").strip()
+      react_confidence = args.get("confidence", 50)
+      react_reason = str(args.get("reason") or "react-only").strip()
+      if not react_emoji or not react_context_msg_id:
+        logger.warning(
+          "LLM1 llm_react_only missing emoji or context_msg_id",
+          extra={**ctx, "raw_args": args, "will_try_fallback_target": has_next_target},
+        )
+        last_failure = LLM1Decision(should_response=False, confidence=10, reason="llm1_invalid_react_tool")
+        if has_next_target:
+          continue
+        return last_failure
+      decision = LLM1Decision(
+        should_response=False,
+        confidence=react_confidence if isinstance(react_confidence, int) else 50,
+        reason=react_reason[:320],
+        react_emoji=react_emoji,
+        react_context_msg_id=react_context_msg_id,
+      )
+      logger.info(
+        'LLM1 react-only decision: emoji=%s target=%s conf=%s%% reason="%s" elapsed=%sms',
+        react_emoji,
+        react_context_msg_id,
+        decision.confidence,
+        trunc(" ".join((decision.reason or "").split()), 220),
+        elapsed_ms,
+        extra={
+          **ctx,
+          "source": "react_tool_call",
+          "should_response": False,
+          "react_emoji": react_emoji,
+          "react_context_msg_id": react_context_msg_id,
+          "confidence": decision.confidence,
+          "reason": decision.reason,
+          "elapsed_ms": elapsed_ms,
+        },
+      )
+      return decision
+
+    # Handle llm_should_response tool call (existing behavior)
     try:
       decision = LLM1Decision.model_validate(args)
     except ValidationError as err:
