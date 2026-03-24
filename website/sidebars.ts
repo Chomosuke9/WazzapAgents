@@ -45,6 +45,18 @@ const sidebars: SidebarsConfig = {
       id: 'faq',
       label: 'FAQ',
     },
+    {
+      type: 'category',
+      label: 'Dokumentasi Developer',
+      items: [
+        'dev/arsitektur',
+        'dev/setup',
+        'dev/gateway',
+        'dev/bridge',
+        'dev/protokol',
+        'dev/kontribusi',
+      ],
+    },
   ],
 };
 

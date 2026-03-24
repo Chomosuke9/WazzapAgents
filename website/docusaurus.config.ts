@@ -85,6 +85,14 @@ const config: Config = {
           ],
         },
         {
+          title: 'Developer',
+          items: [
+            { label: 'Arsitektur', to: '/dev/arsitektur' },
+            { label: 'Setup Development', to: '/dev/setup' },
+            { label: 'Protokol WebSocket', to: '/dev/protokol' },
+          ],
+        },
+        {
           title: 'Lainnya',
           items: [
             {
