@@ -1,57 +1,69 @@
 import path from 'path';
-import fs from 'fs-extra';
 import { spawn } from 'child_process';
-import { createHash } from 'crypto';
 import makeWASocket, {
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
   DisconnectReason,
-  getContentType,
-  downloadContentFromMessage,
-  jidNormalizedUser,
-  normalizeMessageContent,
-  WAMessageStubType,
 } from 'baileys';
 import logger from './logger.js';
 import config from './config.js';
-import { streamToFile } from './utils.js';
 import wsClient from './wsClient.js';
+import {
+  messageCache,
+  GROUP_JOIN_STUB_TYPES,
+} from './caches.js';
+import {
+  normalizeJid,
+  normalizeContextMsgId,
+  messageIdIndexKey,
+  nextContextMsgId,
+  isPhoneJid,
+  rememberSenderRef,
+  resolveSenderByRef,
+  resolveParticipantBySenderId,
+  rememberMessageKeyIndex,
+  getIndexedMessageByContextId,
+  ensureContextMsgId,
+  rememberMessage,
+  resolveQuotedMessage,
+  mentionHandleForJid,
+  resolveMentionTargetBySenderRef,
+} from './identifiers.js';
+import {
+  compactParticipantJids,
+  rememberParticipantName,
+  lookupParticipantName,
+  roleFlagsForJid,
+  fallbackParticipantLabel,
+  normalizeKickTargets,
+  isOwnerJid,
+} from './participants.js';
+import {
+  setSockAccessor,
+  currentBotAliases,
+  defaultGroupContext,
+  getCachedGroupMetadata,
+  invalidateGroupMetadata,
+  getGroupContext,
+  getGroupParticipantName,
+  normalizeGroupJoinAction,
+  parseGroupJoinStub,
+  dedupeGroupJoinEvent,
+} from './groupContext.js';
+import {
+  unwrapMessage,
+  extractMentionedJids,
+  extractLocationData,
+  formatLocationText,
+  extractText,
+  extractQuoted,
+} from './messageParser.js';
+import {
+  resolveAllowedAttachmentPath,
+  saveMedia,
+} from './mediaHandler.js';
 
 let sock;
-const messageCache = new Map(); // simple in-memory store for quoting outbound
-const MAX_CACHE = 400;
-const MAX_KEY_INDEX = 12_000;
-const GROUP_METADATA_TTL_MS = 60_000;
-const GROUP_JOIN_DEDUP_TTL_MS = 15_000;
-const groupMetadataCache = new Map();
-const participantNameCache = new Map();
-const groupParticipantNameCache = new Map();
-const groupJoinDedupCache = new Map();
-const messageKeyIndex = new Map();
-const messageIdToContextId = new Map();
-const contextCounterByChat = new Map();
-const senderRefRegistryByChat = new Map();
-const GROUP_JOIN_STUB_TYPES = new Set([
-  WAMessageStubType.GROUP_PARTICIPANT_ADD,
-  WAMessageStubType.GROUP_PARTICIPANT_INVITE,
-  WAMessageStubType.GROUP_PARTICIPANT_ADD_REQUEST_JOIN,
-  WAMessageStubType.GROUP_PARTICIPANT_ACCEPT,
-  WAMessageStubType.GROUP_PARTICIPANT_LINKED_GROUP_JOIN,
-  WAMessageStubType.GROUP_PARTICIPANT_JOINED_GROUP_AND_PARENT_GROUP,
-  WAMessageStubType.CAG_INVITE_AUTO_ADD,
-  WAMessageStubType.CAG_INVITE_AUTO_JOINED,
-  WAMessageStubType.SUB_GROUP_PARTICIPANT_ADD_RICH,
-  WAMessageStubType.COMMUNITY_PARTICIPANT_ADD_RICH,
-  WAMessageStubType.SUBGROUP_ADMIN_TRIGGERED_AUTO_ADD_RICH,
-].filter((value) => Number.isInteger(value)));
-
-function cacheSetBounded(map, key, value, maxSize = 5000) {
-  map.set(key, value);
-  if (map.size > maxSize) {
-    const firstKey = map.keys().next().value;
-    map.delete(firstKey);
-  }
-}
 
 async function runWithConcurrency(items, concurrency, worker) {
   if (!Array.isArray(items) || items.length === 0) return;
@@ -93,638 +105,11 @@ async function withTimeout(promise, timeoutMs, label = 'operation') {
   }
 }
 
-function normalizeContextMsgId(value) {
-  if (typeof value !== 'string' && typeof value !== 'number') return null;
-  const raw = String(value).trim();
-  const match = raw.match(/^<?\s*(\d{6})\s*>?$/);
-  if (!match) return null;
-  return match[1];
-}
-
-function contextIndexKey(chatId, contextMsgId) {
-  return `${chatId}::${contextMsgId}`;
-}
-
-function messageIdIndexKey(chatId, messageId) {
-  return `${chatId}::${messageId}`;
-}
-
-function nextContextMsgId(chatId) {
-  const current = contextCounterByChat.get(chatId) || 0;
-  const bounded = current % 1_000_000;
-  contextCounterByChat.set(chatId, (bounded + 1) % 1_000_000);
-  return String(bounded).padStart(6, '0');
-}
-
-function isPathWithin(basePath, candidatePath) {
-  const relative = path.relative(basePath, candidatePath);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-async function resolveAllowedAttachmentPath(rawPath) {
-  if (typeof rawPath !== 'string' || !rawPath.trim()) {
-    throw actionError('invalid_target', 'attachment path is required');
-  }
-  const candidate = path.resolve(rawPath.trim());
-  if (!await fs.pathExists(candidate)) {
-    throw actionError('not_found', `attachment not found: ${rawPath}`);
-  }
-  const [mediaDirRealPath, candidateRealPath] = await Promise.all([
-    fs.realpath(config.mediaDir),
-    fs.realpath(candidate),
-  ]);
-  if (!isPathWithin(mediaDirRealPath, candidateRealPath)) {
-    throw actionError('invalid_target', `attachment path must be inside media dir: ${config.mediaDir}`);
-  }
-  const stat = await fs.stat(candidateRealPath);
-  if (!stat.isFile()) {
-    throw actionError('invalid_target', 'attachment path must point to a file');
-  }
-  return candidateRealPath;
-}
-
-function ensureSenderRefRegistry(chatId) {
-  let registry = senderRefRegistryByChat.get(chatId);
-  if (!registry) {
-    registry = {
-      senderToRef: new Map(),
-      refToSender: new Map(),
-      senderToParticipant: new Map(),
-    };
-    senderRefRegistryByChat.set(chatId, registry);
-  }
-  return registry;
-}
-
-function makeSenderRef(chatId, senderId, attempt = 0) {
-  const digest = createHash('sha1').update(`${chatId}|${senderId}|${attempt}`).digest('hex');
-  const numeric = Number.parseInt(digest.slice(0, 12), 16);
-  return numeric.toString(36).padStart(6, '0').slice(0, 6);
-}
-
-function isPhoneJid(jid) {
-  return typeof jid === 'string'
-    && (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us'));
-}
-
-function rememberSenderRef(chatId, senderId, participantJid = null) {
-  if (!chatId || !senderId) return null;
-  const canonicalSenderId = normalizeJid(senderId) || senderId;
-  const canonicalParticipant = normalizeJid(participantJid) || participantJid || canonicalSenderId;
-  const registry = ensureSenderRefRegistry(chatId);
-
-  const existingRef = registry.senderToRef.get(canonicalSenderId);
-  if (existingRef) {
-    const existingParticipant = registry.senderToParticipant.get(canonicalSenderId);
-    // Don't overwrite a phone-number JID with a non-phone JID (e.g. LID).
-    // WhatsApp mentions require phone-number JIDs to render correctly.
-    if (!isPhoneJid(existingParticipant) || isPhoneJid(canonicalParticipant)) {
-      registry.senderToParticipant.set(canonicalSenderId, canonicalParticipant);
-    }
-    return existingRef;
-  }
-
-  for (let attempt = 0; attempt < 128; attempt += 1) {
-    const candidate = makeSenderRef(chatId, canonicalSenderId, attempt);
-    const owner = registry.refToSender.get(candidate);
-    if (owner && owner !== canonicalSenderId) continue;
-    registry.senderToRef.set(canonicalSenderId, candidate);
-    registry.refToSender.set(candidate, canonicalSenderId);
-    registry.senderToParticipant.set(canonicalSenderId, canonicalParticipant);
-    return candidate;
-  }
-
-  const fallback = `${Date.now() % 1_000_000}`.padStart(6, '0');
-  registry.senderToRef.set(canonicalSenderId, fallback);
-  registry.refToSender.set(fallback, canonicalSenderId);
-  registry.senderToParticipant.set(canonicalSenderId, canonicalParticipant);
-  return fallback;
-}
-
-function resolveSenderByRef(chatId, senderRef) {
-  if (!chatId || typeof senderRef !== 'string') return null;
-  const registry = senderRefRegistryByChat.get(chatId);
-  if (!registry) return null;
-  return registry.refToSender.get(senderRef.trim().toLowerCase()) || null;
-}
-
-function resolveParticipantBySenderId(chatId, senderId) {
-  if (!chatId || !senderId) return null;
-  const registry = senderRefRegistryByChat.get(chatId);
-  if (!registry) return null;
-  return registry.senderToParticipant.get(senderId) || null;
-}
-
-function buildNormalizedMessageKey(rawKey, chatId, senderId = null, fromMe = false) {
-  const keyId = rawKey?.id;
-  const remoteJid = rawKey?.remoteJid || chatId;
-  if (!keyId || !remoteJid) return null;
-  const normalizedSenderId = normalizeJid(senderId) || senderId || null;
-  const normalized = {
-    id: keyId,
-    remoteJid,
-    participant: rawKey?.participant || normalizedSenderId || undefined,
-    fromMe: Boolean(rawKey?.fromMe ?? fromMe),
-  };
-  return normalized;
-}
-
-function rememberMessageKeyIndex({
-  chatId,
-  contextMsgId,
-  rawKey,
-  senderId = null,
-  senderRef = null,
-  senderIsAdmin = false,
-  fromMe = false,
-  timestampMs = Date.now(),
-}) {
-  const normalizedContextMsgId = normalizeContextMsgId(contextMsgId);
-  if (!chatId || !normalizedContextMsgId) return null;
-  const key = buildNormalizedMessageKey(rawKey, chatId, senderId, fromMe);
-  if (!key) return null;
-  const normalizedSenderId = normalizeJid(senderId) || senderId || null;
-  const entry = {
-    contextMsgId: normalizedContextMsgId,
-    id: key.id,
-    chatId,
-    remoteJid: key.remoteJid,
-    participant: key.participant || null,
-    fromMe: Boolean(key.fromMe),
-    timestampMs: Number(timestampMs) || Date.now(),
-    senderId: normalizedSenderId,
-    senderRef: senderRef || null,
-    senderIsAdmin: Boolean(senderIsAdmin),
-    key: {
-      id: key.id,
-      remoteJid: key.remoteJid,
-      participant: key.participant || undefined,
-      fromMe: Boolean(key.fromMe),
-    },
-  };
-  cacheSetBounded(
-    messageKeyIndex,
-    contextIndexKey(chatId, normalizedContextMsgId),
-    entry,
-    MAX_KEY_INDEX
-  );
-  cacheSetBounded(
-    messageIdToContextId,
-    messageIdIndexKey(chatId, key.id),
-    normalizedContextMsgId,
-    MAX_KEY_INDEX * 2
-  );
-  return entry;
-}
-
-function getIndexedMessageByContextId(chatId, contextMsgId) {
-  const normalizedContextMsgId = normalizeContextMsgId(contextMsgId);
-  if (!chatId || !normalizedContextMsgId) return null;
-  return messageKeyIndex.get(contextIndexKey(chatId, normalizedContextMsgId)) || null;
-}
-
-function findContextMsgIdByMessageId(chatId, messageId) {
-  if (!chatId || !messageId) return null;
-  const found = messageIdToContextId.get(messageIdIndexKey(chatId, messageId));
-  return normalizeContextMsgId(found);
-}
-
-function ensureContextMsgId(chatId, messageId) {
-  const known = findContextMsgIdByMessageId(chatId, messageId);
-  if (known) return known;
-  return nextContextMsgId(chatId);
-}
-
-function rememberMessage(msg, {
-  chatId = msg?.key?.remoteJid || null,
-  contextMsgId = null,
-  senderId = null,
-  senderRef = null,
-  senderIsAdmin = false,
-  fromMe = false,
-  timestampMs = Date.now(),
-} = {}) {
-  if (!msg?.key?.id) return null;
-  messageCache.set(msg.key.id, msg);
-  if (messageCache.size > MAX_CACHE) {
-    const firstKey = messageCache.keys().next().value;
-    messageCache.delete(firstKey);
-  }
-  if (!chatId) return null;
-  const resolvedContextMsgId = normalizeContextMsgId(contextMsgId) || ensureContextMsgId(chatId, msg.key.id);
-  rememberMessageKeyIndex({
-    chatId,
-    contextMsgId: resolvedContextMsgId,
-    rawKey: msg.key,
-    senderId,
-    senderRef,
-    senderIsAdmin,
-    fromMe,
-    timestampMs,
-  });
-  return resolvedContextMsgId;
-}
-
-function resolveQuotedMessage(chatId, target) {
-  if (!target) return null;
-  const maybeContext = normalizeContextMsgId(target);
-  if (!maybeContext) {
-    return messageCache.get(target) || null;
-  }
-  const entry = getIndexedMessageByContextId(chatId, maybeContext);
-  if (!entry) return null;
-  const cached = entry.id ? messageCache.get(entry.id) : null;
-  if (cached) return cached;
-  return { key: entry.key, message: { conversation: '' } };
-}
-
-function normalizeJid(jid) {
-  if (!jid || typeof jid !== 'string') return null;
-  try {
-    return jidNormalizedUser(jid);
-  } catch {
-    return jid;
-  }
-}
-
 function escapeRegex(value) {
   if (typeof value !== 'string') return '';
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function rememberParticipantName(jid, name) {
-  if (!jid || typeof jid !== 'string') return;
-  if (!name || typeof name !== 'string') return;
-  const cleaned = name.trim();
-  if (!/[\p{L}\p{N}]/u.test(cleaned)) return;
-  if (!cleaned) return;
-
-  cacheSetBounded(participantNameCache, jid, cleaned);
-  const normalized = normalizeJid(jid);
-  if (normalized) cacheSetBounded(participantNameCache, normalized, cleaned);
-}
-
-function lookupParticipantName(jid) {
-  if (!jid || typeof jid !== 'string') return null;
-  const direct = participantNameCache.get(jid);
-  if (direct) return direct;
-  const normalized = normalizeJid(jid);
-  if (!normalized) return null;
-  return participantNameCache.get(normalized) || null;
-}
-
-function groupParticipantKey(chatId, participantJid) {
-  const normalized = normalizeJid(participantJid) || participantJid;
-  return `${chatId}::${normalized}`;
-}
-
-function participantDisplayName(participant) {
-  if (!participant || typeof participant !== 'object') return null;
-  const candidates = [
-    participant.name,
-    participant.notify,
-    participant.pushName,
-    participant.verifiedName,
-    participant.vname,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate !== 'string') continue;
-    const cleaned = candidate.trim();
-    if (!/[\p{L}\p{N}]/u.test(cleaned)) continue;
-    if (cleaned) return cleaned;
-  }
-  return null;
-}
-
-function hydrateGroupParticipantCaches(chatId, participants) {
-  if (!chatId || !Array.isArray(participants)) return;
-  for (const participant of participants) {
-    const aliases = extractParticipantAliases(participant);
-    const preferred = choosePreferredParticipantJid(aliases);
-    const name = participantDisplayName(participant);
-    if (name) {
-      for (const alias of aliases) {
-        rememberParticipantName(alias, name);
-        cacheSetBounded(groupParticipantNameCache, groupParticipantKey(chatId, alias), name);
-      }
-    }
-    for (const alias of aliases) {
-      rememberSenderRef(chatId, alias, preferred || alias);
-    }
-  }
-}
-
-function parseGroupDescription(rawDescription) {
-  if (typeof rawDescription !== 'string' || !rawDescription.trim()) {
-    return { description: null, promptOveride: null };
-  }
-  const blocks = [];
-  const cleaned = rawDescription
-    .replace(/<prompt_override>([\s\S]*?)<\/prompt_override>/gi, (_, block) => {
-      const trimmed = typeof block === 'string' ? block.trim() : '';
-      if (trimmed) blocks.push(trimmed);
-      return '';
-    })
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-
-  return {
-    description: cleaned || null,
-    promptOveride: blocks.length > 0 ? blocks.join('\n\n') : null,
-  };
-}
-
-function pickGroupDescription(meta) {
-  const candidates = [
-    meta?.desc,
-    meta?.description,
-    meta?.descText,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate !== 'string') continue;
-    const trimmed = candidate.trim();
-    if (trimmed) return trimmed;
-  }
-  return null;
-}
-
-function participantRoleFlags(participant) {
-  const adminRole = typeof participant?.admin === 'string' ? participant.admin.toLowerCase() : '';
-  const isSuperAdmin = adminRole === 'superadmin';
-  const isAdmin = isSuperAdmin || adminRole === 'admin';
-  return { isAdmin, isSuperAdmin };
-}
-
-function buildParticipantRoleMap(meta) {
-  const roleMap = {};
-  const participants = Array.isArray(meta?.participants) ? meta.participants : [];
-  for (const participant of participants) {
-    const roleFlags = participantRoleFlags(participant);
-    const aliases = extractParticipantAliases(participant);
-    for (const alias of aliases) {
-      if (!alias) continue;
-      roleMap[alias] = roleFlags;
-    }
-  }
-  return roleMap;
-}
-
-function currentBotAliases() {
-  if (!sock?.user) return [];
-  const aliases = extractParticipantAliases([
-    sock.user.id,
-    sock.user.jid,
-    sock.user.lid,
-    sock.user.phoneNumber,
-  ]);
-  if (aliases.length > 0) return aliases;
-  const normalized = normalizeJid(sock.user.id);
-  return normalized ? [normalized] : [];
-}
-
-function roleFlagsForJid(participantRoles, jid) {
-  if (!participantRoles || typeof participantRoles !== 'object') {
-    return { isAdmin: false, isSuperAdmin: false };
-  }
-  const normalized = normalizeJid(jid) || jid;
-  if (!normalized) return { isAdmin: false, isSuperAdmin: false };
-  const found = participantRoles[normalized];
-  if (!found) return { isAdmin: false, isSuperAdmin: false };
-  return {
-    isAdmin: Boolean(found.isAdmin),
-    isSuperAdmin: Boolean(found.isSuperAdmin),
-  };
-}
-
-function normalizeGroupMetadata(meta, jid) {
-  const name = meta?.subject || jid;
-  const rawDescription = pickGroupDescription(meta);
-  const { description, promptOveride } = parseGroupDescription(rawDescription || '');
-  const participantRoles = buildParticipantRoleMap(meta);
-  const participants = compactParticipantJids(Array.isArray(meta?.participants) ? meta.participants : []);
-  const botAliases = currentBotAliases();
-  let botIsAdmin = false;
-  let botIsSuperAdmin = false;
-  for (const alias of botAliases) {
-    const flags = roleFlagsForJid(participantRoles, alias);
-    if (flags.isSuperAdmin) botIsSuperAdmin = true;
-    if (flags.isAdmin || flags.isSuperAdmin) botIsAdmin = true;
-  }
-  return {
-    name,
-    description,
-    promptOveride,
-    botIsAdmin,
-    botIsSuperAdmin,
-    participantRoles,
-    participants,
-  };
-}
-
-function defaultGroupContext(jid) {
-  return {
-    name: jid,
-    description: null,
-    promptOveride: null,
-    botIsAdmin: false,
-    botIsSuperAdmin: false,
-    participantRoles: {},
-    participants: [],
-  };
-}
-
-function getCachedGroupMetadata(jid) {
-  const cached = groupMetadataCache.get(jid);
-  if (!cached) return null;
-  if (Date.now() - cached.fetchedAt > GROUP_METADATA_TTL_MS) {
-    groupMetadataCache.delete(jid);
-    return null;
-  }
-  return cached.value;
-}
-
-function rememberGroupMetadata(jid, value) {
-  cacheSetBounded(groupMetadataCache, jid, {
-    fetchedAt: Date.now(),
-    value,
-  }, 2000);
-}
-
-function invalidateGroupMetadata(jid) {
-  if (!jid) return;
-  groupMetadataCache.delete(jid);
-}
-
-async function getGroupContext(jid, { forceRefresh = false } = {}) {
-  if (!jid) return defaultGroupContext(jid);
-  if (!sock) return defaultGroupContext(jid);
-
-  if (!forceRefresh) {
-    const cached = getCachedGroupMetadata(jid);
-    if (cached) return cached;
-  }
-
-  try {
-    const meta = await withTimeout(
-      sock.groupMetadata(jid),
-      config.groupMetadataTimeoutMs,
-      `groupMetadata(${jid})`
-    );
-    hydrateGroupParticipantCaches(jid, meta?.participants);
-    const normalized = normalizeGroupMetadata(meta, jid);
-    rememberGroupMetadata(jid, normalized);
-    return normalized;
-  } catch (err) {
-    logger.warn({
-      err,
-      jid,
-      timeoutMs: config.groupMetadataTimeoutMs,
-    }, 'failed to fetch group metadata');
-    const cached = getCachedGroupMetadata(jid);
-    if (cached) return cached;
-    return defaultGroupContext(jid);
-  }
-}
-
-async function getGroupParticipantName(chatId, participantJid) {
-  if (!sock || !chatId || !participantJid) return null;
-  const key = groupParticipantKey(chatId, participantJid);
-  const cached = groupParticipantNameCache.get(key);
-  if (cached) return cached;
-
-  const fallback = lookupParticipantName(participantJid);
-  if (fallback) {
-    cacheSetBounded(groupParticipantNameCache, key, fallback);
-    return fallback;
-  }
-
-  const hadCachedMetadata = Boolean(getCachedGroupMetadata(chatId));
-  await getGroupContext(chatId);
-  let resolved = lookupParticipantName(participantJid);
-
-  if (!resolved && hadCachedMetadata) {
-    await getGroupContext(chatId, { forceRefresh: true });
-    resolved = lookupParticipantName(participantJid);
-  }
-
-  if (resolved) {
-    cacheSetBounded(groupParticipantNameCache, key, resolved);
-  }
-  return resolved || null;
-}
-
-function inferExtension(mime) {
-  const normalized = normalizeMime(mime);
-  if (!normalized) return 'bin';
-  if (normalized.includes('jpeg')) return 'jpg';
-  if (normalized.includes('png')) return 'png';
-  if (normalized.includes('gif')) return 'gif';
-  if (normalized.includes('webp')) return 'webp';
-  if (normalized.includes('mp4')) return 'mp4';
-  if (normalized.includes('mp3')) return 'mp3';
-  if (normalized.includes('ogg')) return 'ogg';
-  if (normalized.includes('pdf')) return 'pdf';
-  if (normalized.includes('zip')) return 'zip';
-  return normalized.split('/').pop() || 'bin';
-}
-
-function normalizeMime(mime) {
-  if (typeof mime !== 'string') return null;
-  const normalized = mime.split(';')[0].trim().toLowerCase();
-  return normalized || null;
-}
-
-function detectMimeFromHeader(header) {
-  if (!Buffer.isBuffer(header) || header.length === 0) return null;
-
-  if (
-    header.length >= 12
-    && header.toString('ascii', 0, 4) === 'RIFF'
-    && header.toString('ascii', 8, 12) === 'WEBP'
-  ) return 'image/webp';
-  if (
-    header.length >= 8
-    && header[0] === 0x89
-    && header[1] === 0x50
-    && header[2] === 0x4E
-    && header[3] === 0x47
-    && header[4] === 0x0D
-    && header[5] === 0x0A
-    && header[6] === 0x1A
-    && header[7] === 0x0A
-  ) return 'image/png';
-  if (header.length >= 3 && header[0] === 0xFF && header[1] === 0xD8 && header[2] === 0xFF) return 'image/jpeg';
-  const gifMagic = header.toString('ascii', 0, 6);
-  if (gifMagic === 'GIF87a' || gifMagic === 'GIF89a') return 'image/gif';
-  if (header.length >= 4 && header.toString('ascii', 0, 4) === '%PDF') return 'application/pdf';
-  if (
-    header.length >= 4
-    && header[0] === 0x50
-    && header[1] === 0x4B
-    && (header[2] === 0x03 || header[2] === 0x05 || header[2] === 0x07)
-    && (header[3] === 0x04 || header[3] === 0x06 || header[3] === 0x08)
-  ) return 'application/zip';
-  if (header.length >= 4 && header.toString('ascii', 0, 4) === 'OggS') return 'audio/ogg';
-  if (header.length >= 3 && header.toString('ascii', 0, 3) === 'ID3') return 'audio/mp3';
-  if (header.length >= 2 && header[0] === 0xFF && (header[1] & 0xE0) === 0xE0) return 'audio/mp3';
-  if (header.length >= 8 && header.toString('ascii', 4, 8) === 'ftyp') return 'video/mp4';
-
-  return null;
-}
-
-async function readFileHeader(filepath, bytes = 16) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    const stream = fs.createReadStream(filepath, { start: 0, end: bytes - 1 });
-    stream.on('data', (chunk) => chunks.push(chunk));
-    stream.on('error', reject);
-    stream.on('end', () => resolve(Buffer.concat(chunks)));
-  });
-}
-
-async function detectMimeFromFile(filepath) {
-  try {
-    const header = await readFileHeader(filepath, 16);
-    return detectMimeFromHeader(header);
-  } catch (err) {
-    logger.debug({ err, filepath }, 'failed to inspect saved media header');
-    return null;
-  }
-}
-
-function shouldRetryStickerAsImage(err) {
-  const message = String(err?.message || '').toLowerCase();
-  if (!message) return false;
-  return (
-    message.includes('bad decrypt')
-    || message.includes('unable to authenticate data')
-    || message.includes('wrong final block length')
-    || message.includes('mac check failed')
-    || message.includes('failed to decrypt')
-  );
-}
-
-async function downloadMediaToFile(content, mediaKind, filepath) {
-  const stream = await withTimeout(
-    downloadContentFromMessage(content, mediaKind),
-    config.downloadTimeoutMs,
-    `downloadContentFromMessage(${mediaKind})`
-  );
-  return withTimeout(
-    streamToFile(stream, filepath),
-    config.downloadTimeoutMs,
-    `streamToFile(${mediaKind})`
-  );
-}
-
-function mapMediaKind(contentType) {
-  if (contentType === 'imageMessage') return 'image';
-  if (contentType === 'videoMessage') return 'video';
-  if (contentType === 'audioMessage') return 'audio';
-  if (contentType === 'documentMessage') return 'document';
-  if (contentType === 'stickerMessage') return 'sticker';
-  return 'unknown';
-}
 
 function printQrInTerminal(qr) {
   try {
@@ -743,277 +128,6 @@ function printQrInTerminal(qr) {
   }
 }
 
-function unwrapMessage(message) {
-  if (!message) return { contentType: null, message: null };
-  const normalized = normalizeMessageContent(message);
-  const contentType = normalized ? getContentType(normalized) : null;
-  return { contentType, message: normalized };
-}
-
-function extractContextInfo(message) {
-  if (!message) return undefined;
-  const contentType = getContentType(message);
-  const candidate = contentType ? message[contentType] : undefined;
-  if (candidate?.contextInfo) return candidate.contextInfo;
-  // fall back: scan nested entries
-  for (const value of Object.values(message)) {
-    if (value && typeof value === 'object' && 'contextInfo' in value) {
-      return value.contextInfo;
-    }
-  }
-  return undefined;
-}
-
-function extractMentionedJids(message) {
-  const ctx = extractContextInfo(message);
-  const mentions = ctx?.mentionedJid;
-  if (!mentions || mentions.length === 0) return null;
-  return Array.from(new Set(mentions));
-}
-
-function parseVcardPhones(vcard) {
-  if (!vcard) return [];
-  const lines = vcard.split(/\r?\n/);
-  const phones = [];
-  for (const line of lines) {
-    const match = line.match(/^TEL[^:]*:(.+)$/i);
-    if (match?.[1]) phones.push(match[1].trim());
-  }
-  return phones;
-}
-
-function extractContactPlaceholder(message) {
-  if (message?.contactMessage) {
-    const { displayName, vcard } = message.contactMessage;
-    const phones = parseVcardPhones(vcard);
-    const label = [displayName, phones[0]].filter(Boolean).join(', ');
-    return label ? `<contact: ${label}>` : '<contact>';
-  }
-  const contacts = message?.contactsArrayMessage?.contacts;
-  if (contacts && contacts.length > 0) {
-    const first = contacts[0];
-    const name = first?.displayName;
-    const phones = parseVcardPhones(first?.vcard || '');
-    const label = [name, phones[0]].filter(Boolean).join(', ');
-    const suffix = contacts.length > 1 ? ` +${contacts.length - 1} more` : '';
-    return label ? `<contacts: ${label}${suffix}>` : `<contacts: ${contacts.length}>`;
-  }
-  return null;
-}
-
-function extractLocationData(message) {
-  if (!message) return null;
-  const live = message.liveLocationMessage;
-  if (live?.degreesLatitude != null && live?.degreesLongitude != null) {
-    return {
-      latitude: Number(live.degreesLatitude),
-      longitude: Number(live.degreesLongitude),
-      accuracy: live.accuracyInMeters,
-      caption: live.caption,
-      isLive: true,
-    };
-  }
-  const location = message.locationMessage;
-  if (location?.degreesLatitude != null && location?.degreesLongitude != null) {
-    return {
-      latitude: Number(location.degreesLatitude),
-      longitude: Number(location.degreesLongitude),
-      accuracy: location.accuracyInMeters,
-      name: location.name,
-      address: location.address,
-      caption: location.comment,
-      isLive: Boolean(location.isLive),
-    };
-  }
-  return null;
-}
-
-function formatLocationText(loc) {
-  const parts = [];
-  if (loc.name) parts.push(loc.name);
-  if (loc.address && loc.address !== loc.name) parts.push(loc.address);
-  const coords = Number.isFinite(loc.latitude) && Number.isFinite(loc.longitude)
-    ? `${loc.latitude.toFixed(5)}, ${loc.longitude.toFixed(5)}`
-    : null;
-  if (coords) parts.push(coords);
-  if (loc.caption) parts.push(loc.caption);
-  return parts.length ? `📍 ${parts.join(' | ')}` : '📍 Location';
-}
-
-function extractInteractiveText(message) {
-  if (!message) return null;
-  const btn = message.buttonsResponseMessage;
-  if (btn) return btn.selectedDisplayText || btn.selectedButtonId || btn.selectedId || null;
-
-  const tmpl = message.templateButtonReplyMessage;
-  if (tmpl) return tmpl.selectedDisplayText || tmpl.selectedId || String(tmpl.selectedIndex ?? '');
-
-  const list = message.listResponseMessage;
-  if (list) {
-    return (
-      list.title ||
-      list.description ||
-      list.singleSelectReply?.title ||
-      list.singleSelectReply?.description ||
-      list.singleSelectReply?.selectedRowId ||
-      null
-    );
-  }
-
-  const interactive = message.interactiveResponseMessage;
-  if (interactive?.nativeFlowResponseMessage?.paramsJson) {
-    try {
-      const parsed = JSON.parse(interactive.nativeFlowResponseMessage.paramsJson);
-      if (typeof parsed === 'string') return parsed;
-      if (parsed?.id) return parsed.id;
-      if (parsed?.selection?.title) return parsed.selection.title;
-      if (parsed?.selection?.id) return parsed.selection.id;
-      if (parsed?.name) return parsed.name;
-    } catch (err) {
-      logger.debug({ err }, 'failed to parse nativeFlowResponse paramsJson');
-    }
-    return interactive.nativeFlowResponseMessage.paramsJson;
-  }
-  if (interactive?.body) return interactive.body;
-
-  return null;
-}
-
-function extractMediaPlaceholder(message) {
-  if (!message) return null;
-  if (message.imageMessage) return '<media:image>';
-  if (message.videoMessage) return '<media:video>';
-  if (message.audioMessage) return '<media:audio>';
-  if (message.documentMessage) return '<media:document>';
-  if (message.stickerMessage) return '<media:sticker>';
-  return null;
-}
-
-function extractText(message) {
-  if (!message) return null;
-
-  const text = message.conversation?.trim();
-  if (text) return text;
-
-  const extended = message.extendedTextMessage?.text?.trim();
-  if (extended) return extended;
-
-  const interactive = extractInteractiveText(message);
-  if (interactive) return interactive;
-
-  const caption =
-    message.imageMessage?.caption || message.videoMessage?.caption || message.documentMessage?.caption;
-  if (caption) return caption;
-
-  const reaction = message.reactionMessage?.text;
-  if (reaction) return `react:${reaction}`;
-
-  const contact = extractContactPlaceholder(message);
-  if (contact) return contact;
-
-  const mediaPlaceholder = extractMediaPlaceholder(message);
-  if (mediaPlaceholder) return mediaPlaceholder;
-
-  return null;
-}
-
-async function saveMedia(contentType, content, messageId) {
-  const kind = mapMediaKind(contentType);
-  if (kind === 'unknown') return null;
-  const declaredMime = normalizeMime(content?.mimetype);
-  let mime = declaredMime || (kind === 'sticker' ? 'image/webp' : 'application/octet-stream');
-  let ext = inferExtension(mime);
-  let filename = `${messageId}_${kind}.${ext}`;
-  let filepath = path.join(config.mediaDir, filename);
-  let usedImageFallback = false;
-
-  let size;
-  try {
-    size = await downloadMediaToFile(content, kind, filepath);
-  } catch (err) {
-    if (kind !== 'sticker' || !shouldRetryStickerAsImage(err)) throw err;
-    logger.warn({ err, messageId }, 'sticker decrypt failed with kind=sticker, retry as image');
-    await fs.remove(filepath).catch(() => {});
-    usedImageFallback = true;
-    size = await downloadMediaToFile(content, 'image', filepath);
-  }
-
-  const shouldUseDetectedMime = !declaredMime || declaredMime === 'application/octet-stream' || usedImageFallback;
-  const detectedMime = shouldUseDetectedMime ? await detectMimeFromFile(filepath) : null;
-  if (detectedMime) {
-    mime = detectedMime;
-    ext = inferExtension(mime);
-    const detectedFilename = `${messageId}_${kind}.${ext}`;
-    const detectedFilepath = path.join(config.mediaDir, detectedFilename);
-    if (detectedFilepath !== filepath) {
-      await fs.move(filepath, detectedFilepath, { overwrite: true });
-      filename = detectedFilename;
-      filepath = detectedFilepath;
-    }
-  }
-
-  return {
-    kind,
-    mime,
-    fileName: filename,
-    size,
-    path: filepath,
-    isAnimated: Boolean(content?.isAnimated),
-  };
-}
-
-async function extractQuoted(messageOrContent, chatId, { allowGroupLookup = true } = {}) {
-  const ctx = extractContextInfo(messageOrContent);
-  if (!ctx || !ctx.quotedMessage) return null;
-  const { contentType: qType, message: qMsg } = unwrapMessage(ctx.quotedMessage);
-  if (!qMsg) return null;
-  const location = extractLocationData(qMsg);
-  const locationText = location ? formatLocationText(location) : null;
-  const qText = extractText(qMsg);
-  const text = [qText, locationText].filter(Boolean).join('\n') || null;
-  let senderId = ctx.participant ? normalizeJid(ctx.participant) : null;
-  let senderName = null;
-  const quotedMsg = ctx.stanzaId ? messageCache.get(ctx.stanzaId) : null;
-
-  if (quotedMsg) {
-    const quotedFromId = quotedMsg.key?.participant || quotedMsg.key?.remoteJid;
-    if (!senderId && quotedFromId) {
-      senderId = normalizeJid(quotedFromId);
-    }
-    const quotedPushName = quotedMsg.pushName;
-    if (typeof quotedPushName === 'string' && quotedPushName.trim()) {
-      senderName = quotedPushName.trim();
-      if (senderId) rememberParticipantName(senderId, senderName);
-      if (quotedFromId) rememberParticipantName(quotedFromId, senderName);
-    }
-  }
-
-  if (!senderName && senderId) senderName = lookupParticipantName(senderId);
-  if (!senderName && ctx.participant) senderName = lookupParticipantName(ctx.participant);
-  if (allowGroupLookup && !senderName && chatId?.endsWith('@g.us') && senderId) {
-    senderName = await getGroupParticipantName(chatId, senderId);
-  }
-  const contextMsgId = ctx.stanzaId ? findContextMsgIdByMessageId(chatId, ctx.stanzaId) : null;
-
-  return {
-    messageId: ctx.stanzaId,
-    contextMsgId,
-    senderId,
-    senderName: senderName || senderId,
-    text,
-    type: qType,
-    location,
-  };
-}
-
-function fallbackParticipantLabel(jid) {
-  if (!jid || typeof jid !== 'string') return 'unknown';
-  const local = jid.split('@')[0] || jid;
-  if (!local) return 'unknown';
-  const digits = local.replace(/\D/g, '');
-  if (digits.length >= 5) return digits;
-  return local;
-}
 
 async function resolveParticipantLabel(chatId, participantJid) {
   const normalized = normalizeJid(participantJid) || participantJid;
@@ -1065,185 +179,6 @@ function makeEventMessageId(prefix) {
   const stamp = Date.now();
   const rand = Math.random().toString(36).slice(2, 8);
   return `${prefix}_${stamp}_${rand}`;
-}
-
-function toJidCandidate(value) {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (trimmed.includes('@')) return trimmed;
-
-  const digits = trimmed.replace(/\D/g, '');
-  if (digits.length >= 5) return `${digits}@s.whatsapp.net`;
-  return null;
-}
-
-function choosePreferredParticipantJid(jids) {
-  if (!Array.isArray(jids) || jids.length === 0) return null;
-  const unique = Array.from(new Set(jids.filter((jid) => typeof jid === 'string' && jid.trim())));
-  if (unique.length === 0) return null;
-  const pn = unique.find((jid) => jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us'));
-  return pn || unique[0];
-}
-
-function extractParticipantAliases(value) {
-  if (!value) return [];
-  if (Array.isArray(value)) {
-    const normalized = [];
-    for (const item of value) {
-      const aliases = extractParticipantAliases(item);
-      normalized.push(...aliases);
-    }
-    return Array.from(new Set(normalized));
-  }
-
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return [];
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      try {
-        return extractParticipantAliases(JSON.parse(trimmed));
-      } catch {
-        return [];
-      }
-    }
-    const parsed = toJidCandidate(trimmed);
-    if (!parsed) return [];
-    const cleaned = normalizeJid(parsed) || parsed;
-    return [cleaned];
-  }
-
-  if (typeof value !== 'object') return [];
-  const candidates = [
-    value.phoneNumber,
-    value.pn,
-    value.id,
-    value.jid,
-    value.lid,
-    value.participant,
-  ];
-
-  const normalized = [];
-  for (const candidate of candidates) {
-    const parsed = toJidCandidate(candidate);
-    if (!parsed) continue;
-    normalized.push(normalizeJid(parsed) || parsed);
-  }
-  return Array.from(new Set(normalized));
-}
-
-function extractParticipantJids(value) {
-  if (!value) return [];
-  if (Array.isArray(value)) {
-    const normalized = [];
-    for (const item of value) {
-      const aliases = extractParticipantAliases(item);
-      const preferred = choosePreferredParticipantJid(aliases);
-      if (preferred) normalized.push(preferred);
-    }
-    return Array.from(new Set(normalized));
-  }
-
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return [];
-    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-      try {
-        return extractParticipantJids(JSON.parse(trimmed));
-      } catch {
-        return [];
-      }
-    }
-    const aliases = extractParticipantAliases(trimmed);
-    const preferred = choosePreferredParticipantJid(aliases);
-    return preferred ? [preferred] : [];
-  }
-
-  const aliases = extractParticipantAliases(value);
-  const preferred = choosePreferredParticipantJid(aliases);
-  return preferred ? [preferred] : [];
-}
-
-function compactParticipantJids(participants) {
-  if (!Array.isArray(participants)) return [];
-  const normalized = [];
-  for (const participant of participants) {
-    const candidates = extractParticipantJids(participant);
-    for (const jid of candidates) {
-      const cleaned = normalizeJid(jid) || jid;
-      normalized.push(cleaned);
-    }
-  }
-  return Array.from(new Set(normalized));
-}
-
-function normalizeGroupJoinAction(action) {
-  const normalized = typeof action === 'string' ? action.toLowerCase() : '';
-  if (!normalized) return 'join';
-  if (normalized === 'add' || normalized.includes('_add')) return 'add';
-  if (normalized === 'invite' || normalized.includes('invite')) return 'invite';
-  if (normalized === 'approve' || normalized === 'accept' || normalized.includes('approve') || normalized.includes('accept')) {
-    return 'approve';
-  }
-  if (normalized === 'join' || normalized.includes('join')) return 'join';
-  return normalized;
-}
-
-function dedupeGroupJoinEvent(chatId, participants, action, timestampMs) {
-  const ts = Number(timestampMs) || Date.now();
-  const normalizedAction = normalizeGroupJoinAction(action);
-  const normalizedParticipants = compactParticipantJids(participants).sort();
-  const key = `${chatId}::${normalizedAction}::${normalizedParticipants.join(',')}`;
-  const lastSeen = groupJoinDedupCache.get(key);
-  if (lastSeen && ts - lastSeen < GROUP_JOIN_DEDUP_TTL_MS) {
-    return false;
-  }
-  cacheSetBounded(groupJoinDedupCache, key, ts, 2000);
-  return true;
-}
-
-function stubActionName(stubType) {
-  if (typeof stubType !== 'number') return 'join';
-  const enumName = WAMessageStubType[stubType];
-  if (typeof enumName !== 'string' || !enumName) return 'join';
-  return enumName.toLowerCase();
-}
-
-function parseGroupJoinStub(msg) {
-  const chatId = msg?.key?.remoteJid;
-  if (!chatId || !chatId.endsWith('@g.us')) return null;
-  const stubType = msg?.messageStubType;
-  if (!GROUP_JOIN_STUB_TYPES.has(stubType)) return null;
-
-  const rawParams = Array.isArray(msg?.messageStubParameters)
-    ? msg.messageStubParameters
-    : [];
-  const parsedFromParams = compactParticipantJids(rawParams);
-  const participants = parsedFromParams.length > 0
-    ? parsedFromParams
-    : compactParticipantJids([msg?.participant]);
-
-  if (participants.length === 0) return null;
-
-  const actorId = compactParticipantJids([
-    msg?.key?.participantAlt,
-    msg?.participantPn,
-    msg?.key?.participant,
-    msg?.participant,
-  ])[0] || null;
-  const timestampMs = Number(msg?.messageTimestamp) > 0
-    ? Number(msg.messageTimestamp) * 1000
-    : Date.now();
-  return {
-    chatId,
-    action: normalizeGroupJoinAction(stubActionName(stubType)),
-    participants,
-    actorId,
-    timestampMs,
-    messageId: msg?.key?.id || null,
-    messageKey: msg?.key?.id ? { ...msg.key } : null,
-    source: 'messages.upsert.stub',
-  };
 }
 
 async function emitGroupJoinContextEvent({
@@ -1483,7 +418,7 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
   const baseText = extractText(innerMessage);
   const text = [baseText, locationText].filter(Boolean).join('\n') || null;
   const quotedStartMs = Date.now();
-  const quoted = await extractQuoted(innerMessage, chatId, { allowGroupLookup: !fromMe });
+  const quoted = await extractQuoted(innerMessage, chatId, { allowGroupLookup: !fromMe, getGroupParticipantName });
   perf.quotedMs = Date.now() - quotedStartMs;
   const mentionedJidsRaw = extractMentionedJids(innerMessage);
   const mentionedJids = Array.isArray(mentionedJidsRaw)
@@ -1524,7 +459,7 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
   if (mediaKinds.includes(contentType)) {
     const mediaStartMs = Date.now();
     try {
-      const mediaInfo = await saveMedia(contentType, content, msg.key.id);
+      const mediaInfo = await saveMedia(contentType, content, msg.key.id, withTimeout);
       if (mediaInfo) attachments.push(mediaInfo);
     } catch (err) {
       logger.error({ err }, 'failed saving media');
@@ -1703,22 +638,6 @@ async function deleteMessageByContextId({ chatId, contextMsgId }) {
   } catch (err) {
     throw actionError('send_failed', err?.message || 'failed to delete message');
   }
-}
-
-function normalizeKickTargets(rawTargets) {
-  if (!Array.isArray(rawTargets)) return [];
-  const normalized = [];
-  for (const target of rawTargets) {
-    const senderRef = typeof target?.senderRef === 'string'
-      ? target.senderRef.trim().toLowerCase()
-      : '';
-    const anchorContextMsgId = normalizeContextMsgId(target?.anchorContextMsgId);
-    normalized.push({
-      senderRef,
-      anchorContextMsgId,
-    });
-  }
-  return normalized;
 }
 
 function parseParticipantUpdateStatus(rawStatus) {
@@ -1968,6 +887,7 @@ async function startWhatsApp() {
     markOnlineOnConnect: false,
     defaultQueryTimeoutMs: config.sendTimeoutMs,
   });
+  setSockAccessor(() => sock);
 
   sock.ev.on('creds.update', saveCreds);
 
@@ -2074,23 +994,6 @@ async function startWhatsApp() {
   return sock;
 }
 
-function mentionHandleForJid(jid) {
-  if (!jid || typeof jid !== 'string') return null;
-  const normalized = normalizeJid(jid) || jid;
-  const local = String(normalized).split('@')[0] || '';
-  const cleaned = local.replace(/[^0-9A-Za-z._-]/g, '');
-  if (!cleaned) return null;
-  return `@${cleaned}`;
-}
-
-function resolveMentionTargetBySenderRef(chatId, senderRef) {
-  if (!chatId || !senderRef) return null;
-  const senderId = resolveSenderByRef(chatId, senderRef);
-  if (!senderId) return null;
-  const participantFromRegistry = resolveParticipantBySenderId(chatId, senderId);
-  return normalizeJid(participantFromRegistry) || normalizeJid(senderId) || senderId || null;
-}
-
 async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   if (typeof rawText !== 'string' || !rawText.includes('@<')) {
     return { text: rawText, mentions: [], groupContext };
@@ -2192,7 +1095,7 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
   for (const att of normalizedAttachments) {
     const kindToken = typeof att?.kind === 'string' ? att.kind : (typeof att?.type === 'string' ? att.type : 'document');
     const kind = kindToken.trim().toLowerCase() || 'document';
-    const filePath = await resolveAllowedAttachmentPath(att?.path);
+    const filePath = await resolveAllowedAttachmentPath(att?.path, actionError);
     const content = {};
     if (kind === 'image') content.image = { url: filePath };
     else if (kind === 'video') content.video = { url: filePath };
@@ -2277,49 +1180,6 @@ function parseSlashCommand(text) {
   };
 }
 
-function isOwnerJid(senderId) {
-  if (!senderId) return false;
-  const candidates = new Set();
-  const raw = String(senderId).trim().toLowerCase();
-  const normalized = (normalizeJid(senderId) || senderId).toLowerCase();
-  if (raw) candidates.add(raw);
-  if (normalized) candidates.add(normalized);
-
-  for (const candidate of Array.from(candidates)) {
-    if (!candidate) continue;
-    if (candidate.includes('@')) {
-      const [local, domain] = candidate.split('@');
-      if (local) {
-        candidates.add(local);
-        if (local.includes(':')) {
-          const base = local.split(':')[0];
-          if (base) {
-            candidates.add(base);
-            candidates.add(`${base}@${domain || 's.whatsapp.net'}`);
-          }
-        }
-      }
-    }
-    const digits = candidate.replace(/\D/g, '');
-    if (digits.length >= 5) {
-      candidates.add(digits);
-      candidates.add(`${digits}@s.whatsapp.net`);
-    }
-  }
-
-  return config.botOwnerJids.some((ownerJid) => {
-    if (!ownerJid) return false;
-    const ownerLocal = ownerJid.split('@')[0];
-    const ownerDigits = ownerJid.replace(/\D/g, '');
-    for (const candidate of candidates) {
-      if (candidate === ownerJid) return true;
-      if (ownerLocal && candidate === ownerLocal) return true;
-      const candidateDigits = candidate.replace(/\D/g, '');
-      if (ownerDigits && candidateDigits && ownerDigits === candidateDigits) return true;
-    }
-    return false;
-  });
-}
 
 async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId, contextMsgId, msg }) {
   if (!isOwnerJid(senderId)) {
@@ -2479,6 +1339,7 @@ async function sendPresence({ chatId, type }) {
 }
 
 export {
+  withTimeout,
   startWhatsApp,
   sendOutgoing,
   reactToMessage,

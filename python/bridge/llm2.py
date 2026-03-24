@@ -15,6 +15,7 @@ try:
   from .log import setup_logging, trunc, dump_json, env_flag
   from .media import build_visual_parts, llm2_media_enabled, redact_multimodal_content
   from .db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete
+  from .config import _parse_positive_float, _parse_non_negative_int
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
@@ -23,6 +24,7 @@ except ImportError:  # allow running as script
   from bridge.log import setup_logging, trunc, dump_json, env_flag  # type: ignore
   from bridge.media import build_visual_parts, llm2_media_enabled, redact_multimodal_content  # type: ignore
   from bridge.db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete  # type: ignore
+  from bridge.config import _parse_positive_float, _parse_non_negative_int  # type: ignore
 
 logger = setup_logging()
 SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent.parent / "systemprompt.txt"
@@ -35,26 +37,6 @@ class LLM2Target:
   model: str
   base_url: str | None
   api_key: str
-
-
-def _parse_positive_float(raw: str | None, default: float) -> float:
-  if raw is None:
-    return default
-  try:
-    parsed = float(raw)
-  except (TypeError, ValueError):
-    return default
-  return parsed if parsed > 0 else default
-
-
-def _parse_non_negative_int(raw: str | None, default: int) -> int:
-  if raw is None:
-    return default
-  try:
-    parsed = int(raw)
-  except (TypeError, ValueError):
-    return default
-  return parsed if parsed >= 0 else default
 
 
 def _llm2_timeout() -> float:
