@@ -17,6 +17,7 @@ try:
   from .history import WhatsAppMessage, assistant_name, format_history
   from .log import setup_logging, trunc, dump_json, env_flag
   from .media import build_visual_parts, llm1_media_enabled, redact_multimodal_content
+  from .config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _parse_non_negative_float
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
@@ -24,6 +25,7 @@ except ImportError:  # allow running as script
   from bridge.history import WhatsAppMessage, assistant_name, format_history  # type: ignore
   from bridge.log import setup_logging, trunc, dump_json, env_flag  # type: ignore
   from bridge.media import build_visual_parts, llm1_media_enabled, redact_multimodal_content  # type: ignore
+  from bridge.config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _parse_non_negative_float  # type: ignore
 
 logger = setup_logging()
 
@@ -36,16 +38,6 @@ class LLM1Target:
   api_key: str
 
 
-def _parse_positive_int(raw: str | None, default: int) -> int:
-  if raw is None:
-    return default
-  try:
-    parsed = int(raw)
-  except (TypeError, ValueError):
-    return default
-  return parsed if parsed > 0 else default
-
-
 def _llm1_history_limit() -> int:
   # Prefer LLM1-specific limit; fallback to global history limit.
   raw = os.getenv("LLM1_HISTORY_LIMIT")
@@ -56,36 +48,6 @@ def _llm1_history_limit() -> int:
 
 def _llm1_message_max_chars() -> int:
   return _parse_positive_int(os.getenv("LLM1_MESSAGE_MAX_CHARS"), 500)
-
-
-def _parse_positive_float(raw: str | None, default: float) -> float:
-  if raw is None:
-    return default
-  try:
-    parsed = float(raw)
-  except (TypeError, ValueError):
-    return default
-  return parsed if parsed > 0 else default
-
-
-def _parse_non_negative_int(raw: str | None, default: int) -> int:
-  if raw is None:
-    return default
-  try:
-    parsed = int(raw)
-  except (TypeError, ValueError):
-    return default
-  return parsed if parsed >= 0 else default
-
-
-def _parse_non_negative_float(raw: str | None, default: float) -> float:
-  if raw is None:
-    return default
-  try:
-    parsed = float(raw)
-  except (TypeError, ValueError):
-    return default
-  return parsed if parsed >= 0 else default
 
 
 def _llm1_timeout(default: float = 8.0) -> float:

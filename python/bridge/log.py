@@ -8,6 +8,11 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+try:
+  from .config import _parse_positive_int
+except ImportError:
+  from bridge.config import _parse_positive_int  # type: ignore
+
 
 LOG_RECORD_BUILTINS = {
   "name",
@@ -40,16 +45,6 @@ LOG_RECORD_BUILTINS = {
   "chatId",
   "chatName",
 }
-
-
-def _parse_positive_int(raw: str | None, default: int) -> int:
-  if raw is None:
-    return default
-  try:
-    parsed = int(raw)
-  except (TypeError, ValueError):
-    return default
-  return parsed if parsed > 0 else default
 
 
 def env_flag(name: str, default: bool = False) -> bool:

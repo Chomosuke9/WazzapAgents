@@ -7,17 +7,12 @@ from pathlib import Path
 from typing import Any
 
 
+try:
+  from .config import _parse_positive_int
+except ImportError:
+  from bridge.config import _parse_positive_int  # type: ignore
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-
-
-def _parse_positive_int(raw: str | None, default: int) -> int:
-  if raw is None:
-    return default
-  try:
-    parsed = int(raw)
-  except (TypeError, ValueError):
-    return default
-  return parsed if parsed > 0 else default
 
 
 def llm1_media_enabled() -> bool:
