@@ -1,8 +1,8 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/` – Node.js gateway runtime. Key files: `index.js` (bootstrap), `waClient.js` (WhatsApp via Baileys v7), `wsClient.js` (LLM WebSocket), `config.js`, `logger.js`, `utils.js`.
-- `python/bridge/` – Python LLM bridge. Key files: `main.py` (WebSocket handler, message batching), `llm1.py` (decision routing), `llm2.py` (response generation), `commands.py` (slash commands), `db.py` (SQLite settings), `history.py` (message dataclass), `media.py` (visual attachment processing), `log.py` (structured logging).
+- `src/` – Node.js gateway runtime. Key files: `index.js` (bootstrap), `waClient.js` (WhatsApp via Baileys v7), `wsClient.js` (LLM WebSocket), `config.js`, `logger.js`, `utils.js`, `mediaHandler.js` (media download/validation), `messageParser.js` (Baileys message unwrapping), `identifiers.js` (contextMsgId/senderRef management), `participants.js` (group roles/names), `groupContext.js` (group metadata caching), `caches.js` (in-memory caches).
+- `python/bridge/` – Python LLM bridge. Key files: `main.py` (WebSocket handler, message batching), `llm1.py` (decision routing), `llm2.py` (response generation), `commands.py` (slash commands), `config.py` (shared env parsing), `db.py` (SQLite settings), `history.py` (message dataclass), `media.py` (visual attachment processing), `log.py` (structured logging).
 - `data/` – runtime artifacts: `auth/` (Baileys multi-file auth), `media/` (downloaded inbound media). Created automatically.
 - `examples/` – example LLM WebSocket server (`llm_ws_echo.py`).
 - `website/` – Docusaurus documentation site (Indonesian + English i18n).

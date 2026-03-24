@@ -11,8 +11,9 @@ Two runtime components communicate over WebSocket:
 1. **Node.js Gateway** (`src/`) — Connects to WhatsApp via Baileys, forwards messages to LLM bridge, executes moderation actions (send, react, delete, kick, mark read, typing indicator).
 2. **Python LLM Bridge** (`python/bridge/`) — Receives messages, runs two-stage LLM pipeline (LLM1 for gating/decision, LLM2 for response generation), handles slash commands, manages chat history and settings via SQLite.
 
-Additional directories:
+Additional directories and files:
 - `examples/` — Example LLM WebSocket echo server (`llm_ws_echo.py`).
+- `python/systemprompt.txt` — LLM2 system prompt template (reply protocol, identity, formatting rules).
 - `website/` — Docusaurus documentation site (Indonesian primary, English i18n). Deployed via GitHub Actions to GitHub Pages.
 - `data/` — Runtime artifacts (created automatically): `auth/` (Baileys session), `media/` (downloaded media).
 
@@ -26,19 +27,26 @@ Additional directories:
 | `wsClient.js` | Outbound WebSocket to LLM bridge |
 | `config.js` | Environment variable loading |
 | `logger.js` | Pino-based structured logging |
-| `utils.js` | Shared utilities |
+| `utils.js` | Stream utilities (`streamToBuffer`, `streamToFile`) |
+| `mediaHandler.js` | Media download/validation, MIME inference, `MEDIA_DIR` sandboxing |
+| `messageParser.js` | Baileys message unwrapping; extracts mentions, quoted messages, media, locations, vCards |
+| `identifiers.js` | `contextMsgId` (6-digit per-chat counter) and `senderRef` (deterministic short IDs) management |
+| `participants.js` | Group participant role mapping, name caching, JID normalization |
+| `groupContext.js` | Group metadata caching (60s TTL), `<prompt_override>` parsing, bot role tracking |
+| `caches.js` | In-memory caches: message cache, metadata TTL, participant names, sender ref registry |
 
 ### Python Bridge (`python/bridge/`)
 | File | Purpose |
 |------|---------|
 | `main.py` | WebSocket handler, message batching, burst debounce |
-| `llm1.py` | LLM1 decision/gating stage |
-| `llm2.py` | LLM2 response generation |
-| `commands.py` | Slash command parsing and handling |
-| `db.py` | SQLite settings storage (prompts, permissions) |
-| `history.py` | Message dataclass, history formatting |
-| `media.py` | Media/attachment processing for LLM input |
-| `log.py` | Structured logging setup |
+| `llm1.py` | LLM1 decision/gating stage (LangChain + OpenAI SDK, multimodal input) |
+| `llm2.py` | LLM2 response generation (system prompt from `python/systemprompt.txt`) |
+| `commands.py` | Slash command parsing (`/prompt`, `/reset`, `/permission`, `/broadcast`) |
+| `config.py` | Shared env variable parsing with type-safe helpers |
+| `db.py` | SQLite settings storage (prompts, permissions), thread-safe with in-memory cache |
+| `history.py` | `WhatsAppMessage` dataclass, history formatting with UTC offset support |
+| `media.py` | Visual attachment processing for multimodal LLM input (`build_visual_parts()`) |
+| `log.py` | Structured logging with contextvars, configurable extras and chat labels |
 
 ## Development Commands
 
@@ -81,7 +89,7 @@ cd website && npm start                 # Local dev server
 - Python 3.10+ with `from __future__ import annotations`.
 - Type hints used throughout. Dataclasses for data structures.
 - Relative imports within `python/bridge/` package.
-- Dependencies: `websockets`, `httpx`, `pydantic`, `langchain`, `langchain-openai`, `python-dotenv`.
+- Dependencies: `websockets>=12.0`, `httpx>=0.27.0`, `pydantic>=2.7.0`, `langchain>=0.2.0`, `langchain-openai>=0.1.0`, `python-dotenv>=1.0.1`.
 
 ### General
 - Paths in payloads stay workspace-relative (`data/media/...`).
