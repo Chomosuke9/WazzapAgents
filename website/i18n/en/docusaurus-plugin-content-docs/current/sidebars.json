@@ -30,5 +30,9 @@
   "tutorialSidebar.doc.FAQ": {
     "message": "FAQ",
     "description": "The label for doc FAQ in sidebar tutorialSidebar"
+  },
+  "tutorialSidebar.category.Dokumentasi Developer": {
+    "message": "Developer Docs",
+    "description": "The label for category Dokumentasi Developer in sidebar tutorialSidebar"
   }
 }
