@@ -998,8 +998,8 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   if (typeof rawText !== 'string') {
     return { text: rawText, mentions: [], groupContext };
   }
-  // Match @Name (senderRef) pattern — name is one or more non-whitespace chars, senderRef inside parens
-  const tokens = Array.from(rawText.matchAll(/@(\S+)\s*\(([^)\r\n]+)\)/g));
+  // Match @Name (senderRef) pattern — name can contain spaces, non-greedy to handle multiple mentions
+  const tokens = Array.from(rawText.matchAll(/@(.+?)\s*\(([^)\r\n]+)\)/g));
   if (tokens.length === 0) {
     return { text: rawText, mentions: [], groupContext };
   }
