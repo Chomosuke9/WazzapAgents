@@ -32,21 +32,14 @@ function setSockAccessor(fn) {
 
 function parseGroupDescription(rawDescription) {
   if (typeof rawDescription !== 'string' || !rawDescription.trim()) {
-    return { description: null, promptOveride: null };
+    return { description: null };
   }
-  const blocks = [];
   const cleaned = rawDescription
-    .replace(/<prompt_override>([\s\S]*?)<\/prompt_override>/gi, (_, block) => {
-      const trimmed = typeof block === 'string' ? block.trim() : '';
-      if (trimmed) blocks.push(trimmed);
-      return '';
-    })
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
   return {
     description: cleaned || null,
-    promptOveride: blocks.length > 0 ? blocks.join('\n\n') : null,
   };
 }
 
@@ -81,7 +74,7 @@ function currentBotAliases() {
 function normalizeGroupMetadata(meta, jid) {
   const name = meta?.subject || jid;
   const rawDescription = pickGroupDescription(meta);
-  const { description, promptOveride } = parseGroupDescription(rawDescription || '');
+  const { description } = parseGroupDescription(rawDescription || '');
   const participantRoles = buildParticipantRoleMap(meta);
   const participants = compactParticipantJids(Array.isArray(meta?.participants) ? meta.participants : []);
   const botAliases = currentBotAliases();
@@ -95,7 +88,6 @@ function normalizeGroupMetadata(meta, jid) {
   return {
     name,
     description,
-    promptOveride,
     botIsAdmin,
     botIsSuperAdmin,
     participantRoles,
@@ -107,7 +99,6 @@ function defaultGroupContext(jid) {
   return {
     name: jid,
     description: null,
-    promptOveride: null,
     botIsAdmin: false,
     botIsSuperAdmin: false,
     participantRoles: {},

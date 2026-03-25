@@ -93,7 +93,7 @@ python -m unittest python/tests/test_llm_context_serialization.py
 
 - `LLM_WS_TOKEN`, LLM API keys, and Baileys auth are **secrets**.
 - Respect media size limits to avoid OOM.
-- Moderation actions (`DELETE`/`KICK`) must go through `<prompt_override>` gating.
+- Moderation actions (`DELETE`/`KICK`) must go through permission level gating (set via `/permission`).
 - Real JIDs must never be exposed to the LLM.
 
 ## Documentation

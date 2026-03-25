@@ -93,7 +93,7 @@ index.js          ← Bootstrap, routes WS commands to WhatsApp actions
 ├── mediaHandler.js   ← Media download & validation, MIME inference
 ├── identifiers.js    ← contextMsgId counter, senderRef registry
 ├── participants.js   ← Participant role mapping, name cache
-├── groupContext.js   ← Group metadata cache, <prompt_override> parsing
+├── groupContext.js   ← Group metadata cache
 ├── caches.js         ← In-memory caches (message, metadata, names)
 └── utils.js          ← Stream utilities (streamToBuffer, streamToFile)
 ```

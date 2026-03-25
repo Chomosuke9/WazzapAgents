@@ -274,7 +274,6 @@ async function emitGroupJoinContextEvent({
     contextOnly: true,
     triggerLlm1: true,
     groupDescription: group.description,
-    groupPromptOveride: group.promptOveride,
     groupEvent: {
       action: action || 'join',
       participants: normalizedParticipants,
@@ -327,7 +326,6 @@ function emitBotActionContextEvent({
     mentionedParticipants: null,
     location: null,
     groupDescription: group?.description || null,
-    groupPromptOveride: group?.promptOveride || null,
     actionLog: {
       action,
       result,
@@ -527,7 +525,6 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
     repliedToBot,
     location,
     groupDescription: group?.description || null,
-    groupPromptOveride: group?.promptOveride || null,
     slashCommand: slashCommand || null,
   };
 

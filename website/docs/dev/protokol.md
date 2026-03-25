@@ -83,8 +83,7 @@ Dikirim setiap kali ada pesan masuk di WhatsApp.
     "botMentioned": false,
     "repliedToBot": false,
     "location": null,
-    "groupDescription": "Deskripsi grup (tanpa blok prompt_override)",
-    "groupPromptOveride": "Instruksi dari <prompt_override>",
+    "groupDescription": "Deskripsi grup",
     "slashCommand": null
   }
 }
@@ -109,8 +108,6 @@ Dikirim setiap kali ada pesan masuk di WhatsApp.
 - Pesan bot dikirim sebagai `contextOnly: true` dan `triggerLlm1: false`.
 - Gateway bisa emit synthetic event `messageType: "actionLog"` setelah aksi moderasi berhasil.
 - `mentionedParticipants` meng-resolve JID menjadi `{ jid, senderRef, name }`.
-- `groupPromptOveride` diekstrak dari `<prompt_override>` di deskripsi grup.
-
 ### `action_ack`
 
 Dikirim sebagai respons setiap kali aksi dari bridge berhasil/gagal.
@@ -294,11 +291,12 @@ Kirim typing indicator.
 
 ### Moderasi Gating
 
-Bridge menerapkan gating untuk aksi moderasi berdasarkan flag `<prompt_override>`:
+Bridge menerapkan gating untuk aksi moderasi berdasarkan level permission yang diatur via perintah `/permission`:
 
-- `DELETE` hanya dieksekusi jika `allow_delete=true` ada di prompt override **DAN** bot adalah admin.
-- `KICK` hanya dieksekusi jika `allow_kick=true` ada di prompt override **DAN** bot adalah admin.
-- `allow_kick_and_delete=true` mengaktifkan keduanya.
+- `DELETE` hanya dieksekusi jika permission level mengizinkan (level 1 atau 3) **DAN** bot adalah admin.
+- `KICK` hanya dieksekusi jika permission level mengizinkan (level 2 atau 3) **DAN** bot adalah admin.
+
+Permission dikelola menggunakan perintah `/permission <0-3>` dan disimpan di database per-chat.
 
 ### senderRef Isolation
 

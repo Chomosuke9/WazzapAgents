@@ -40,16 +40,13 @@ Bot bisa menggunakan format teks WhatsApp berikut dalam jawabannya:
 | `` `teks` `` | `kode` |
 | `> teks` | kutipan |
 
-## Alternatif: Prompt via Deskripsi Grup
+## Mengatur Permission Moderasi
 
-Selain `/prompt`, admin bisa memasukkan aturan bot langsung di **deskripsi grup** dengan format khusus:
+Selain prompt, admin juga bisa mengatur permission moderasi bot menggunakan perintah `/permission`:
 
-```
-Deskripsi grup biasa di sini...
+- `/permission 0` — Default, moderasi dinonaktifkan
+- `/permission 1` — Hanya delete pesan
+- `/permission 2` — Hanya kick member
+- `/permission 3` — Moderasi penuh (delete dan kick)
 
-<prompt_override>
-Instruksi untuk bot di sini...
-</prompt_override>
-```
-
-Teks di dalam tag `<prompt_override>` akan menjadi instruksi tambahan untuk bot, tanpa perlu mengetik `/prompt`.
+Lihat halaman [Permission](./permission.md) untuk detail lengkap.

@@ -72,8 +72,7 @@ Node.js (ESM) gateway that connects a WhatsApp account via Baileys v7 and forwar
     "botMentioned": false,
     "repliedToBot": false,
     "location": null,
-    "groupDescription": "Rules and context for this group (without prompt_override block)",
-    "groupPromptOveride": "Extra instructions extracted from <prompt_override>...</prompt_override>",
+    "groupDescription": "Rules and context for this group",
     "slashCommand": null
   }
 }
@@ -89,7 +88,7 @@ Notes:
 - `slashCommand` contains `{ command, args }` when the message is a recognized slash command, otherwise `null`.
 - Bot messages are forwarded as `contextOnly: true` and `triggerLlm1: false` so they enrich context without causing loops.
 - Gateway may emit synthetic bot context events with `messageType: "actionLog"` and `actionLog` details after successful moderation actions (`delete_message`, `kick_member`).
-- Backend bridge enforces moderation flags from `<prompt_override>`: `DELETE`/`KICK` actions are dropped unless matching `allow_*` flags are present and bot role is admin/superadmin.
+- Backend bridge enforces moderation permissions via `/permission` command: `DELETE`/`KICK` actions are dropped unless the chat's permission level allows them and bot role is admin/superadmin.
 
 ### LLM -> Gateway: `send_message`
 ```json

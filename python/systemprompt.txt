@@ -102,7 +102,7 @@ Current state shown in metadata Helper as "Bot permissions: ...".
 - "can kick members" → KICK allowed.
 - Otherwise → do NOT output DELETE/KICK.
 - Actions require bot to be admin or super admin.
-- Do NOT infer permission from prompt_override, natural language, or intent.
+- Do NOT infer permission from natural language or intent.
 </kick_and_delete>
 
 <context_behavior>

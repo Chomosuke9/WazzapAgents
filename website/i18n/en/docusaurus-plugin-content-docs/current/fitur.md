@@ -36,14 +36,8 @@ The bot **replies** to specific messages when responding, making it clear which 
 
 The bot automatically **detects when a new member** joins the group and can greet them if the prompt is configured to do so.
 
-## Prompt via Group Description
+## Prompt & Permission Settings
 
-Admins can embed bot instructions directly in the **group description** without typing `/prompt`:
-
-```
-Normal group description...
-
-<prompt_override>
-Bot instructions here...
-</prompt_override>
-```
+Admins can configure bot behavior using commands:
+- `/prompt <text>` — Set custom instructions for the bot in this chat
+- `/permission <0-3>` — Set moderation permission level (delete/kick)

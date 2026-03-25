@@ -149,24 +149,6 @@ Parser mencoba sumber teks dalam urutan prioritas:
 
 Metadata grup (nama, deskripsi, partisipan) di-cache dengan TTL 60 detik. Setelah expire, di-fetch ulang dari WhatsApp.
 
-### `<prompt_override>` Parsing
-
-Deskripsi grup bisa mengandung blok `<prompt_override>`:
-
-```
-Deskripsi grup biasa...
-
-<prompt_override>
-Instruksi bot khusus untuk grup ini.
-allow_delete=true
-allow_kick=true
-</prompt_override>
-```
-
-Parser mengekstrak:
-- **Instruksi prompt** — Diteruskan ke LLM2 sebagai konteks tambahan.
-- **Flag moderasi** — `allow_delete=true`, `allow_kick=true`, `allow_kick_and_delete=true`.
-
 ## WebSocket Client (`wsClient.js`)
 
 - Extends `EventEmitter`.

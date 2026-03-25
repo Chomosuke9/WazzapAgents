@@ -106,13 +106,13 @@ LLM2 adalah tahap kedua yang menghasilkan respons lengkap.
 LLM2 menerima 4 pesan dalam format LangChain:
 
 1. **SystemMessage** — System prompt dari `python/systemprompt.txt` dengan template variables:
-   - `{{prompt_override}}` — Prompt kustom dari `/prompt` atau `<prompt_override>`.
+   - `{{prompt_override}}` — Prompt kustom dari perintah `/prompt`.
    - `{{assistant_name}}` — Nama tampilan bot.
 
 2. **HumanMessage** — Deskripsi grup:
    ```
    Group description:
-   <deskripsi grup tanpa blok prompt_override>
+   <deskripsi grup>
    ```
 
 3. **HumanMessage** — Context injection (metadata):

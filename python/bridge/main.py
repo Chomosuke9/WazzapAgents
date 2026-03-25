@@ -81,16 +81,11 @@ except ImportError:
     ASSISTANT_ECHO_MERGE_WINDOW_MS,
   )
 logger = setup_logging()
-# Accept both canonical <prompt_override> and legacy typo <prompt_overide>.
-PROMPT_OVERIDE_TAG = re.compile(r"<prompt_overr?ide>([\s\S]*?)</prompt_overr?ide>", re.IGNORECASE)
 ACTION_LINE_RE = re.compile(r"^\[?\s*(REPLY_TO|DELETE|KICK|REACT_TO)\s*[:=]\s*(.*?)\s*\]?$", re.IGNORECASE)
-CONTEXT_MSG_ID_RE = re.compile(r"^<?\s*(\d{6})\s*>?$")
+CONTEXT_MSG_ID_RE = re.compile(r"^\s*(\d{6})\s*$")
 SENDER_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$")
 EMPTY_TARGET_TOKENS = {"none", "null", "no", "nil", "-", ""}
 REQUEST_COUNTER = count(1)
-ALLOW_KICK_FLAG = "allow_kick=true"
-ALLOW_DELETE_FLAG = "allow_delete=true"
-ALLOW_BOTH_FLAG = "allow_kick_and_delete=true"
 SYSTEM_CONTEXT_TOKEN = "system"
 MENTION_SUMMARY_MAX_ITEMS = 8
 
@@ -860,64 +855,16 @@ def _build_llm1_context_metadata(
   }
 
 
-def _extract_prompt_override(raw_description: str | None) -> tuple[str | None, str | None]:
-  text = raw_description if isinstance(raw_description, str) else ""
-  if not text.strip():
-    return None, None
-
-  prompt_blocks: list[str] = []
-
-  def _capture(match: re.Match) -> str:
-    block = _clean_text(match.group(1))
-    if block:
-      prompt_blocks.append(block)
-    return ""
-
-  cleaned = PROMPT_OVERIDE_TAG.sub(_capture, text)
-  cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-  prompt_override = "\n\n".join(prompt_blocks) if prompt_blocks else None
-  return (cleaned or None), prompt_override
-
-
 def _resolve_group_prompt_context(payload: dict) -> tuple[str | None, str | None]:
   chat_id = payload.get("chatId")
   raw_description = payload.get("groupDescription")
-  cleaned_description, extracted_overide = _extract_prompt_override(raw_description if isinstance(raw_description, str) else None)
+  description = _clean_text(raw_description) or None
 
-  # DB prompt takes priority over group description prompt_override
   db_prompt = db_get_prompt(chat_id) if chat_id else None
-  if db_prompt:
-    return cleaned_description, db_prompt
-
-  payload_overide_raw = payload.get("groupPromptOveride")
-  if not payload_overide_raw:
-    payload_overide_raw = payload.get("groupPromptOverride")
-  payload_overide = _clean_text(payload_overide_raw) or None
-
-  if payload_overide and extracted_overide:
-    if payload_overide == extracted_overide:
-      merged_overide = payload_overide
-    else:
-      merged_overide = f"{payload_overide}\n\n{extracted_overide}"
-  else:
-    merged_overide = payload_overide or extracted_overide
-
-  return cleaned_description, merged_overide
-
-
-def _extract_allow_flags(prompt_override: str | None) -> set[str]:
-  if not prompt_override:
-    return set()
-  flags: set[str] = set()
-  for raw_line in prompt_override.splitlines():
-    line = raw_line.strip()
-    if line in {ALLOW_KICK_FLAG, ALLOW_DELETE_FLAG, ALLOW_BOTH_FLAG}:
-      flags.add(line)
-  return flags
+  return description, db_prompt
 
 
 def _moderation_permissions(
-  prompt_override: str | None,
   *,
   bot_is_admin: bool,
   bot_is_super_admin: bool,
@@ -925,30 +872,14 @@ def _moderation_permissions(
 ) -> dict:
   admin_ok = bool(bot_is_admin or bot_is_super_admin)
 
-  # Use DB permission level (fully replaces prompt_override allow_* flags)
-  if chat_id:
-    db_level = db_get_permission(chat_id)
-    allow_kick = admin_ok and permission_allows_kick(db_level)
-    allow_delete = admin_ok and permission_allows_delete(db_level)
-    return {
-      "allowKick": allow_kick,
-      "allowDelete": allow_delete,
-      "adminOk": admin_ok,
-      "permissionLevel": db_level,
-      "flags": [],
-    }
-
-  # Fallback to legacy flags when no chat_id (shouldn't happen)
-  flags = _extract_allow_flags(prompt_override)
-  allow_both = ALLOW_BOTH_FLAG in flags
-  allow_kick = admin_ok and (allow_both or ALLOW_KICK_FLAG in flags)
-  allow_delete = admin_ok and (allow_both or ALLOW_DELETE_FLAG in flags)
+  db_level = db_get_permission(chat_id) if chat_id else None
+  allow_kick = admin_ok and permission_allows_kick(db_level)
+  allow_delete = admin_ok and permission_allows_delete(db_level)
   return {
     "allowKick": allow_kick,
     "allowDelete": allow_delete,
     "adminOk": admin_ok,
-    "permissionLevel": None,
-    "flags": sorted(flags),
+    "permissionLevel": db_level,
   }
 
 
@@ -1223,7 +1154,7 @@ async def handle_socket(ws):
           )
           _log_slow_batch("stale_skip")
           return
-        group_description, prompt_override = _resolve_group_prompt_context(last_payload)
+        group_description, db_prompt = _resolve_group_prompt_context(last_payload)
         chat_type, bot_is_admin, bot_is_super_admin = _chat_state_from_payload(last_payload)
         llm_context_metadata = _build_llm1_context_metadata(
           history_before_current,
@@ -1247,7 +1178,7 @@ async def handle_socket(ws):
             llm1_current,
             current_payload=llm1_payload,
             group_description=group_description,
-            prompt_override=prompt_override,
+            prompt_override=db_prompt,
           )
           llm1_ms = int((time.perf_counter() - llm1_started) * 1000)
 
@@ -1321,7 +1252,7 @@ async def handle_socket(ws):
             current,
             current_payload=llm2_payload,
             group_description=group_description,
-            prompt_override=prompt_override,
+            prompt_override=db_prompt,
             chat_type=chat_type,
             bot_is_admin=bot_is_admin,
             bot_is_super_admin=bot_is_super_admin,
@@ -1342,7 +1273,6 @@ async def handle_socket(ws):
           allowed_context_ids=allowed_context_ids,
         )
         permissions = _moderation_permissions(
-          prompt_override,
           bot_is_admin=bot_is_admin,
           bot_is_super_admin=bot_is_super_admin,
           chat_id=chat_id,
@@ -1356,8 +1286,6 @@ async def handle_socket(ws):
               "chat_id": chat_id,
               "blocked_actions": blocked_actions,
               "admin_ok": permissions.get("adminOk"),
-              "flags": permissions.get("flags"),
-              "prompt_override_present": bool(prompt_override),
             },
           )
         if not actions:
@@ -1799,10 +1727,7 @@ def _is_empty_target_token(value: str | None) -> bool:
 
 
 def _unwrap_angle_group(value: str | None) -> str:
-  token = "" if value is None else str(value).strip()
-  if token.startswith("<") and token.endswith(">") and len(token) >= 2:
-    return token[1:-1].strip()
-  return token
+  return "" if value is None else str(value).strip()
 
 
 
