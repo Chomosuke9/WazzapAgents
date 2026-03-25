@@ -98,7 +98,7 @@ Notes:
   "payload": {
     "requestId": "req-send-001",
     "chatId": "12345@g.us",
-    "text": "Reply text @<u8k2d1> @<all>",
+    "text": "Reply text @whoami (u8k2d1) @everyone (everyone)",
     "replyTo": "000124",
     "attachments": [
       {
@@ -112,8 +112,8 @@ Notes:
 ```
 
 Notes:
-- Mention one user inside outgoing text/caption with `@<senderRef>`.
-- Mention all group members with `@<all>`.
+- Mention one user inside outgoing text/caption with `@Name (senderRef)`.
+- Mention all group members with `@everyone (everyone)`.
 - Invalid `senderRef` mention tokens are silently skipped (message still sent).
 
 ### LLM -> Gateway: `react_message`

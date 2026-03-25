@@ -64,15 +64,15 @@ Menggunakan `makeWASocket` dari Baileys dengan auth state yang disimpan di `data
 
 ### Mention Resolution
 
-Saat mengirim pesan, gateway me-resolve token `@<senderRef>` di teks menjadi JID WhatsApp yang valid:
+Saat mengirim pesan, gateway me-resolve token `@Name (senderRef)` di teks menjadi JID WhatsApp yang valid:
 
 ```
-Teks input:  "Hai @<u8k2d1>, jangan spam ya"
+Teks input:  "Hai @whoami (u8k2d1), jangan spam ya"
 Resolusi:    senderRef "u8k2d1" → JID "628123456789@s.whatsapp.net"
 Teks output: "Hai @628123456789, jangan spam ya" (dengan mention tag)
 ```
 
-Token `@<all>` di-resolve menjadi mention semua anggota grup.
+Token `@everyone (everyone)` di-resolve menjadi mention semua anggota grup.
 
 ## Message Parser (`messageParser.js`)
 

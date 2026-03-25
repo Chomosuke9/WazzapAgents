@@ -162,7 +162,7 @@ Kirim pesan ke chat WhatsApp.
   "payload": {
     "requestId": "req-send-001",
     "chatId": "12345@g.us",
-    "text": "Hai @<u8k2d1>, selamat datang! @<all>",
+    "text": "Hai @whoami (u8k2d1), selamat datang! @everyone (everyone)",
     "replyTo": "000124",
     "attachments": [
       {
@@ -179,10 +179,10 @@ Kirim pesan ke chat WhatsApp.
 
 | Syntax | Deskripsi |
 |--------|-----------|
-| `@<senderRef>` | Mention satu user (resolve ke JID) |
-| `@<all>` | Mention semua anggota grup |
+| `@Name (senderRef)` | Mention satu user (resolve ke JID) |
+| `@everyone (everyone)` | Mention semua anggota grup |
 
-Token `@<senderRef>` yang invalid akan di-skip (pesan tetap terkirim).
+Token `@Name (senderRef)` yang invalid akan di-skip (pesan tetap terkirim).
 
 #### Reply
 

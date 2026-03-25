@@ -995,10 +995,11 @@ async function startWhatsApp() {
 }
 
 async function renderOutboundMentions(chatId, rawText, groupContext = null) {
-  if (typeof rawText !== 'string' || !rawText.includes('@<')) {
+  if (typeof rawText !== 'string') {
     return { text: rawText, mentions: [], groupContext };
   }
-  const tokens = Array.from(rawText.matchAll(/@<([^<>\r\n]+)>/g));
+  // Match @Name (senderRef) pattern — name is one or more non-whitespace chars, senderRef inside parens
+  const tokens = Array.from(rawText.matchAll(/@(\S+)\s*\(([^)\r\n]+)\)/g));
   if (tokens.length === 0) {
     return { text: rawText, mentions: [], groupContext };
   }
@@ -1011,15 +1012,16 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
 
   for (const token of tokens) {
     const fullToken = token[0];
-    const rawValue = typeof token[1] === 'string' ? token[1].trim() : '';
+    const rawName = typeof token[1] === 'string' ? token[1].trim() : '';
+    const rawValue = typeof token[2] === 'string' ? token[2].trim() : '';
     const normalizedValue = rawValue.toLowerCase();
     const index = Number.isInteger(token.index) ? token.index : -1;
     if (index < 0) continue;
 
     rendered += rawText.slice(cursor, index);
-    let replacement = rawValue ? `@${rawValue}` : '@';
+    let replacement = rawName ? `@${rawName}` : '@';
 
-    if (normalizedValue === 'all') {
+    if (normalizedValue === 'everyone') {
       if (chatId?.endsWith('@g.us')) {
         let participants = Array.isArray(resolvedGroup?.participants) ? resolvedGroup.participants : [];
         if (participants.length === 0) {
@@ -1032,7 +1034,10 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
           mentionSet.add(normalizedParticipant);
         }
       }
-      replacement = '@all';
+      replacement = '@everyone';
+    } else if (normalizedValue === 'bot') {
+      // Bot mention — render as display name, no JID resolution needed
+      replacement = rawName ? `@${rawName}` : '@bot';
     } else if (normalizedValue) {
       let participantJid = resolveMentionTargetBySenderRef(chatId, normalizedValue);
       if (!participantJid && !retried && chatId?.endsWith('@g.us')) {
