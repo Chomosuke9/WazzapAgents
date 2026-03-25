@@ -32,7 +32,7 @@ Additional directories and files:
 | `messageParser.js` | Baileys message unwrapping; extracts mentions, quoted messages, media, locations, vCards |
 | `identifiers.js` | `contextMsgId` (6-digit per-chat counter) and `senderRef` (deterministic short IDs) management |
 | `participants.js` | Group participant role mapping, name caching, JID normalization |
-| `groupContext.js` | Group metadata caching (60s TTL), `<prompt_override>` parsing, bot role tracking |
+| `groupContext.js` | Group metadata caching (60s TTL), bot role tracking |
 | `caches.js` | In-memory caches: message cache, metadata TTL, participant names, sender ref registry |
 
 ### Python Bridge (`python/bridge/`)
@@ -117,7 +117,7 @@ See `.env.example` for the full list with descriptions.
 - **Never commit** `data/auth/`, `.env`, or any API keys.
 - Treat `LLM_WS_TOKEN`, LLM API keys, and Baileys auth as secrets.
 - Media size limits should be respected to avoid OOM.
-- Moderation actions (DELETE/KICK) are gated by `<prompt_override>` flags in group descriptions.
+- Moderation actions (DELETE/KICK) are gated by `/permission` command (DB-backed per-chat levels).
 
 ## WebSocket Protocol
 

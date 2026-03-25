@@ -36,14 +36,8 @@ Bot me-**reply** ke pesan tertentu saat menjawab, sehingga jelas pesan mana yang
 
 Bot secara otomatis **mendeteksi ketika ada anggota baru** bergabung ke grup dan bisa menyapa mereka jika prompt-nya mengatur ini.
 
-## Prompt via Deskripsi Grup
+## Pengaturan Prompt & Permission
 
-Admin bisa menyisipkan instruksi bot langsung di **deskripsi grup** tanpa perlu mengetik `/prompt`:
-
-```
-Deskripsi grup biasa...
-
-<prompt_override>
-Instruksi bot di sini...
-</prompt_override>
-```
+Admin bisa mengatur perilaku bot menggunakan perintah:
+- `/prompt <teks>` — Atur instruksi kustom untuk bot di chat ini
+- `/permission <0-3>` — Atur level permission moderasi (delete/kick)

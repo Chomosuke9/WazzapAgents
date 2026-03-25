@@ -40,16 +40,13 @@ The bot can use the following WhatsApp text formatting in its responses:
 | `` `text` `` | `code` |
 | `> text` | quote |
 
-## Alternative: Prompt via Group Description
+## Setting Moderation Permissions
 
-Besides `/prompt`, admins can add bot rules directly in the **group description** using a special format:
+In addition to prompts, admins can also configure bot moderation permissions using the `/permission` command:
 
-```
-Normal group description here...
+- `/permission 0` — Default, moderation disabled
+- `/permission 1` — Delete messages only
+- `/permission 2` — Kick members only
+- `/permission 3` — Full moderation (delete and kick)
 
-<prompt_override>
-Bot instructions here...
-</prompt_override>
-```
-
-Text inside the `<prompt_override>` tag will become additional instructions for the bot, without needing to type `/prompt`.
+See the [Permission](./permission.md) page for full details.

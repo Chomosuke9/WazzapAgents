@@ -83,8 +83,7 @@ Sent whenever a message arrives on WhatsApp.
     "botMentioned": false,
     "repliedToBot": false,
     "location": null,
-    "groupDescription": "Group description (without prompt_override block)",
-    "groupPromptOveride": "Instructions from <prompt_override>",
+    "groupDescription": "Group description",
     "slashCommand": null
   }
 }
@@ -109,8 +108,6 @@ Sent whenever a message arrives on WhatsApp.
 - Bot messages are sent as `contextOnly: true` and `triggerLlm1: false`.
 - Gateway may emit synthetic events with `messageType: "actionLog"` after successful moderation actions.
 - `mentionedParticipants` resolves JIDs into `{ jid, senderRef, name }`.
-- `groupPromptOveride` is extracted from `<prompt_override>` in the group description.
-
 ### `action_ack`
 
 Sent as a response whenever an action from the bridge succeeds or fails.
@@ -294,11 +291,12 @@ Send a typing indicator.
 
 ### Moderation Gating
 
-The bridge enforces gating for moderation actions based on `<prompt_override>` flags:
+The bridge enforces gating for moderation actions based on the permission level set via the `/permission` command:
 
-- `DELETE` is only executed if `allow_delete=true` is present in prompt override **AND** bot is admin.
-- `KICK` is only executed if `allow_kick=true` is present in prompt override **AND** bot is admin.
-- `allow_kick_and_delete=true` enables both.
+- `DELETE` is only executed if the permission level allows it (level 1 or 3) **AND** bot is admin.
+- `KICK` is only executed if the permission level allows it (level 2 or 3) **AND** bot is admin.
+
+Permissions are managed using the `/permission <0-3>` command and stored in the per-chat database.
 
 ### senderRef Isolation
 

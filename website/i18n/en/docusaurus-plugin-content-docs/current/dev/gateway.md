@@ -149,24 +149,6 @@ The parser tries text sources in priority order:
 
 Group metadata (name, description, participants) is cached with a 60-second TTL. After expiry, it's re-fetched from WhatsApp.
 
-### `<prompt_override>` Parsing
-
-Group descriptions can contain a `<prompt_override>` block:
-
-```
-Regular group description...
-
-<prompt_override>
-Custom bot instructions for this group.
-allow_delete=true
-allow_kick=true
-</prompt_override>
-```
-
-The parser extracts:
-- **Prompt instructions** — Forwarded to LLM2 as additional context.
-- **Moderation flags** — `allow_delete=true`, `allow_kick=true`, `allow_kick_and_delete=true`.
-
 ## WebSocket Client (`wsClient.js`)
 
 - Extends `EventEmitter`.
