@@ -224,7 +224,8 @@ def _mentioned_participant_rows(payload: dict) -> list[dict]:
 
 def _mention_label(row: dict) -> str:
   if bool(row.get("isBot")):
-    return "<bot>"
+    name = _clean_text(row.get("name"))
+    return f"{name} (bot)" if name else "bot (bot)"
   name = _clean_text(row.get("name"))
   sender_ref = _clean_text(row.get("senderRef"))
   jid = _clean_text(row.get("jid"))
@@ -306,19 +307,20 @@ def _bot_jid_from_rows(rows: list[dict]) -> str | None:
   return None
 
 
-def _ensure_bot_token_in_text(text: str, *, bot_mentioned: bool, bot_jid: str | None = None) -> str:
+def _ensure_bot_token_in_text(text: str, *, bot_mentioned: bool, bot_jid: str | None = None, bot_name: str = "") -> str:
   if not bot_mentioned:
     return text
-  if "@<bot>" in text:
+  token = f"@{bot_name} (bot)" if bot_name else "@bot (bot)"
+  if token in text:
     return text
   if bot_jid:
     for candidate in _mention_number_candidates({"jid": bot_jid}):
       if candidate in text:
-        return text.replace(candidate, "@<bot>", 1)
+        return text.replace(candidate, token, 1)
   stripped = text.strip()
   if stripped:
-    return f"@<bot> {text}"
-  return "@<bot>"
+    return f"{token} {text}"
+  return token
 
 
 def _payload_text_with_mentions(payload: dict) -> str | None:
@@ -331,21 +333,22 @@ def _payload_text_with_mentions(payload: dict) -> str | None:
   labels = _mention_labels(payload)
   bot_jid = _bot_jid_from_rows(rows) if rows else None
   bot_mentioned = bool(payload.get("botMentioned"))
+  configured_bot_name = assistant_name()
   if not rows or not labels:
-    normalized = _ensure_bot_token_in_text(base_text, bot_mentioned=bot_mentioned, bot_jid=bot_jid)
+    normalized = _ensure_bot_token_in_text(base_text, bot_mentioned=bot_mentioned, bot_jid=bot_jid, bot_name=configured_bot_name)
     return normalized if normalized else None
 
   rendered, replaced = _replace_mentions_in_text(base_text, rows, labels)
   if replaced > 0:
-    normalized = _ensure_bot_token_in_text(rendered, bot_mentioned=bot_mentioned, bot_jid=bot_jid)
+    normalized = _ensure_bot_token_in_text(rendered, bot_mentioned=bot_mentioned, bot_jid=bot_jid, bot_name=configured_bot_name)
     return normalized
 
   mention_tokens = [f"@{label}" for label in labels]
   if base_text and base_text.strip():
     normalized = f"{' '.join(mention_tokens)} {base_text}"
-    return _ensure_bot_token_in_text(normalized, bot_mentioned=bot_mentioned, bot_jid=bot_jid)
+    return _ensure_bot_token_in_text(normalized, bot_mentioned=bot_mentioned, bot_jid=bot_jid, bot_name=configured_bot_name)
   normalized = " ".join(mention_tokens)
-  return _ensure_bot_token_in_text(normalized, bot_mentioned=bot_mentioned, bot_jid=bot_jid)
+  return _ensure_bot_token_in_text(normalized, bot_mentioned=bot_mentioned, bot_jid=bot_jid, bot_name=configured_bot_name)
 
 
 def _normalize_context_msg_id(value) -> str | None:
@@ -1802,13 +1805,6 @@ def _unwrap_angle_group(value: str | None) -> str:
   return token
 
 
-def _unwrap_required_angle_group(value: str | None) -> str | None:
-  token = "" if value is None else str(value).strip()
-  if not token or not token.startswith("<") or not token.endswith(">") or len(token) < 2:
-    return None
-  inner = token[1:-1].strip()
-  return inner if inner else None
-
 
 def _resolve_reply_target(
   token: str | None,
@@ -1818,9 +1814,8 @@ def _resolve_reply_target(
 ) -> str | None:
   if token is None:
     return fallback_reply_to
-  token_value = _unwrap_required_angle_group(token)
-  if token_value is None:
-    logger.warning("reply target ignored: expected angle-bracket token, got=%r", token)
+  token_value = _unwrap_angle_group(token)
+  if not token_value:
     return None
   lowered = token_value.lower()
   if lowered in EMPTY_TARGET_TOKENS:
@@ -1855,8 +1850,8 @@ def _parse_delete_targets(
   *,
   allowed_context_ids: set[str],
 ) -> list[str]:
-  token_value = _unwrap_required_angle_group(token)
-  if token_value is None:
+  token_value = _unwrap_angle_group(token)
+  if not token_value:
     return []
   if _is_empty_target_token(token_value):
     return []
@@ -1879,8 +1874,8 @@ def _parse_kick_targets(
   *,
   allowed_context_ids: set[str],
 ) -> list[dict[str, str]]:
-  token_value = _unwrap_required_angle_group(token)
-  if token_value is None:
+  token_value = _unwrap_angle_group(token)
+  if not token_value:
     return []
   if _is_empty_target_token(token_value):
     return []
@@ -1936,8 +1931,8 @@ def _parse_react_context_ids(
   allowed_context_ids: set[str],
 ) -> list[str]:
   """Parse ``REACT_TO:<NNNNNN,NNNNNN,...>`` value into a list of context message IDs."""
-  token_value = _unwrap_required_angle_group(token)
-  if token_value is None:
+  token_value = _unwrap_angle_group(token)
+  if not token_value:
     return []
   if _is_empty_target_token(token_value):
     return []

@@ -64,15 +64,15 @@ Uses `makeWASocket` from Baileys with auth state stored in `data/auth/`. On firs
 
 ### Mention Resolution
 
-When sending messages, the gateway resolves `@<senderRef>` tokens in text to valid WhatsApp JIDs:
+When sending messages, the gateway resolves `@Name (senderRef)` tokens in text to valid WhatsApp JIDs:
 
 ```
-Input text:  "Hey @<u8k2d1>, stop spamming"
+Input text:  "Hey @whoami (u8k2d1), stop spamming"
 Resolution:  senderRef "u8k2d1" → JID "628123456789@s.whatsapp.net"
 Output text: "Hey @628123456789, stop spamming" (with mention tag)
 ```
 
-The `@<all>` token resolves to mentioning all group members.
+The `@everyone (everyone)` token resolves to mentioning all group members.
 
 ## Message Parser (`messageParser.js`)
 

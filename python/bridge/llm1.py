@@ -301,7 +301,7 @@ Reason is forwarded to LLM2—keep it specific and actionable, no generic phrase
 
 `llm_react_only` — react to a message with an emoji instead of sending a text reply.
 
-Mention token: @<bot>. Always respond when mentioned.
+Mention token: @{configured_assistant_name} (bot). Always respond when mentioned.
 Input: up to {_llm1_history_limit()} messages, each capped at {_llm1_message_max_chars()} chars.
 
 ## Input format

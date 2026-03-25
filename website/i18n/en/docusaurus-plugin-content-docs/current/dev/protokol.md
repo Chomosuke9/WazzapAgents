@@ -162,7 +162,7 @@ Send a message to a WhatsApp chat.
   "payload": {
     "requestId": "req-send-001",
     "chatId": "12345@g.us",
-    "text": "Hey @<u8k2d1>, welcome! @<all>",
+    "text": "Hey @whoami (u8k2d1), welcome! @everyone (everyone)",
     "replyTo": "000124",
     "attachments": [
       {
@@ -179,10 +179,10 @@ Send a message to a WhatsApp chat.
 
 | Syntax | Description |
 |--------|-------------|
-| `@<senderRef>` | Mention one user (resolves to JID) |
-| `@<all>` | Mention all group members |
+| `@Name (senderRef)` | Mention one user (resolves to JID) |
+| `@everyone (everyone)` | Mention all group members |
 
-Invalid `@<senderRef>` tokens are silently skipped (message still sends).
+Invalid `@Name (senderRef)` tokens are silently skipped (message still sends).
 
 #### Reply
 
