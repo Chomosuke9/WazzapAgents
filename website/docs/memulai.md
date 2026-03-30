@@ -31,11 +31,29 @@ Setelah bot masuk grup, lakukan ini secara berurutan:
 
 ## Cara Bot Merespons di Grup
 
-Di grup yang ramai, bot **tidak merespons setiap pesan**. Bot akan merespons jika:
+Bot memiliki dua **mode respons** yang bisa dikonfigurasi dengan `/mode`:
 
-- Pesan **mention bot** secara eksplisit (contoh: `@Vivy`)
-- Pesan adalah **reply** ke pesan bot sebelumnya
-- Bot menilai ada konteks penting yang perlu direspons
-- Ada **kejadian penting** seperti anggota baru bergabung
+### Mode `auto` (default)
+- Bot **menganalisis konteks** setiap pesan dengan AI
+- Merespons secara otomatis jika ada topik penting
+- Cocok untuk grup yang memang butuh bot aktif
+- **Menggunakan lebih banyak token API**
 
-Di **chat pribadi**, bot selalu merespons setiap pesan.
+### Mode `prefix` (optimal untuk grup ramai)
+- Bot **hanya merespons saat dipanggil eksplisit:**
+  - `@mention` bot (contoh: `@Vivy halo`)
+  - Reply ke pesan bot sebelumnya
+  - Sebut nama bot dalam teks (contoh: "Vivy, bantu aku")
+  - Anggota baru bergabung (bisa diatur)
+- **Lebih hemat token**, respons lebih cepat
+- Konfigurasi trigger dengan `/trigger`
+
+Di **chat pribadi**, bot selalu merespons setiap pesan **tanpa memandang mode**.
+
+:::tip
+Untuk grup ramai, gunakan **`/mode prefix`** agar bot tidak terlalu berisik dan token lebih hemat. Pemilik bot bisa mengatur dengan:
+```
+/mode prefix                    # Aktifkan mode prefix
+/trigger tag,reply,name         # Bot respons saat tag/reply/mention
+```
+:::
