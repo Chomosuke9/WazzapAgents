@@ -4,6 +4,10 @@ import { downloadContentFromMessage } from 'baileys';
 import logger from './logger.js';
 import config from './config.js';
 import { streamToFile } from './utils.js';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function isPathWithin(basePath, candidatePath) {
   const relative = path.relative(basePath, candidatePath);
@@ -18,12 +22,15 @@ async function resolveAllowedAttachmentPath(rawPath, actionError) {
   if (!await fs.pathExists(candidate)) {
     throw actionError('not_found', `attachment not found: ${rawPath}`);
   }
-  const [mediaDirRealPath, candidateRealPath] = await Promise.all([
+  const [mediaDirRealPath, stickersDirRealPath, candidateRealPath] = await Promise.all([
     fs.realpath(config.mediaDir),
+    fs.realpath(config.stickersDir),
     fs.realpath(candidate),
   ]);
-  if (!isPathWithin(mediaDirRealPath, candidateRealPath)) {
-    throw actionError('invalid_target', `attachment path must be inside media dir: ${config.mediaDir}`);
+  const isInMediaDir = isPathWithin(mediaDirRealPath, candidateRealPath);
+  const isInStickersDir = isPathWithin(stickersDirRealPath, candidateRealPath);
+  if (!isInMediaDir && !isInStickersDir) {
+    throw actionError('invalid_target', `attachment path must be inside media or stickers dir: ${config.mediaDir} or ${config.stickersDir}`);
   }
   const stat = await fs.stat(candidateRealPath);
   if (!stat.isFile()) {
