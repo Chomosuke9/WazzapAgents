@@ -1533,11 +1533,13 @@ async def handle_socket(ws):
         last_event_at = pending.last_event_at or now
         burst_started_at = pending.burst_started_at or now
 
-        # In prefix mode, check if any pending payload matches a prefix trigger.
-        # If so, skip debounce and flush immediately.
-        _flush_chat_mode = db_get_mode(chat_id)
+        # Skip debounce for private chats and prefix mode matches.
         _skip_debounce = False
-        if _flush_chat_mode == "prefix":
+        _last_p = pending.payloads[-1] if pending.payloads else {}
+        _flush_chat_type, _, _ = _chat_state_from_payload(_last_p)
+        if _flush_chat_type == "private":
+          _skip_debounce = True
+        elif db_get_mode(chat_id) == "prefix":
           _flush_triggers = db_get_triggers(chat_id)
           for _fp in pending.payloads:
             if _message_matches_prefix(_fp, _flush_triggers):
