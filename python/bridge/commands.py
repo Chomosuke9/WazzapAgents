@@ -432,8 +432,8 @@ _HELP_TEXT = """\
 
 */mode* [auto|prefix] — atur mode respons (khusus grup)
   _Wajib owner atau admin grup._
-  auto = LLM memutuskan kapan merespons _(default)_
-  prefix = hanya merespons jika ada trigger
+  auto = LLM memutuskan kapan merespons
+  prefix = hanya merespons jika ada trigger _(default)_
 
 */trigger* [tag|reply|name|join|all|none] — toggle trigger di mode prefix
   _Wajib owner atau admin grup._
