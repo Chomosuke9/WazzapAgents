@@ -1,9 +1,10 @@
-"""Slash-command parser and handler for /prompt, /reset, /permission.
+"""Slash-command parser and handler for /prompt, /reset, /permission, /mode, /trigger, /dashboard.
 
 /broadcast is handled entirely on the Node.js gateway side.
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,12 +17,21 @@ try:
     get_permission,
     set_permission,
     permission_description,
+    get_mode,
+    set_mode,
+    get_triggers,
+    set_triggers,
+    VALID_MODES,
+    VALID_TRIGGERS,
   )
   from .log import setup_logging
 except ImportError:
   import sys
   sys.path.append(str(Path(__file__).resolve().parent.parent))
-  from bridge.db import get_prompt, set_prompt, get_permission, set_permission, permission_description  # type: ignore
+  from bridge.db import (  # type: ignore
+    get_prompt, set_prompt, get_permission, set_permission, permission_description,
+    get_mode, set_mode, get_triggers, set_triggers, VALID_MODES, VALID_TRIGGERS,
+  )
   from bridge.log import setup_logging  # type: ignore
 
 logger = setup_logging()
@@ -30,9 +40,22 @@ _PROMPT_MAX_CHARS = 4000
 
 # Match "/command" at start of text, optionally followed by arguments.
 _CMD_RE = re.compile(
-  r"^/(prompt|reset|permission|broadcast)\b\s*(.*)",
+  r"^/(prompt|reset|permission|broadcast|mode|trigger|dashboard)\b\s*(.*)",
   re.IGNORECASE | re.DOTALL,
 )
+
+
+def _is_owner(sender_jid: str | None) -> bool:
+  """Check if sender JID is in BOT_OWNER_JIDS."""
+  if not sender_jid:
+    return False
+  raw = os.getenv("BOT_OWNER_JIDS", "")
+  if not raw.strip():
+    return False
+  owner_jids = {j.strip() for j in raw.split(",") if j.strip()}
+  # Normalize: strip @s.whatsapp.net if present
+  normalized_sender = sender_jid.split("@")[0]
+  return normalized_sender in owner_jids or sender_jid in owner_jids
 
 
 @dataclass
@@ -80,6 +103,15 @@ def handle_command(
 
   if command == "permission":
     return _handle_permission(args, chat_id=chat_id, chat_type=chat_type, sender_is_admin=sender_is_admin)
+
+  if command == "mode":
+    return _handle_mode(args, chat_id=chat_id, chat_type=chat_type, sender_jid=sender_jid)
+
+  if command == "trigger":
+    return _handle_trigger(args, chat_id=chat_id, chat_type=chat_type, sender_jid=sender_jid)
+
+  if command == "dashboard":
+    return _handle_dashboard(chat_id=chat_id)
 
   return None
 
@@ -235,4 +267,147 @@ def _handle_permission(
     command="permission",
     success=True,
     reply=f"Permission updated: {label}",
+  )
+
+
+# ---------------------------------------------------------------------------
+# /mode
+# ---------------------------------------------------------------------------
+
+def _handle_mode(
+  args: str,
+  *,
+  chat_id: str,
+  chat_type: str,
+  sender_jid: str | None = None,
+) -> CommandResult:
+  if not args:
+    current = get_mode(chat_id)
+    triggers = get_triggers(chat_id)
+    triggers_str = ", ".join(sorted(triggers)) if triggers else "none"
+    return CommandResult(
+      command="mode",
+      success=True,
+      reply=(
+        f"Current mode: *{current}*\n"
+        f"Triggers (prefix mode): {triggers_str}\n\n"
+        f"_auto_ = LLM1 decides when to respond\n"
+        f"_prefix_ = only responds when tagged, replied, or name mentioned"
+      ),
+    )
+
+  if not _is_owner(sender_jid):
+    return CommandResult(
+      command="mode",
+      success=False,
+      reply="Only the bot owner can change the mode.",
+    )
+
+  mode = args.strip().lower()
+  if mode not in VALID_MODES:
+    return CommandResult(
+      command="mode",
+      success=False,
+      reply=f"Invalid mode. Use: /mode auto or /mode prefix",
+    )
+
+  set_mode(chat_id, mode)
+  return CommandResult(
+    command="mode",
+    success=True,
+    reply=f"Mode updated: *{mode}*",
+  )
+
+
+# ---------------------------------------------------------------------------
+# /trigger
+# ---------------------------------------------------------------------------
+
+_TRIGGER_DESCRIPTIONS = {
+  "tag": "bot @mentioned",
+  "reply": "replied to bot message",
+  "join": "new member joins group",
+  "name": "bot name mentioned in text",
+}
+
+
+def _handle_trigger(
+  args: str,
+  *,
+  chat_id: str,
+  chat_type: str,
+  sender_jid: str | None = None,
+) -> CommandResult:
+  if not args:
+    current = get_triggers(chat_id)
+    if current:
+      lines = [f"  - {t}: {_TRIGGER_DESCRIPTIONS.get(t, t)}" for t in sorted(current)]
+      return CommandResult(
+        command="trigger",
+        success=True,
+        reply="Current triggers:\n" + "\n".join(lines),
+      )
+    return CommandResult(
+      command="trigger",
+      success=True,
+      reply="No triggers enabled. Bot won't respond in prefix mode.\nUse /trigger all to enable all triggers.",
+    )
+
+  if not _is_owner(sender_jid):
+    return CommandResult(
+      command="trigger",
+      success=False,
+      reply="Only the bot owner can change triggers.",
+    )
+
+  cleaned = args.strip().lower()
+  if cleaned == "all":
+    set_triggers(chat_id, set(VALID_TRIGGERS))
+    return CommandResult(
+      command="trigger",
+      success=True,
+      reply="All triggers enabled: " + ", ".join(sorted(VALID_TRIGGERS)),
+    )
+
+  if cleaned == "none":
+    set_triggers(chat_id, set())
+    return CommandResult(
+      command="trigger",
+      success=True,
+      reply="All triggers disabled. Bot won't respond in prefix mode.",
+    )
+
+  requested = {t.strip() for t in cleaned.split(",") if t.strip()}
+  invalid = requested - VALID_TRIGGERS
+  if invalid:
+    return CommandResult(
+      command="trigger",
+      success=False,
+      reply=f"Invalid trigger(s): {', '.join(sorted(invalid))}\nValid: {', '.join(sorted(VALID_TRIGGERS))}",
+    )
+
+  set_triggers(chat_id, requested)
+  return CommandResult(
+    command="trigger",
+    success=True,
+    reply="Triggers updated: " + ", ".join(sorted(requested)),
+  )
+
+
+# ---------------------------------------------------------------------------
+# /dashboard
+# ---------------------------------------------------------------------------
+
+def _handle_dashboard(*, chat_id: str) -> CommandResult:
+  # Import here to avoid circular imports
+  try:
+    from .dashboard import get_dashboard_text
+  except ImportError:
+    from bridge.dashboard import get_dashboard_text  # type: ignore
+
+  text = get_dashboard_text(chat_id)
+  return CommandResult(
+    command="dashboard",
+    success=True,
+    reply=text,
   )

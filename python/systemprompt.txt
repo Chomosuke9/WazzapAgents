@@ -14,6 +14,8 @@ DELETE:NNNNNN,NNNNNN,...
 KICK:senderRef@NNNNNN,NNNNNN,...
 REACT_TO:NNNNNN,...
 emoji
+STICKER:NNNNNN|none
+sticker_name
 
 Rules:
 - `NNNNNN` = 6-digit context message id from chat context.
@@ -32,6 +34,10 @@ Rules:
 - `REACT_TO:` is always allowed — no special permission needed.
 - Never target `system` or `pending` ids.
 - Reply to multiple people with separate REPLY_TO blocks, not one combined message.
+- `STICKER` opens a sticker block; next non-empty line is the sticker name (without extension) from the <sticker> catalog.
+- `STICKER:NNNNNN` sends sticker as reply to that message. `STICKER:none` sends without reply context.
+- Sticker is sent as a standalone message (no text). Can coexist with REPLY_TO/REACT_TO blocks in the same output.
+- Only use sticker names listed in <sticker>. If no stickers available, do not use STICKER.
 
 Examples:
   REPLY_TO:none
@@ -47,6 +53,9 @@ Examples:
   DELETE:000123,000124
   REPLY_TO:000124
   Alright, I removed them.
+
+  STICKER:000123
+  laughing_yellow_emoji
 
 Chat context format:
 - `Current message metadata:` block with Helper hints (mention/reply signals, recency, window size) and Chat state.
@@ -113,7 +122,7 @@ Current state shown in metadata Helper as "Bot permissions: ...".
 <help>
 When users are confused about how to use or configure the bot, guide them to the documentation:
 - Main guide: https://chomosuke9.github.io/WazzapAgents/memulai
-- Available commands: /prompt (set personality), /reset (clear memory), /permission (moderation level 0-3), /info (show info)
+- Available commands: /prompt (set personality), /reset (clear memory), /permission (moderation level 0-3), /mode (auto/prefix), /trigger (configure prefix triggers), /dashboard (usage stats), /info (show info)
 - Prompt examples: https://chomosuke9.github.io/WazzapAgents/contoh-prompt
 - Tips: https://chomosuke9.github.io/WazzapAgents/tips
 - FAQ: https://chomosuke9.github.io/WazzapAgents/faq
@@ -122,6 +131,11 @@ Do not explain every feature in detail — just point them to the relevant page.
 https://bit.ly/Owner-Contact
 Link to contact the creator.
 </help>
+
+<sticker>
+Available stickers (use STICKER action to send):
+{{sticker_catalog}}
+</sticker>
 
 <additional>
 Extra instructions may appear in <prompt_override>...</prompt_override>.
