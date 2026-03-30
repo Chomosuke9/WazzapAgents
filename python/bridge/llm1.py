@@ -167,44 +167,48 @@ LLM1_TOOL = {
   },
 }
 
-LLM1_REACT_SCHEMA = {
-  "name": "llm_react_only",
+LLM1_EXPRESS_SCHEMA = {
+  "name": "llm_express",
   "parameters": {
     "type": "object",
     "properties": {
-      "emoji": {
+      "expression": {
         "type": "string",
-        "description": "A single emoji to react with (e.g. 👍, 😂, ❤️, 🔥, 😢).",
+        "description": (
+          "Either a single emoji to react to the message (e.g. 👍, 😂, ❤️, 🔥, 😢), "
+          "or the exact sticker name from the available sticker catalog to send a sticker. "
+          "Use an emoji when a quick reaction fits; use a sticker name when a sticker would be more expressive."
+        ),
         "minLength": 1,
-        "maxLength": 1,
+        "maxLength": 100,
       },
       "context_msg_id": {
         "type": "string",
         "description": (
-          "The 6-digit contextMsgId of the message to react to. "
+          "The 6-digit contextMsgId of the target message. "
           "Use the id from current messages(burst). "
-          "Use the last message id if reacting to the most recent message."
+          "Use the last message id if targeting the most recent message."
         ),
         "minLength": 6,
         "maxLength": 6,
       },
       "confidence": {
         "type": "integer",
-        "description": "Confidence percentage (0-100) about the reaction decision.",
+        "description": "Confidence percentage (0-100) about this decision.",
         "minimum": 0,
         "maximum": 100,
       },
       "reason": {
         "type": "string",
         "description": (
-          "A concise reason for reacting. "
+          "A concise reason for this action. "
           "1-2 short sentences (max 320 chars)."
         ),
         "minLength": 2,
         "maxLength": 320,
       },
     },
-    "required": ["emoji", "context_msg_id", "confidence", "reason"],
+    "required": ["expression", "context_msg_id", "confidence", "reason"],
     "additionalProperties": False,
   },
 }
@@ -212,12 +216,13 @@ LLM1_REACT_SCHEMA = {
 LLM1_REACT_TOOL = {
   "type": "function",
   "function": {
-    "name": LLM1_REACT_SCHEMA["name"],
+    "name": LLM1_EXPRESS_SCHEMA["name"],
     "description": (
-      "React to a message with an emoji instead of sending a text reply. "
-      "Use this when the situation calls for an emoji reaction only (no text response needed)."
+      "Express a non-text reaction to a message — either an emoji reaction or a sticker — "
+      "instead of sending a text reply. "
+      "Use this when the situation calls for a lightweight acknowledgement with no text needed."
     ),
-    "parameters": LLM1_REACT_SCHEMA["parameters"],
+    "parameters": LLM1_EXPRESS_SCHEMA["parameters"],
     "strict": True,
   },
 }
@@ -229,7 +234,7 @@ class LLM1Decision(BaseModel):
   should_response: bool = Field(..., description="Whether to respond")
   confidence: int = Field(..., ge=0, le=100)
   reason: str = Field(..., min_length=2, max_length=320)
-  react_emoji: str | None = Field(default=None, description="Emoji for react-only decisions")
+  react_expression: str | None = Field(default=None, description="Emoji or sticker name for express-only decisions")
   react_context_msg_id: str | None = Field(default=None, description="Target message contextMsgId for react-only")
   input_tokens: int = Field(default=0, description="LLM1 input tokens used")
   output_tokens: int = Field(default=0, description="LLM1 output tokens used")
@@ -295,13 +300,15 @@ def build_llm1_prompt(
 You are a WhatsApp router agent ({configured_assistant_name}). Decide whether to respond.
 Core rule: Default state is SILENT. Respond only when evidence clearly justifies it. Being talked ABOUT is not being talked TO. An active conversation you were not invited into is not yours to join. When in doubt, stay silent — silence is the correct behavior for most messages.
 
-Call exactly one tool — either `llm_should_response` or `llm_react_only`. No other text output.
+Call exactly one tool — either `llm_should_response` or `llm_express`. No other text output.
 
 `llm_should_response` — route to response generator or skip entirely.
 Args: should_response (bool), confidence (0-100), reason (1-3 sentences, 12-60 words, max 320 chars).
 Reason is forwarded to LLM2—keep it specific and actionable, no generic phrases or chain-of-thought.
 
-`llm_react_only` — react to a message with an emoji instead of sending a text reply.
+`llm_express` — express a non-text reaction instead of a text reply. Use `expression` field with either:
+- A single emoji to react to the message (e.g. 👍, 😂, ❤️, 🔥, 😢)
+- An exact sticker name from the <sticker> catalog in the LLM2 system prompt, to send a sticker
 
 Mention token: @{configured_assistant_name} (bot). Always respond when mentioned.
 Input: up to {_llm1_history_limit()} messages, each capped at {_llm1_message_max_chars()} chars.
@@ -330,7 +337,7 @@ Input: up to {_llm1_history_limit()} messages, each capped at {_llm1_message_max
 **MAY RESPOND** (confidence 40–60) — use careful judgment:
 - Bot is in an active thread (last assistant reply was recent, within ~2 messages) AND the message is a direct follow-up question to the bot’s last reply specifically
 
-**REACT-ONLY** — call `llm_react_only` with the appropriate emoji and target message id:
+**REACT-ONLY** — call `llm_express` with the appropriate emoji or sticker name and target message id:
 - Emotional/social content: jokes, congratulations, venting, grief, excitement — a reaction acknowledges without intruding
 - Memes or humor between humans — a reaction fits naturally
 - Bot’s name appears in third-person reference ("[name] said earlier...", "according to [name]...") — react to confirm presence, do not reply
@@ -348,7 +355,7 @@ Respond (conversation continuity): ONLY if the bot recently replied AND the curr
 Respond (name in text): ONLY if the bot’s name appears in a sentence directed AT the bot (e.g., "[name], can you help...?", "hey [name] what is...").
 If the bot’s name appears in third-person reference ("[name] said earlier...", "[name] already answered that", "according to [name]..."), use react-only — do not send a text reply.
 Respond (gap coverage): if the last assistant reply was 8+ messages ago AND the latest message is an unanswered question or help request. Do NOT use "long silence" as a reason to respond to non-question messages.
-React-only: Use `llm_react_only` tool. Pick the most fitting single emoji and target the relevant message by its 6-digit contextMsgId.
+React-only: Use `llm_express` tool. Pick a fitting single emoji or sticker name and target the relevant message by its 6-digit contextMsgId.
 Bot role: check the "Chat state" in metadata. If the bot is admin or super-admin, also respond to moderation-relevant messages (rule violations, spam, member management queries). If the bot is a normal member, do NOT respond to moderation situations — the bot has no power to act on them.
 Rule: humans don’t reply to every message. Quality > quantity. Participate, don’t dominate.
 
@@ -1121,7 +1128,7 @@ async def call_llm1(
         continue
       return last_failure
 
-    # Detect which tool was called: llm_should_response or llm_react_only
+    # Detect which tool was called: llm_should_response or llm_express
     respond_tool_name = LLM1_TOOL["function"]["name"]
     react_tool_name = LLM1_REACT_TOOL["function"]["name"]
 
@@ -1177,18 +1184,18 @@ async def call_llm1(
         continue
       return last_failure
 
-    # Handle llm_react_only tool call
+    # Handle llm_express tool call
     if called_tool_name == react_tool_name:
-      react_emoji = str(args.get("emoji") or "").strip()
+      react_expression = str(args.get("expression") or "").strip()
       react_context_msg_id = str(args.get("context_msg_id") or "").strip()
       react_confidence = args.get("confidence", 50)
-      react_reason = str(args.get("reason") or "react-only").strip()
-      if not react_emoji or not react_context_msg_id:
+      react_reason = str(args.get("reason") or "express-only").strip()
+      if not react_expression or not react_context_msg_id:
         logger.warning(
-          "LLM1 llm_react_only missing emoji or context_msg_id",
+          "LLM1 llm_express missing expression or context_msg_id",
           extra={**ctx, "raw_args": args, "will_try_fallback_target": has_next_target},
         )
-        last_failure = LLM1Decision(should_response=False, confidence=10, reason="llm1_invalid_react_tool")
+        last_failure = LLM1Decision(should_response=False, confidence=10, reason="llm1_invalid_express_tool")
         if has_next_target:
           continue
         return last_failure
@@ -1196,23 +1203,23 @@ async def call_llm1(
         should_response=False,
         confidence=react_confidence if isinstance(react_confidence, int) else 50,
         reason=react_reason[:320],
-        react_emoji=react_emoji,
+        react_expression=react_expression,
         react_context_msg_id=react_context_msg_id,
         input_tokens=_llm1_input_tokens,
         output_tokens=_llm1_output_tokens,
       )
       logger.info(
-        'LLM1 react-only decision: emoji=%s target=%s conf=%s%% reason="%s" elapsed=%sms',
-        react_emoji,
+        'LLM1 express decision: expression=%s target=%s conf=%s%% reason="%s" elapsed=%sms',
+        react_expression,
         react_context_msg_id,
         decision.confidence,
         trunc(" ".join((decision.reason or "").split()), 220),
         elapsed_ms,
         extra={
           **ctx,
-          "source": "react_tool_call",
+          "source": "express_tool_call",
           "should_response": False,
-          "react_emoji": react_emoji,
+          "react_expression": react_expression,
           "react_context_msg_id": react_context_msg_id,
           "confidence": decision.confidence,
           "reason": decision.reason,

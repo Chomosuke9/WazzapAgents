@@ -1279,27 +1279,49 @@ async def handle_socket(ws):
 
         for payload in non_empty_payloads:
           _append_or_merge_history_payload(history, payload)
-        # Handle react-only decision from LLM1 (skip LLM2 entirely)
-        if decision.react_emoji and decision.react_context_msg_id:
-          logger.info(
-            "llm1 react-only; sending emoji directly (skipping llm2)",
-            extra={
-              "chat_id": chat_id,
-              "react_emoji": decision.react_emoji,
-              "react_context_msg_id": decision.react_context_msg_id,
-              "confidence": decision.confidence,
-              "reason": decision.reason,
-              "llm1_ms": llm1_ms,
-            },
-          )
-          await send_react_message(
-            ws,
-            chat_id,
-            decision.react_context_msg_id,
-            decision.react_emoji,
-            request_id=_make_request_id("react"),
-          )
-          _log_slow_batch("llm1_react_only")
+        # Handle express decision from LLM1 (skip LLM2 entirely)
+        if decision.react_expression and decision.react_context_msg_id:
+          sticker_path = resolve_sticker(decision.react_expression)
+          if sticker_path:
+            logger.info(
+              "llm1 express; sending sticker directly (skipping llm2)",
+              extra={
+                "chat_id": chat_id,
+                "sticker_name": decision.react_expression,
+                "react_context_msg_id": decision.react_context_msg_id,
+                "confidence": decision.confidence,
+                "reason": decision.reason,
+                "llm1_ms": llm1_ms,
+              },
+            )
+            await send_sticker(
+              ws,
+              chat_id,
+              sticker_path,
+              decision.react_context_msg_id,
+              request_id=_make_request_id("sticker"),
+            )
+            record_stat(chat_id, "stickers_sent")
+          else:
+            logger.info(
+              "llm1 express; sending emoji react directly (skipping llm2)",
+              extra={
+                "chat_id": chat_id,
+                "react_expression": decision.react_expression,
+                "react_context_msg_id": decision.react_context_msg_id,
+                "confidence": decision.confidence,
+                "reason": decision.reason,
+                "llm1_ms": llm1_ms,
+              },
+            )
+            await send_react_message(
+              ws,
+              chat_id,
+              decision.react_context_msg_id,
+              decision.react_expression,
+              request_id=_make_request_id("react"),
+            )
+          _log_slow_batch("llm1_express")
           return
 
         if not decision.should_response:
