@@ -337,7 +337,7 @@ Input: up to {_llm1_history_limit()} messages, each capped at {_llm1_message_max
 **MAY RESPOND** (confidence 40–60) — use careful judgment:
 - Bot is in an active thread (last assistant reply was recent, within ~2 messages) AND the message is a direct follow-up question to the bot’s last reply specifically
 
-**REACT-ONLY** — call `llm_express` with the appropriate emoji or sticker name and target message id:
+**EXPRESS-ONLY** — call `llm_express` with the appropriate emoji or sticker name and target message id:
 - Emotional/social content: jokes, congratulations, venting, grief, excitement — a reaction acknowledges without intruding
 - Memes or humor between humans — a reaction fits naturally
 - Bot’s name appears in third-person reference ("[name] said earlier...", "according to [name]...") — react to confirm presence, do not reply
