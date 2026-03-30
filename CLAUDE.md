@@ -106,10 +106,14 @@ Copy `.env.example` to `.env`. Required variable:
 Key optional variables:
 - `INSTANCE_ID` — Gateway instance identifier.
 - `BOT_OWNER_JIDS` — Comma-separated owner JIDs for `/broadcast`, `/mode`, `/trigger`.
-- `LLM1_*` — LLM1 (gating) provider config: endpoint, model, API key, temperature, timeout.
-- `LLM2_*` — LLM2 (responder) provider config: endpoint, model, API key, temperature, timeout.
+- `LLM1_*` — LLM1 (gating) provider config: endpoint, model, API key, temperature, timeout, reasoning effort.
+- `LLM2_*` — LLM2 (responder) provider config: endpoint, model, API key, temperature, timeout, reasoning effort.
+- `LLM1_REASONING_EFFORT`, `LLM2_REASONING_EFFORT` — `low`/`medium`/`high` for models that support reasoning.
 - `ASSISTANT_NAME` — Bot display name. Supports comma-separated aliases for prefix mode (e.g., `vivy,ivy,vivi`). First name = display name, rest = trigger aliases.
 - `HISTORY_LIMIT`, `INCOMING_DEBOUNCE_SECONDS`, `INCOMING_BURST_MAX_SECONDS` — Bridge batching tuning. Note: debounce is bypassed in prefix mode and private chats.
+- `BRIDGE_MAX_TRIGGER_BATCH_AGE_MS` — Max age of a batch in prefix mode before forcing send (default: 45s).
+- `BRIDGE_REPLY_DEDUP_WINDOW_MS`, `BRIDGE_REPLY_DEDUP_MIN_CHARS` — Reply deduplication window and minimum character threshold.
+- `BRIDGE_ASSISTANT_ECHO_MERGE_WINDOW_MS` — Merge bot's own consecutive messages within this window (default: 180s).
 - `BRIDGE_LOG_*` — Python bridge logging configuration.
 - `BOT_DB_PATH` — SQLite database path (default: `data/bot.db`).
 
@@ -130,6 +134,8 @@ Two response modes per chat, controlled via `/mode` (owner only):
 
 Default: all triggers enabled. Private chats always auto-respond regardless of mode.
 
+**Dashboard** (`/dashboard`): Shows per-chat usage stats (daily/weekly/monthly) including messages processed, bot tags, name mentions, LLM1/LLM2 calls and token usage, responses sent, stickers sent, errors, and top users. Stats are buffered in RAM and periodically flushed to SQLite.
+
 ## Sticker Action
 
 Place sticker images (`.webp`, `.png`, `.jpg`, `.gif`) in `data/stickers/`. Filenames (without extension) become the sticker catalog, injected into the LLM2 system prompt under `<sticker>`.
@@ -147,11 +153,20 @@ LLM2 can send stickers via the `STICKER:NNNNNN|none` control line followed by th
 
 The gateway and LLM bridge communicate via JSON messages over WebSocket. Key message types:
 
-**Gateway → LLM:** `incoming_message` (with full chat context, attachments, mentions, quoted messages)
+**Gateway → LLM:**
+- `incoming_message` — User/group messages with full chat context, attachments, mentions, quoted messages. Key payload fields:
+  - `contextOnly` — `true` for bot's own messages (enriches context without triggering response loops).
+  - `triggerLlm1` — Whether to run LLM1 gating (`false` for bot context, reactions).
+  - `senderIsOwner` — Whether sender is in `BOT_OWNER_JIDS`.
+  - `botMentioned`, `repliedToBot` — Prefix mode trigger signals.
+  - `mentionedParticipants` — Resolved mentions: `[{ jid, senderRef, name, isBot }]`.
+- `incoming_message` with `messageType: "groupParticipantsUpdate"` — Synthetic event when members join/leave/are added. Includes `groupEvent: { action, participants, actorId, actorName, source }`.
+- `incoming_message` with `messageType: "actionLog"` — Synthetic bot context event after successful moderation actions.
+- `action_ack` — Success/failure acknowledgement for actions.
 
 **LLM → Gateway:** `send_message`, `react_message`, `delete_message`, `kick_member`, `mark_read`, `send_presence`
 
-**Gateway → LLM:** `action_ack` (success/failure acknowledgement for actions)
+**LLM2 Control Lines:** LLM2 output is parsed for control lines: `REPLY_TO:NNNNNN`, `DELETE:NNNNNN`, `KICK:senderRef`, `REACT_TO:emoji@NNNNNN`, `STICKER:NNNNNN|none` (followed by sticker name).
 
 See `README.md` for full protocol schema and payload examples.
 
