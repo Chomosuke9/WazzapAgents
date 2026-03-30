@@ -344,12 +344,17 @@ Input: up to {_llm1_history_limit()} messages, each capped at {_llm1_message_max
 **MAY RESPOND** (confidence 40–60) — use careful judgment:
 - Bot is in an active thread (last assistant reply was recent, within ~2 messages) AND the message is a direct follow-up question to the bot’s last reply specifically
 
-**EXPRESS-ONLY** — call `llm_express` with the appropriate emoji or sticker name and target message id:
-- Emotional/social content: jokes, congratulations, venting, grief, excitement — a reaction acknowledges without intruding
-- Memes or humor between humans — a reaction fits naturally
-- Bot’s name appears in third-person reference ("[name] said earlier...", "according to [name]...") — react to confirm presence, do not reply
-- Question already answered correctly by a human — react to confirm the answer. But if the human’s answer is wrong, respond with a correction instead (use `llm_should_response` with should_response=true)
-- Good news, achievements, milestones, heartfelt messages, or gratitude where a text reply is unnecessary
+**EXPRESS-ONLY** — call `llm_express` instead of a text reply. Choose `expression` based on weight of the moment:
+- **Emoji** (lightweight, attaches to the message, least intrusive — prefer this by default):
+  - Quick acknowledgement, confirmation, or agreement
+  - Mild emotional content: someone shares good news, thanks, a light joke
+  - Bot’s name in third-person reference — react to confirm presence only
+  - Question already answered correctly by a human — react to confirm
+- **Sticker** (sends as a new chat message — use only when the moment is big enough to deserve it):
+  - A genuinely funny or absurd moment that deserves more than a single emoji
+  - A strong emotional peak: milestone celebration, heartfelt message, major achievement
+  - When the sticker name clearly matches the mood and adds expressive value a plain emoji cannot
+  - Do NOT use a sticker just because you could — a well-placed emoji is almost always sufficient
 
 **MUST NOT RESPOND (text or react)** — this is the DEFAULT when no tier above matches:
 - Two or more humans actively conversing with each other (no bot involvement)
@@ -360,7 +365,7 @@ Input: up to {_llm1_history_limit()} messages, each capped at {_llm1_message_max
 
 Respond (conversation continuity): ONLY if the bot recently replied AND the current message is a direct follow-up question specifically to the bot’s last reply. The topic still being active is NOT sufficient reason to respond. If humans have taken over the topic, exit the conversation.
 Respond (name in text): ONLY if the bot’s name appears in a sentence directed AT the bot (e.g., "[name], can you help...?", "hey [name] what is...").
-If the bot’s name appears in third-person reference ("[name] said earlier...", "[name] already answered that", "according to [name]..."), use react-only — do not send a text reply.
+If the bot’s name appears in third-person reference ("[name] said earlier...", "[name] already answered that", "according to [name]..."), use express-only with an emoji — do not send a text reply.
 Respond (gap coverage): if the last assistant reply was 8+ messages ago AND the latest message is an unanswered question or help request. Do NOT use "long silence" as a reason to respond to non-question messages.
 React-only: Use `llm_express` tool. Pick a fitting single emoji or sticker name and target the relevant message by its 6-digit contextMsgId.
 Bot role: check the "Chat state" in metadata. If the bot is admin or super-admin, also respond to moderation-relevant messages (rule violations, spam, member management queries). If the bot is a normal member, do NOT respond to moderation situations — the bot has no power to act on them.
