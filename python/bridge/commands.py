@@ -40,7 +40,7 @@ _PROMPT_MAX_CHARS = 4000
 
 # Match "/command" at start of text, optionally followed by arguments.
 _CMD_RE = re.compile(
-  r"^/(prompt|reset|permission|broadcast|mode|trigger|dashboard)\b\s*(.*)",
+  r"^/(prompt|reset|permission|broadcast|mode|trigger|dashboard|help)\b\s*(.*)",
   re.IGNORECASE | re.DOTALL,
 )
 
@@ -112,6 +112,9 @@ def handle_command(
 
   if command == "dashboard":
     return _handle_dashboard(chat_id=chat_id)
+
+  if command == "help":
+    return _handle_help(chat_type=chat_type)
 
   return None
 
@@ -400,6 +403,53 @@ def _handle_trigger(
     command="trigger",
     success=True,
     reply="\n".join(status_lines) + f"\nActive triggers: {active_str}",
+  )
+
+
+# ---------------------------------------------------------------------------
+# /help
+# ---------------------------------------------------------------------------
+
+_HELP_TEXT = """\
+*Daftar Perintah Bot*
+
+*/prompt* [teks] — atur kepribadian/instruksi khusus bot untuk chat ini
+  _Wajib admin grup. /prompt clear untuk menghapus._
+
+*/reset* — hapus memori percakapan bot di chat ini
+  _Wajib admin grup._
+
+*/permission* [0-3] — atur izin moderasi (khusus grup)
+  _Wajib admin grup._
+  0 = tidak bisa kick/delete _(default)_
+  1 = boleh delete pesan
+  2 = boleh kick member
+  3 = boleh delete & kick
+
+*/mode* [auto|prefix] — atur mode respons (khusus grup)
+  _Wajib owner._
+  auto = LLM memutuskan kapan merespons _(default)_
+  prefix = hanya merespons jika ada trigger
+
+*/trigger* [tag|reply|name|join|all|none] — toggle trigger di mode prefix
+  _Wajib owner._
+  tag = bot di-@mention
+  reply = seseorang membalas pesan bot
+  name = nama bot disebut dalam teks
+  join = member baru masuk grup
+  all/none = aktifkan/nonaktifkan semua
+
+*/dashboard* — lihat statistik penggunaan bot
+
+*/help* — tampilkan pesan ini\
+"""
+
+
+def _handle_help(*, chat_type: str) -> CommandResult:
+  return CommandResult(
+    command="help",
+    success=True,
+    reply=_HELP_TEXT,
   )
 
 
