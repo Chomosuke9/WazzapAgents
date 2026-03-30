@@ -386,11 +386,20 @@ def _handle_trigger(
       reply=f"Invalid trigger(s): {', '.join(sorted(invalid))}\nValid: {', '.join(sorted(VALID_TRIGGERS))}",
     )
 
-  set_triggers(chat_id, requested)
+  current = get_triggers(chat_id)
+  toggled_on = requested - current
+  toggled_off = requested & current
+  new_triggers = (current | toggled_on) - toggled_off
+  set_triggers(chat_id, new_triggers)
+  status_lines = []
+  for t in sorted(requested):
+    state = "enabled" if t in toggled_on else "disabled"
+    status_lines.append(f"  - {t}: {state}")
+  active_str = ", ".join(sorted(new_triggers)) if new_triggers else "none"
   return CommandResult(
     command="trigger",
     success=True,
-    reply="Triggers updated: " + ", ".join(sorted(requested)),
+    reply="\n".join(status_lines) + f"\nActive triggers: {active_str}",
   )
 
 
