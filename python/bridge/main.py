@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -1454,11 +1455,9 @@ async def handle_socket(ws):
           }
         )
 
-        # Send typing indicator before LLM2
-        await send_typing(ws, chat_id, composing=True)
-
+        # Keep typing indicator alive while LLM2 generates (refreshes every 8s)
         llm2_started = time.perf_counter()
-        try:
+        async with typing_indicator(ws, chat_id):
           def _validate_llm2_result(result) -> bool:
             """Return True if the LLM2 output contains at least one usable action."""
             test_actions = _extract_actions(
@@ -1479,9 +1478,6 @@ async def handle_socket(ws):
             bot_is_super_admin=bot_is_super_admin,
             result_validator=_validate_llm2_result,
           )
-        finally:
-          # Stop typing indicator after LLM2 finishes (success or failure)
-          await send_typing(ws, chat_id, composing=False)
 
         llm2_ms = int((time.perf_counter() - llm2_started) * 1000)
         record_stat(chat_id, "llm2_calls")
@@ -2010,6 +2006,34 @@ async def send_typing(ws, chat_id: str, composing: bool = True):
     )
   except Exception as err:
     logger.debug("send_typing failed: %s", err)
+
+
+@contextlib.asynccontextmanager
+async def typing_indicator(ws, chat_id: str, interval: float = 8.0):
+  """Context manager that keeps the typing indicator alive by refreshing it periodically.
+
+  WhatsApp's typing indicator expires after ~10-15 seconds on the client side.
+  This sends a fresh 'composing' presence every *interval* seconds so the
+  indicator stays visible even when LLM2 takes a long time to respond.
+  """
+
+  async def _keep_alive():
+    try:
+      while True:
+        await asyncio.sleep(interval)
+        await send_typing(ws, chat_id, composing=True)
+    except asyncio.CancelledError:
+      pass
+
+  await send_typing(ws, chat_id, composing=True)
+  task = asyncio.create_task(_keep_alive())
+  try:
+    yield
+  finally:
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+      await task
+    await send_typing(ws, chat_id, composing=False)
 
 
 def _infer_media(payload: dict) -> str | None:
