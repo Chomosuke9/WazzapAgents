@@ -241,10 +241,17 @@ class LLM1Decision(BaseModel):
 
 
 def _render_prompt_override(base_system: str, prompt_override: str | None) -> str:
+  try:
+    from .stickers import sticker_catalog_text
+  except ImportError:
+    from bridge.stickers import sticker_catalog_text  # type: ignore
   rendered = base_system
   overide_text = (prompt_override or "").strip()
   rendered = rendered.replace("{{prompt_override}}", overide_text)
   rendered = rendered.replace("{{ prompt_override }}", overide_text)
+  catalog = sticker_catalog_text()
+  rendered = rendered.replace("{{sticker_catalog}}", catalog)
+  rendered = rendered.replace("{{ sticker_catalog }}", catalog)
   return rendered
 
 
@@ -361,6 +368,11 @@ Rule: humans don’t reply to every message. Quality > quantity. Participate, do
 
 ## Burst
 Consider every message in `current messages(burst)`. Busy bursts may overflow into `older messages`—still evaluate them.
+
+<sticker>
+Available sticker names for `llm_express` (use exact name as `expression`):
+{{{{sticker_catalog}}}}
+</sticker>
 
 ## Prompt Override
 Extra instructions in <prompt_override>...</prompt_override>:
