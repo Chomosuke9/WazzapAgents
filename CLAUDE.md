@@ -123,8 +123,8 @@ See `.env.example` for the full list with descriptions.
 
 Two response modes per chat, controlled via `/mode` (owner only):
 
-- **`prefix`** (default) — Bot only responds when explicitly invoked: @tagged, replied to, or name mentioned in text. LLM1 is skipped entirely (straight to LLM2). Debounce is bypassed for immediate response. Saves tokens and reduces latency.
-- **`auto`** — Original behavior. LLM1 decides whether to respond based on context analysis. Full debounce/burst batching applies.
+- **`auto`** (default) — LLM1 decides whether to respond based on context analysis. Full debounce/burst batching applies.
+- **`prefix`** — Bot only responds when explicitly invoked: @tagged, replied to, or name mentioned in text. LLM1 is skipped entirely (straight to LLM2). Debounce is bypassed for immediate response. Saves tokens and reduces latency.
 
 **Triggers** (`/trigger`, owner only): Configures what activates the bot in prefix mode.
 - `tag` — bot @mentioned
@@ -132,7 +132,7 @@ Two response modes per chat, controlled via `/mode` (owner only):
 - `join` — new member joins group
 - `name` — bot name/alias found in message text (case-insensitive, uses `ASSISTANT_NAME` aliases)
 
-Default: all triggers enabled. Private chats always auto-respond regardless of mode.
+Default: `tag`, `reply`, `name` enabled (`join` disabled). Private chats always auto-respond regardless of mode.
 
 **Dashboard** (`/dashboard`): Shows per-chat usage stats (daily/weekly/monthly) including messages processed, bot tags, name mentions, LLM1/LLM2 calls and token usage, responses sent, stickers sent, errors, and top users. Stats are buffered in RAM and periodically flushed to SQLite.
 

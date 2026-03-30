@@ -38,9 +38,9 @@ _triggers_cache: dict[str, str] = {}
 _cache_lock = threading.Lock()
 
 VALID_MODES = {"auto", "prefix"}
-DEFAULT_MODE = "prefix"
+DEFAULT_MODE = "auto"
 VALID_TRIGGERS = {"tag", "reply", "join", "name"}
-DEFAULT_TRIGGERS = "tag,reply,join,name"
+DEFAULT_TRIGGERS = "tag,reply,name"
 
 # Sentinel to distinguish "we looked it up and it was NULL/missing" from
 # "we haven't looked it up yet".
@@ -225,7 +225,7 @@ def permission_allows_delete(level: int) -> bool:
 # ---------------------------------------------------------------------------
 
 def get_mode(chat_id: str) -> str:
-  """Return the chat mode ('auto' or 'prefix'). Default 'prefix'."""
+  """Return the chat mode ('auto' or 'prefix'). Default 'auto'."""
   with _cache_lock:
     cached = _mode_cache.get(chat_id, _MISSING)
   if cached is not _MISSING:
