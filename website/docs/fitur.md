@@ -36,8 +36,24 @@ Bot me-**reply** ke pesan tertentu saat menjawab, sehingga jelas pesan mana yang
 
 Bot secara otomatis **mendeteksi ketika ada anggota baru** bergabung ke grup dan bisa menyapa mereka jika prompt-nya mengatur ini.
 
-## Pengaturan Prompt & Permission
+## Mode Respons (Auto vs Prefix)
 
-Admin bisa mengatur perilaku bot menggunakan perintah:
+Bot memiliki **dua mode respons** yang bisa dikonfigurasi:
+
+- **`auto`** (default) — Bot menganalisis konteks setiap pesan dan merespons secara otomatis
+- **`prefix`** (hemat token) — Bot hanya merespons saat dipanggil: `@mention`, reply, atau nama disebut
+
+Gunakan `/mode` untuk melihat atau mengubah mode. Pemilik bot bisa mengatur dengan:
+```
+/mode prefix        # Aktifkan mode hemat
+/trigger tag,reply  # Atur trigger respons
+```
+
+## Pengaturan Prompt, Mode, & Permission
+
+Admin & pemilik bot bisa mengatur perilaku bot:
 - `/prompt <teks>` — Atur instruksi kustom untuk bot di chat ini
 - `/permission <0-3>` — Atur level permission moderasi (delete/kick)
+- `/mode <auto|prefix>` — Ubah mode respons (pemilik bot saja)
+- `/trigger <triggers>` — Atur pemicu dalam mode prefix (pemilik bot saja)
+- `/dashboard` — Lihat statistik penggunaan
