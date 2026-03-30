@@ -12,9 +12,11 @@ const ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 const AUTH_DIR = path.join(DATA_DIR, 'auth');
 const MEDIA_DIR = process.env.MEDIA_DIR || path.join(DATA_DIR, 'media');
+const STICKERS_DIR = process.env.STICKERS_DIR || path.join(DATA_DIR, 'stickers');
 
 fs.ensureDirSync(AUTH_DIR);
 fs.ensureDirSync(MEDIA_DIR);
+fs.ensureDirSync(STICKERS_DIR);
 
 function positiveInt(value, fallback) {
   const parsed = Number(value);
@@ -50,6 +52,7 @@ const config = {
   reconnectIntervalMs: positiveInt(process.env.WS_RECONNECT_MS, 5000),
   authDir: AUTH_DIR,
   mediaDir: MEDIA_DIR,
+  stickersDir: STICKERS_DIR,
   logLevel: process.env.LOG_LEVEL || 'info',
   groupMetadataTimeoutMs: positiveInt(process.env.GROUP_METADATA_TIMEOUT_MS, 8000),
   downloadTimeoutMs: positiveInt(process.env.DOWNLOAD_TIMEOUT_MS, 60000),
