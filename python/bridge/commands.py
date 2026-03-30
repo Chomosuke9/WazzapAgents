@@ -105,10 +105,10 @@ def handle_command(
     return _handle_permission(args, chat_id=chat_id, chat_type=chat_type, sender_is_admin=sender_is_admin)
 
   if command == "mode":
-    return _handle_mode(args, chat_id=chat_id, chat_type=chat_type, sender_jid=sender_jid)
+    return _handle_mode(args, chat_id=chat_id, chat_type=chat_type, sender_is_admin=sender_is_admin, sender_jid=sender_jid)
 
   if command == "trigger":
-    return _handle_trigger(args, chat_id=chat_id, chat_type=chat_type, sender_jid=sender_jid)
+    return _handle_trigger(args, chat_id=chat_id, chat_type=chat_type, sender_is_admin=sender_is_admin, sender_jid=sender_jid)
 
   if command == "dashboard":
     return _handle_dashboard(chat_id=chat_id)
@@ -282,6 +282,7 @@ def _handle_mode(
   *,
   chat_id: str,
   chat_type: str,
+  sender_is_admin: bool = False,
   sender_jid: str | None = None,
 ) -> CommandResult:
   if not args:
@@ -299,11 +300,11 @@ def _handle_mode(
       ),
     )
 
-  if not _is_owner(sender_jid):
+  if not _is_owner(sender_jid) and not sender_is_admin:
     return CommandResult(
       command="mode",
       success=False,
-      reply="Only the bot owner can change the mode.",
+      reply="Only the bot owner or group admins can change the mode.",
     )
 
   mode = args.strip().lower()
@@ -339,6 +340,7 @@ def _handle_trigger(
   *,
   chat_id: str,
   chat_type: str,
+  sender_is_admin: bool = False,
   sender_jid: str | None = None,
 ) -> CommandResult:
   if not args:
@@ -356,11 +358,11 @@ def _handle_trigger(
       reply="No triggers enabled. Bot won't respond in prefix mode.\nUse /trigger all to enable all triggers.",
     )
 
-  if not _is_owner(sender_jid):
+  if not _is_owner(sender_jid) and not sender_is_admin:
     return CommandResult(
       command="trigger",
       success=False,
-      reply="Only the bot owner can change triggers.",
+      reply="Only the bot owner or group admins can change triggers.",
     )
 
   cleaned = args.strip().lower()
@@ -427,12 +429,12 @@ _HELP_TEXT = """\
   3 = boleh delete & kick
 
 */mode* [auto|prefix] — atur mode respons (khusus grup)
-  _Wajib owner._
+  _Wajib owner atau admin grup._
   auto = LLM memutuskan kapan merespons _(default)_
   prefix = hanya merespons jika ada trigger
 
 */trigger* [tag|reply|name|join|all|none] — toggle trigger di mode prefix
-  _Wajib owner._
+  _Wajib owner atau admin grup._
   tag = bot di-@mention
   reply = seseorang membalas pesan bot
   name = nama bot disebut dalam teks
