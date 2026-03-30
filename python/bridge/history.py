@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
@@ -8,13 +9,48 @@ from typing import Iterable, Optional
 DEFAULT_ASSISTANT_NAME = "LLM"
 ASSISTANT_CONTEXT_SENDER_REF = "You"
 
+_last_env_value: str | None = object()  # type: ignore[assignment]
+_cached_names: list[str] = []
+_cached_pattern: re.Pattern | None = None
+
+
+def _parse_assistant_names() -> list[str]:
+  """Parse ASSISTANT_NAME env var into list of names (first = primary)."""
+  global _last_env_value, _cached_names, _cached_pattern
+  raw = os.getenv("ASSISTANT_NAME")
+  if raw == _last_env_value:
+    return _cached_names
+  _last_env_value = raw
+  _cached_pattern = None  # invalidate pattern cache
+  if not raw or not raw.strip():
+    _cached_names = [DEFAULT_ASSISTANT_NAME]
+    return _cached_names
+  names = [n.strip() for n in raw.split(",") if n.strip()]
+  _cached_names = names if names else [DEFAULT_ASSISTANT_NAME]
+  return _cached_names
+
 
 def assistant_name() -> str:
-  raw = os.getenv("ASSISTANT_NAME")
-  if raw is None:
-    return DEFAULT_ASSISTANT_NAME
-  cleaned = raw.strip()
-  return cleaned or DEFAULT_ASSISTANT_NAME
+  """Return the primary bot name (first in comma-separated list)."""
+  return _parse_assistant_names()[0]
+
+
+def assistant_aliases() -> list[str]:
+  """Return all bot name aliases (including primary), lowercased."""
+  return [n.lower() for n in _parse_assistant_names()]
+
+
+def assistant_name_pattern() -> re.Pattern:
+  """Return compiled regex matching any bot alias (case-insensitive, word boundary)."""
+  global _cached_pattern
+  _parse_assistant_names()  # ensure cache is fresh
+  if _cached_pattern is not None:
+    return _cached_pattern
+  aliases = _cached_names
+  escaped = [re.escape(a) for a in aliases]
+  pattern = r"(?i)\b(?:" + "|".join(escaped) + r")\b"
+  _cached_pattern = re.compile(pattern)
+  return _cached_pattern
 
 
 def assistant_sender_ref() -> str:

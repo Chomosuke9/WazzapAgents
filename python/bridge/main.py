@@ -20,6 +20,7 @@ try:
     assistant_name,
     assistant_sender_ref,
     format_context_time,
+    assistant_name_pattern,
   )
   from .log import setup_logging, set_chat_log_context, reset_chat_log_context
   from .llm1 import call_llm1, LLM1Decision
@@ -30,7 +31,11 @@ try:
     get_permission as db_get_permission,
     permission_allows_kick,
     permission_allows_delete,
+    get_mode as db_get_mode,
+    get_triggers as db_get_triggers,
   )
+  from .dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop
+  from .stickers import resolve_sticker
 except ImportError:  # allow running as `python python/bridge/main.py`
   import sys
   from pathlib import Path
@@ -40,6 +45,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     assistant_name,
     assistant_sender_ref,
     format_context_time,
+    assistant_name_pattern,
   )
   from bridge.log import setup_logging, set_chat_log_context, reset_chat_log_context  # type: ignore
   from bridge.llm1 import call_llm1, LLM1Decision  # type: ignore
@@ -50,7 +56,11 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     get_permission as db_get_permission,
     permission_allows_kick,
     permission_allows_delete,
+    get_mode as db_get_mode,
+    get_triggers as db_get_triggers,
   )
+  from bridge.dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop  # type: ignore
+  from bridge.stickers import resolve_sticker  # type: ignore
 
 load_dotenv()
 
@@ -81,7 +91,7 @@ except ImportError:
     ASSISTANT_ECHO_MERGE_WINDOW_MS,
   )
 logger = setup_logging()
-ACTION_LINE_RE = re.compile(r"^\[?\s*(REPLY_TO|DELETE|KICK|REACT_TO)\s*[:=]\s*(.*?)\s*\]?$", re.IGNORECASE)
+ACTION_LINE_RE = re.compile(r"^\[?\s*(REPLY_TO|DELETE|KICK|REACT_TO|STICKER)\s*[:=]\s*(.*?)\s*\]?$", re.IGNORECASE)
 CONTEXT_MSG_ID_RE = re.compile(r"^\s*(\d{6})\s*$")
 SENDER_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$")
 EMPTY_TARGET_TOKENS = {"none", "null", "no", "nil", "-", ""}
@@ -618,6 +628,25 @@ def _payload_triggers_llm1(payload: dict) -> bool:
   return bool(payload.get("triggerLlm1"))
 
 
+def _message_matches_prefix(payload: dict, triggers: set[str]) -> bool:
+  """Check if a payload matches any enabled prefix trigger."""
+  if not triggers:
+    return False
+  if "tag" in triggers and bool(payload.get("botMentioned")):
+    return True
+  if "reply" in triggers and bool(payload.get("repliedToBot")):
+    return True
+  if "join" in triggers:
+    msg_type = str(payload.get("messageType") or "").strip().lower()
+    if msg_type == "groupparticipantsupdate":
+      return True
+  if "name" in triggers:
+    text = _clean_text(payload.get("text"))
+    if text and assistant_name_pattern().search(text):
+      return True
+  return False
+
+
 def _payload_has_meaningful_content(payload: dict) -> bool:
   if _is_context_only_payload(payload):
     return True
@@ -935,6 +964,10 @@ async def handle_socket(ws):
   tasks: Set[asyncio.Task] = set()
   logger.info("Gateway connected")
 
+  # Start dashboard flush loop
+  dashboard_task = await start_flush_loop()
+  tasks.add(dashboard_task)
+
   def _track_task(task: asyncio.Task) -> None:
     tasks.add(task)
     task.add_done_callback(tasks.discard)
@@ -1163,6 +1196,19 @@ async def handle_socket(ws):
         llm1_payload = dict(last_payload)
         llm1_payload.update(llm_context_metadata)
 
+        # --- Dashboard: record messages processed ---
+        for _dp in llm1_trigger_payloads:
+          record_stat(chat_id, "messages_processed")
+          if bool(_dp.get("botMentioned")):
+            record_stat(chat_id, "bot_tags")
+          _dp_text = _clean_text(_dp.get("text"))
+          if _dp_text and assistant_name_pattern().search(_dp_text):
+            record_stat(chat_id, "bot_name_mentions")
+
+        # --- Mode-aware LLM1 decision ---
+        chat_mode = db_get_mode(chat_id) if chat_type == "group" else "auto"
+        triggers = db_get_triggers(chat_id) if chat_mode == "prefix" else set()
+
         if chat_type == "private":
           decision = LLM1Decision(
             should_response=True,
@@ -1171,6 +1217,37 @@ async def handle_socket(ws):
           )
           llm1_ms = 0
           logger.info("private chat; skipping LLM1", extra={"chat_id": chat_id})
+        elif chat_mode == "prefix":
+          # Prefix mode: check if any trigger payload matches prefix
+          prefix_matched_payloads = [p for p in llm1_trigger_payloads if _message_matches_prefix(p, triggers)]
+          if not prefix_matched_payloads:
+            # No prefix match — store history and skip
+            for payload in non_empty_payloads:
+              _append_or_merge_history_payload(history, payload)
+            logger.info(
+              "prefix mode: no match; skipping",
+              extra={"chat_id": chat_id, "triggers": sorted(triggers), "batch_size": len(llm1_trigger_payloads)},
+            )
+            _log_slow_batch("prefix_no_match")
+            return
+          # Prefix matched — skip LLM1, go straight to LLM2
+          decision = LLM1Decision(
+            should_response=True,
+            confidence=100,
+            reason="Prefix mode: bot was explicitly invoked.",
+          )
+          llm1_ms = 0
+          # Record invoking user for dashboard
+          for _pp in prefix_matched_payloads:
+            _pp_ref = _clean_text(_pp.get("senderRef"))
+            _pp_name = _clean_text(_pp.get("senderName"))
+            if _pp_ref:
+              record_user_invoke(chat_id, _pp_ref, _pp_name)
+          logger.info(
+            "prefix mode: matched %d/%d payloads; skipping LLM1",
+            len(prefix_matched_payloads), len(llm1_trigger_payloads),
+            extra={"chat_id": chat_id, "triggers": sorted(triggers)},
+          )
         else:
           llm1_started = time.perf_counter()
           decision = await call_llm1(
@@ -1181,6 +1258,18 @@ async def handle_socket(ws):
             prompt_override=db_prompt,
           )
           llm1_ms = int((time.perf_counter() - llm1_started) * 1000)
+          record_stat(chat_id, "llm1_calls")
+          if decision.input_tokens:
+            record_stat(chat_id, "llm1_input_tokens", decision.input_tokens)
+          if decision.output_tokens:
+            record_stat(chat_id, "llm1_output_tokens", decision.output_tokens)
+          # Record invoking user for auto mode too
+          if decision.should_response:
+            for _ap in llm1_trigger_payloads:
+              _ap_ref = _clean_text(_ap.get("senderRef"))
+              _ap_name = _clean_text(_ap.get("senderName"))
+              if _ap_ref:
+                record_user_invoke(chat_id, _ap_ref, _ap_name)
 
         # Send read receipt after LLM1 processes (regardless of decision)
         for _p in trigger_window_payloads:
@@ -1263,7 +1352,19 @@ async def handle_socket(ws):
           await send_typing(ws, chat_id, composing=False)
 
         llm2_ms = int((time.perf_counter() - llm2_started) * 1000)
+        record_stat(chat_id, "llm2_calls")
+        # Track LLM2 token usage if available
+        if reply_msg is not None:
+          _usage = getattr(reply_msg, "usage_metadata", None)
+          if isinstance(_usage, dict):
+            _in_tok = _usage.get("input_tokens", 0)
+            _out_tok = _usage.get("output_tokens", 0)
+            if _in_tok:
+              record_stat(chat_id, "llm2_input_tokens", _in_tok)
+            if _out_tok:
+              record_stat(chat_id, "llm2_output_tokens", _out_tok)
         if reply_msg is None:
+          record_stat(chat_id, "errors")
           logger.warning("llm2 failed to produce reply", extra={"chat_id": chat_id})
           _log_slow_batch("llm2_none")
           return
@@ -1325,6 +1426,7 @@ async def handle_socket(ws):
               action.get("replyTo"),
               request_id=request_id,
             )
+            record_stat(chat_id, "responses_sent")
             pending_send_request_chat[request_id] = chat_id
             if len(pending_send_request_chat) > 4096:
               pending_send_request_chat.pop(next(iter(pending_send_request_chat)))
@@ -1378,6 +1480,27 @@ async def handle_socket(ws):
             )
             action_counts[action_type] += 1
             continue
+          if action_type == "send_sticker":
+            sticker_name = action.get("stickerName", "")
+            sticker_path = resolve_sticker(sticker_name)
+            if sticker_path:
+              request_id = _make_request_id("sticker")
+              await send_sticker(
+                ws,
+                chat_id,
+                sticker_path,
+                action.get("replyTo"),
+                request_id=request_id,
+              )
+              record_stat(chat_id, "stickers_sent")
+              action_counts[action_type] += 1
+            else:
+              logger.warning(
+                "sticker not found: %s",
+                sticker_name,
+                extra={"chat_id": chat_id},
+              )
+            continue
           logger.warning(
             "unknown action type from parser: %s",
             action_type,
@@ -1409,9 +1532,26 @@ async def handle_socket(ws):
         now = time.monotonic()
         last_event_at = pending.last_event_at or now
         burst_started_at = pending.burst_started_at or now
-        quiet_deadline = last_event_at + INCOMING_DEBOUNCE_SECONDS
-        hard_deadline = burst_started_at + INCOMING_BURST_MAX_SECONDS
-        timeout_s = max(0.0, min(quiet_deadline, hard_deadline) - now)
+
+        # Skip debounce for private chats and prefix mode matches.
+        _skip_debounce = False
+        _last_p = pending.payloads[-1] if pending.payloads else {}
+        _flush_chat_type, _, _ = _chat_state_from_payload(_last_p)
+        if _flush_chat_type == "private":
+          _skip_debounce = True
+        elif db_get_mode(chat_id) == "prefix":
+          _flush_triggers = db_get_triggers(chat_id)
+          for _fp in pending.payloads:
+            if _message_matches_prefix(_fp, _flush_triggers):
+              _skip_debounce = True
+              break
+
+        if _skip_debounce:
+          timeout_s = 0.0
+        else:
+          quiet_deadline = last_event_at + INCOMING_DEBOUNCE_SECONDS
+          hard_deadline = burst_started_at + INCOMING_BURST_MAX_SECONDS
+          timeout_s = max(0.0, min(quiet_deadline, hard_deadline) - now)
         pending.wake_event.clear()
         wake_event = pending.wake_event
 
@@ -1526,6 +1666,8 @@ async def handle_socket(ws):
   except websockets.ConnectionClosed:
     logger.info("Gateway disconnected")
   finally:
+    # Flush dashboard stats before shutting down
+    flush_to_db()
     for task in tasks:
       task.cancel()
     if tasks:
@@ -1670,6 +1812,37 @@ async def send_react_message(
         },
       }
     )
+  )
+
+
+async def send_sticker(
+  ws,
+  chat_id: str,
+  sticker_path: str,
+  reply_to: str | None,
+  *,
+  request_id: str,
+):
+  normalized_reply_to = _normalize_context_msg_id(reply_to) if reply_to else None
+  logger.debug(
+    "outbound",
+    extra={
+      "chat_id": chat_id,
+      "action": "send_sticker",
+      "request_id": request_id,
+      "sticker_path": sticker_path,
+      "reply_to": normalized_reply_to,
+    },
+  )
+  payload: dict = {
+    "requestId": request_id,
+    "chatId": chat_id,
+    "attachments": [{"kind": "sticker", "path": sticker_path}],
+  }
+  if normalized_reply_to:
+    payload["replyTo"] = normalized_reply_to
+  await ws.send(
+    json.dumps({"type": "send_message", "payload": payload})
   )
 
 
@@ -1897,6 +2070,8 @@ def _extract_actions(
   reply_lines: list[str] = []
   react_declared = False
   react_context_ids: list[str] = []
+  sticker_declared = False
+  sticker_reply_to: str | None = None
 
   def flush_reply_block() -> None:
     nonlocal reply_declared, reply_target, reply_lines
@@ -1922,12 +2097,29 @@ def _extract_actions(
     react_declared = False
     react_context_ids = []
 
+  def flush_sticker_block() -> None:
+    nonlocal sticker_declared, sticker_reply_to
+    if not sticker_declared:
+      return
+    sticker_declared = False
+    sticker_reply_to = None
+
   lines = text.splitlines()
   for raw_line in lines:
     stripped = raw_line.strip()
     marker = ACTION_LINE_RE.match(stripped)
     if not marker:
-      if react_declared and stripped:
+      if sticker_declared and stripped:
+        # Next non-empty line after STICKER: is the sticker name
+        actions.append(
+          {
+            "type": "send_sticker",
+            "stickerName": stripped,
+            "replyTo": sticker_reply_to,
+          }
+        )
+        flush_sticker_block()
+      elif react_declared and stripped:
         emoji = stripped
         for ctx_id in react_context_ids:
           actions.append(
@@ -1985,6 +2177,7 @@ def _extract_actions(
 
     if control == "REACT_TO":
       flush_reply_block()
+      flush_sticker_block()
       ctx_ids = _parse_react_context_ids(
         value,
         allowed_context_ids=allowed_context_ids,
@@ -1992,9 +2185,21 @@ def _extract_actions(
       if ctx_ids:
         react_declared = True
         react_context_ids = ctx_ids
+      continue
+
+    if control == "STICKER":
+      flush_reply_block()
+      flush_react_block()
+      sticker_declared = True
+      sticker_reply_to = _resolve_reply_target(
+        value,
+        fallback_reply_to=fallback_reply_to,
+        allowed_context_ids=allowed_context_ids,
+      )
 
   flush_reply_block()
   flush_react_block()
+  flush_sticker_block()
 
   orphan_text = "\n".join(orphan_lines).strip()
   if orphan_text:

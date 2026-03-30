@@ -15,7 +15,7 @@ Additional directories and files:
 - `examples/` — Example LLM WebSocket echo server (`llm_ws_echo.py`).
 - `python/systemprompt.txt` — LLM2 system prompt template (reply protocol, identity, formatting rules).
 - `website/` — Docusaurus documentation site (Indonesian primary, English i18n). Deployed via GitHub Actions to GitHub Pages.
-- `data/` — Runtime artifacts (created automatically): `auth/` (Baileys session), `media/` (downloaded media).
+- `data/` — Runtime artifacts (created automatically): `auth/` (Baileys session), `media/` (downloaded media), `stickers/` (sticker images for bot to send).
 
 ## Key Source Files
 
@@ -41,11 +41,13 @@ Additional directories and files:
 | `main.py` | WebSocket handler, message batching, burst debounce |
 | `llm1.py` | LLM1 decision/gating stage (LangChain + OpenAI SDK, multimodal input) |
 | `llm2.py` | LLM2 response generation (system prompt from `python/systemprompt.txt`) |
-| `commands.py` | Slash command parsing (`/prompt`, `/reset`, `/permission`, `/broadcast`) |
+| `commands.py` | Slash command parsing (`/prompt`, `/reset`, `/permission`, `/broadcast`, `/mode`, `/trigger`, `/dashboard`) |
 | `config.py` | Shared env variable parsing with type-safe helpers |
-| `db.py` | SQLite settings storage (prompts, permissions), thread-safe with in-memory cache |
-| `history.py` | `WhatsAppMessage` dataclass, history formatting with UTC offset support |
+| `db.py` | SQLite settings storage (prompts, permissions, mode, triggers), dashboard stats tables, thread-safe with in-memory cache |
+| `history.py` | `WhatsAppMessage` dataclass, history formatting, `assistant_aliases()` / `assistant_name_pattern()` for prefix mode |
 | `media.py` | Visual attachment processing for multimodal LLM input (`build_visual_parts()`) |
+| `dashboard.py` | Usage stats tracking (RAM buffer + periodic DB flush), `/dashboard` output formatting |
+| `stickers.py` | Sticker catalog scanning from `data/stickers/`, name-to-path resolution |
 | `log.py` | Structured logging with contextvars, configurable extras and chat labels |
 
 ## Development Commands
@@ -103,14 +105,36 @@ Copy `.env.example` to `.env`. Required variable:
 
 Key optional variables:
 - `INSTANCE_ID` — Gateway instance identifier.
-- `BOT_OWNER_JIDS` — Comma-separated owner JIDs for `/broadcast`.
+- `BOT_OWNER_JIDS` — Comma-separated owner JIDs for `/broadcast`, `/mode`, `/trigger`.
 - `LLM1_*` — LLM1 (gating) provider config: endpoint, model, API key, temperature, timeout.
 - `LLM2_*` — LLM2 (responder) provider config: endpoint, model, API key, temperature, timeout.
-- `HISTORY_LIMIT`, `INCOMING_DEBOUNCE_SECONDS`, `INCOMING_BURST_MAX_SECONDS` — Bridge batching tuning.
+- `ASSISTANT_NAME` — Bot display name. Supports comma-separated aliases for prefix mode (e.g., `vivy,ivy,vivi`). First name = display name, rest = trigger aliases.
+- `HISTORY_LIMIT`, `INCOMING_DEBOUNCE_SECONDS`, `INCOMING_BURST_MAX_SECONDS` — Bridge batching tuning. Note: debounce is bypassed in prefix mode and private chats.
 - `BRIDGE_LOG_*` — Python bridge logging configuration.
 - `BOT_DB_PATH` — SQLite database path (default: `data/bot.db`).
 
 See `.env.example` for the full list with descriptions.
+
+## Bot Modes
+
+Two response modes per chat, controlled via `/mode` (owner only):
+
+- **`prefix`** (default) — Bot only responds when explicitly invoked: @tagged, replied to, or name mentioned in text. LLM1 is skipped entirely (straight to LLM2). Debounce is bypassed for immediate response. Saves tokens and reduces latency.
+- **`auto`** — Original behavior. LLM1 decides whether to respond based on context analysis. Full debounce/burst batching applies.
+
+**Triggers** (`/trigger`, owner only): Configures what activates the bot in prefix mode.
+- `tag` — bot @mentioned
+- `reply` — replied to bot message
+- `join` — new member joins group
+- `name` — bot name/alias found in message text (case-insensitive, uses `ASSISTANT_NAME` aliases)
+
+Default: all triggers enabled. Private chats always auto-respond regardless of mode.
+
+## Sticker Action
+
+Place sticker images (`.webp`, `.png`, `.jpg`, `.gif`) in `data/stickers/`. Filenames (without extension) become the sticker catalog, injected into the LLM2 system prompt under `<sticker>`.
+
+LLM2 can send stickers via the `STICKER:NNNNNN|none` control line followed by the sticker name. Stickers are sent as standalone messages through the existing `send_message` WebSocket action with a sticker attachment. No Node.js changes required.
 
 ## Security Rules
 

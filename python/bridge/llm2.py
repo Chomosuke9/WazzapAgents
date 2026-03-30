@@ -150,12 +150,19 @@ def _render_system_prompt(
 ) -> str:
   overide_text = (prompt_override or "").strip()
   configured_assistant_name = assistant_name()
+  try:
+    from .stickers import sticker_catalog_text
+  except ImportError:
+    from bridge.stickers import sticker_catalog_text  # type: ignore
+  catalog = sticker_catalog_text()
   return (
     base_system
     .replace("{{prompt_override}}", overide_text)
     .replace("{{ prompt_override }}", overide_text)
     .replace("{{assistant_name}}", configured_assistant_name)
     .replace("{{ assistant_name }}", configured_assistant_name)
+    .replace("{{sticker_catalog}}", catalog)
+    .replace("{{ sticker_catalog }}", catalog)
   )
 
 

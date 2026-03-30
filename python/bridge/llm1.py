@@ -231,6 +231,8 @@ class LLM1Decision(BaseModel):
   reason: str = Field(..., min_length=2, max_length=320)
   react_emoji: str | None = Field(default=None, description="Emoji for react-only decisions")
   react_context_msg_id: str | None = Field(default=None, description="Target message contextMsgId for react-only")
+  input_tokens: int = Field(default=0, description="LLM1 input tokens used")
+  output_tokens: int = Field(default=0, description="LLM1 output tokens used")
 
 
 def _render_prompt_override(base_system: str, prompt_override: str | None) -> str:
@@ -1037,6 +1039,11 @@ async def call_llm1(
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
     response_metadata = getattr(response, "response_metadata", None)
     usage_metadata = getattr(response, "usage_metadata", None)
+    _llm1_input_tokens = 0
+    _llm1_output_tokens = 0
+    if isinstance(usage_metadata, dict):
+      _llm1_input_tokens = usage_metadata.get("input_tokens", 0) or 0
+      _llm1_output_tokens = usage_metadata.get("output_tokens", 0) or 0
     raw_tool_calls = getattr(response, "tool_calls", None) or []
     content = getattr(response, "content", None)
     additional_kwargs = getattr(response, "additional_kwargs", {}) or {}
@@ -1082,6 +1089,8 @@ async def call_llm1(
               "fallback_args": parsed_fallback,
             },
           )
+          decision.input_tokens = _llm1_input_tokens
+          decision.output_tokens = _llm1_output_tokens
           _log_llm1_decision(
             decision,
             ctx=ctx,
@@ -1189,6 +1198,8 @@ async def call_llm1(
         reason=react_reason[:320],
         react_emoji=react_emoji,
         react_context_msg_id=react_context_msg_id,
+        input_tokens=_llm1_input_tokens,
+        output_tokens=_llm1_output_tokens,
       )
       logger.info(
         'LLM1 react-only decision: emoji=%s target=%s conf=%s%% reason="%s" elapsed=%sms',
@@ -1231,6 +1242,8 @@ async def call_llm1(
         continue
       return last_failure
 
+    decision.input_tokens = _llm1_input_tokens
+    decision.output_tokens = _llm1_output_tokens
     _log_llm1_decision(
       decision,
       ctx=ctx,
