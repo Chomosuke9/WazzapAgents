@@ -106,6 +106,7 @@ class PendingChat:
   burst_started_at: float | None = None
   last_event_at: float | None = None
   wake_event: asyncio.Event = field(default_factory=asyncio.Event)
+  prefix_interrupt: asyncio.Event = field(default_factory=asyncio.Event)
   task: asyncio.Task | None = None
   lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
@@ -1207,7 +1208,7 @@ async def handle_socket(ws):
 
         # --- Mode-aware LLM1 decision ---
         chat_mode = db_get_mode(chat_id) if chat_type == "group" else "auto"
-        triggers = db_get_triggers(chat_id) if chat_mode == "prefix" else set()
+        triggers = db_get_triggers(chat_id) if chat_mode in ("prefix", "hybrid") else set()
 
         if chat_type == "private":
           decision = LLM1Decision(
@@ -1248,6 +1249,115 @@ async def handle_socket(ws):
             len(prefix_matched_payloads), len(llm1_trigger_payloads),
             extra={"chat_id": chat_id, "triggers": sorted(triggers)},
           )
+        elif chat_mode == "hybrid":
+          # Hybrid mode: check prefix triggers first, fall back to auto (LLM1)
+          prefix_matched_payloads = [p for p in llm1_trigger_payloads if _message_matches_prefix(p, triggers)]
+          if prefix_matched_payloads:
+            # Prefix matched in current batch — skip LLM1, go straight to LLM2
+            decision = LLM1Decision(
+              should_response=True,
+              confidence=100,
+              reason="Hybrid mode: bot was explicitly invoked (prefix trigger in batch).",
+            )
+            llm1_ms = 0
+            for _pp in prefix_matched_payloads:
+              _pp_ref = _clean_text(_pp.get("senderRef"))
+              _pp_name = _clean_text(_pp.get("senderName"))
+              if _pp_ref:
+                record_user_invoke(chat_id, _pp_ref, _pp_name)
+            logger.info(
+              "hybrid mode: prefix matched %d/%d payloads; skipping LLM1",
+              len(prefix_matched_payloads), len(llm1_trigger_payloads),
+              extra={"chat_id": chat_id, "triggers": sorted(triggers)},
+            )
+          else:
+            # No prefix match in batch — run LLM1 with cancellation support
+            pending = pending_by_chat[chat_id]
+            pending.prefix_interrupt.clear()
+            llm1_started = time.perf_counter()
+
+            llm1_task = asyncio.create_task(call_llm1(
+              llm1_history,
+              llm1_current,
+              current_payload=llm1_payload,
+              group_description=group_description,
+              prompt_override=db_prompt,
+            ))
+            interrupt_wait = asyncio.create_task(pending.prefix_interrupt.wait())
+
+            done, _pending_tasks = await asyncio.wait(
+              {llm1_task, interrupt_wait},
+              return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if interrupt_wait in done:
+              # Prefix trigger arrived while LLM1 was running — cancel LLM1
+              llm1_task.cancel()
+              try:
+                await llm1_task
+              except (asyncio.CancelledError, Exception):
+                pass
+              llm1_ms = int((time.perf_counter() - llm1_started) * 1000)
+
+              # Drain new prefix-trigger payloads from pending
+              async with pending.lock:
+                new_payloads = list(pending.payloads)
+                pending.payloads.clear()
+                pending.burst_started_at = None
+                pending.last_event_at = None
+                pending.prefix_interrupt.clear()
+
+              if new_payloads:
+                # Merge new payloads into current batch for LLM2
+                non_empty_payloads.extend(new_payloads)
+                new_trigger_payloads = [p for p in new_payloads if _payload_triggers_llm1(p)]
+                llm1_trigger_payloads.extend(new_trigger_payloads)
+                # Rebuild burst context for LLM2 with merged payloads
+                trigger_window_payloads = list(non_empty_payloads)
+                current = _build_burst_current(llm1_trigger_payloads)
+
+              decision = LLM1Decision(
+                should_response=True,
+                confidence=100,
+                reason="Hybrid mode: prefix trigger interrupted LLM1; responding immediately.",
+              )
+              # Record invoking users from new payloads
+              for _np in new_payloads:
+                if _message_matches_prefix(_np, triggers):
+                  _np_ref = _clean_text(_np.get("senderRef"))
+                  _np_name = _clean_text(_np.get("senderName"))
+                  if _np_ref:
+                    record_user_invoke(chat_id, _np_ref, _np_name)
+              logger.info(
+                "hybrid mode: prefix trigger interrupted LLM1 after %dms; merged %d new payloads",
+                llm1_ms, len(new_payloads),
+                extra={"chat_id": chat_id, "triggers": sorted(triggers)},
+              )
+            else:
+              # LLM1 finished before any prefix interrupt
+              interrupt_wait.cancel()
+              try:
+                await interrupt_wait
+              except (asyncio.CancelledError, Exception):
+                pass
+              decision = llm1_task.result()
+              llm1_ms = int((time.perf_counter() - llm1_started) * 1000)
+              record_stat(chat_id, "llm1_calls")
+              if decision.input_tokens:
+                record_stat(chat_id, "llm1_input_tokens", decision.input_tokens)
+              if decision.output_tokens:
+                record_stat(chat_id, "llm1_output_tokens", decision.output_tokens)
+              if decision.should_response:
+                for _ap in llm1_trigger_payloads:
+                  _ap_ref = _clean_text(_ap.get("senderRef"))
+                  _ap_name = _clean_text(_ap.get("senderName"))
+                  if _ap_ref:
+                    record_user_invoke(chat_id, _ap_ref, _ap_name)
+              logger.info(
+                "hybrid mode: LLM1 completed in %dms (no prefix interrupt); should_response=%s",
+                llm1_ms, decision.should_response,
+                extra={"chat_id": chat_id, "confidence": decision.confidence},
+              )
         else:
           llm1_started = time.perf_counter()
           decision = await call_llm1(
@@ -1555,13 +1665,13 @@ async def handle_socket(ws):
         last_event_at = pending.last_event_at or now
         burst_started_at = pending.burst_started_at or now
 
-        # Skip debounce for private chats and prefix mode matches.
+        # Skip debounce for private chats and prefix/hybrid mode matches.
         _skip_debounce = False
         _last_p = pending.payloads[-1] if pending.payloads else {}
         _flush_chat_type, _, _ = _chat_state_from_payload(_last_p)
         if _flush_chat_type == "private":
           _skip_debounce = True
-        elif db_get_mode(chat_id) == "prefix":
+        elif db_get_mode(chat_id) in ("prefix", "hybrid"):
           _flush_triggers = db_get_triggers(chat_id)
           for _fp in pending.payloads:
             if _message_matches_prefix(_fp, _flush_triggers):
@@ -1679,6 +1789,11 @@ async def handle_socket(ws):
           pending.burst_started_at = now
         pending.last_event_at = now
         pending.payloads.append(payload)
+        # Signal hybrid mode: if a prefix trigger arrives while LLM1 is running
+        if db_get_mode(chat_id) == "hybrid":
+          _hybrid_triggers = db_get_triggers(chat_id)
+          if _message_matches_prefix(payload, _hybrid_triggers):
+            pending.prefix_interrupt.set()
         if pending.task is None or pending.task.done():
           task = asyncio.create_task(flush_pending(chat_id))
           pending.task = task

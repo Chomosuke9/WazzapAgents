@@ -37,7 +37,7 @@ _mode_cache: dict[str, str] = {}
 _triggers_cache: dict[str, str] = {}
 _cache_lock = threading.Lock()
 
-VALID_MODES = {"auto", "prefix"}
+VALID_MODES = {"auto", "prefix", "hybrid"}
 DEFAULT_MODE = "auto"
 VALID_TRIGGERS = {"tag", "reply", "join", "name"}
 DEFAULT_TRIGGERS = "tag,reply,name"

@@ -294,9 +294,11 @@ def _handle_mode(
       success=True,
       reply=(
         f"Current mode: *{current}*\n"
-        f"Triggers (prefix mode): {triggers_str}\n\n"
+        f"Triggers (prefix/hybrid mode): {triggers_str}\n\n"
         f"_auto_ = LLM1 decides when to respond\n"
-        f"_prefix_ = only responds when tagged, replied, or name mentioned"
+        f"_prefix_ = only responds when tagged, replied, or name mentioned\n"
+        f"_hybrid_ = checks prefix triggers first, falls back to auto (LLM1). "
+        f"If a prefix trigger arrives while LLM1 is running, LLM1 is cancelled and bot responds immediately"
       ),
     )
 
@@ -312,7 +314,7 @@ def _handle_mode(
     return CommandResult(
       command="mode",
       success=False,
-      reply=f"Invalid mode. Use: /mode auto or /mode prefix",
+      reply=f"Invalid mode. Use: /mode auto, /mode prefix, or /mode hybrid",
     )
 
   set_mode(chat_id, mode)
