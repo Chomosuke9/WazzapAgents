@@ -1170,7 +1170,7 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
 // Slash command parsing
 // ---------------------------------------------------------------------------
 
-const SLASH_CMD_RE = /^\/(broadcast|prompt|reset|permission|info|mode|trigger|dashboard)\b\s*([\s\S]*)/i;
+const SLASH_CMD_RE = /^\/(broadcast|prompt|reset|permission|info|mode|trigger|dashboard|help)\b\s*([\s\S]*)/i;
 
 function parseSlashCommand(text) {
   if (!text || typeof text !== 'string') return null;
