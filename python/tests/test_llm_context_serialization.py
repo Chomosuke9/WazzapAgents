@@ -13,13 +13,10 @@ if str(PYTHON_DIR) not in sys.path:
   sys.path.insert(0, str(PYTHON_DIR))
 
 from bridge.history import WhatsAppMessage, format_context_time, format_history
-from bridge.llm1 import _metadata_block, build_llm1_prompt
+from bridge.llm1_prompt import _metadata_block, build_llm1_prompt
 from bridge.llm2 import _context_injection_block
-from bridge.main import (
-  _build_burst_current,
-  _build_llm1_context_metadata,
-  _quoted_preview,
-)
+from bridge.message_processing import _build_burst_current, _quoted_preview
+from bridge.llm1_metadata import _build_llm1_context_metadata
 
 
 def _base_payload() -> dict:

@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
-import re
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from itertools import count
 from typing import Deque, Dict, Set
 from urllib.parse import urlsplit
 
@@ -20,7 +17,6 @@ try:
     WhatsAppMessage,
     assistant_name,
     assistant_sender_ref,
-    format_context_time,
     assistant_name_pattern,
   )
   from .log import setup_logging, set_chat_log_context, reset_chat_log_context
@@ -28,15 +24,57 @@ try:
   from .llm2 import generate_reply
   from .commands import parse_command, handle_command, CommandResult
   from .db import (
-    get_prompt as db_get_prompt,
-    get_permission as db_get_permission,
-    permission_allows_kick,
-    permission_allows_delete,
     get_mode as db_get_mode,
     get_triggers as db_get_triggers,
   )
   from .dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop
   from .stickers import resolve_sticker
+  from .message_processing import (
+    _append_history,
+    _append_or_merge_history_payload,
+    _build_burst_current,
+    _clean_text,
+    _collect_context_ids,
+    _extract_send_ack_context_msg_id,
+    _hydrate_provisional_context_id_from_ack,
+    _infer_media,
+    _is_context_only_payload,
+    _make_request_id,
+    _normalize_context_msg_id,
+    _normalize_preview_text,
+    _payload_to_message,
+    _quoted_preview,
+    _reply_signature,
+  )
+  from .payload_filtering import (
+    _chat_state_from_payload,
+    _message_matches_prefix,
+    _payload_has_meaningful_content,
+    _payload_triggers_llm1,
+  )
+  from .llm1_metadata import (
+    _build_llm1_context_metadata,
+    _resolve_group_prompt_context,
+  )
+  from .moderation import (
+    _enforce_moderation_permissions,
+    _merge_payload_attachments,
+    _moderation_permissions,
+  )
+  from .action_parsing import (
+    _extract_actions,
+    _extract_reply_text,
+  )
+  from .gateway_actions import (
+    send_delete_message,
+    send_kick_member,
+    send_mark_read,
+    send_message,
+    send_react_message,
+    send_sticker,
+    send_typing,
+    typing_indicator,
+  )
 except ImportError:  # allow running as `python python/bridge/main.py`
   import sys
   from pathlib import Path
@@ -45,7 +83,6 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     WhatsAppMessage,
     assistant_name,
     assistant_sender_ref,
-    format_context_time,
     assistant_name_pattern,
   )
   from bridge.log import setup_logging, set_chat_log_context, reset_chat_log_context  # type: ignore
@@ -53,52 +90,86 @@ except ImportError:  # allow running as `python python/bridge/main.py`
   from bridge.llm2 import generate_reply  # type: ignore
   from bridge.commands import parse_command, handle_command, CommandResult  # type: ignore
   from bridge.db import (  # type: ignore
-    get_prompt as db_get_prompt,
-    get_permission as db_get_permission,
-    permission_allows_kick,
-    permission_allows_delete,
     get_mode as db_get_mode,
     get_triggers as db_get_triggers,
   )
   from bridge.dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop  # type: ignore
   from bridge.stickers import resolve_sticker  # type: ignore
+  from bridge.message_processing import (  # type: ignore
+    _append_history,
+    _append_or_merge_history_payload,
+    _build_burst_current,
+    _clean_text,
+    _collect_context_ids,
+    _extract_send_ack_context_msg_id,
+    _hydrate_provisional_context_id_from_ack,
+    _infer_media,
+    _is_context_only_payload,
+    _make_request_id,
+    _normalize_context_msg_id,
+    _normalize_preview_text,
+    _payload_to_message,
+    _quoted_preview,
+    _reply_signature,
+  )
+  from bridge.payload_filtering import (  # type: ignore
+    _chat_state_from_payload,
+    _message_matches_prefix,
+    _payload_has_meaningful_content,
+    _payload_triggers_llm1,
+  )
+  from bridge.llm1_metadata import (  # type: ignore
+    _build_llm1_context_metadata,
+    _resolve_group_prompt_context,
+  )
+  from bridge.moderation import (  # type: ignore
+    _enforce_moderation_permissions,
+    _merge_payload_attachments,
+    _moderation_permissions,
+  )
+  from bridge.action_parsing import (  # type: ignore
+    _extract_actions,
+    _extract_reply_text,
+  )
+  from bridge.gateway_actions import (  # type: ignore
+    send_delete_message,
+    send_kick_member,
+    send_mark_read,
+    send_message,
+    send_react_message,
+    send_sticker,
+    send_typing,
+    typing_indicator,
+  )
 
 load_dotenv()
 
 try:
   from .config import (
-    _parse_positive_float,
-    _parse_non_negative_int,
-    HISTORY_LIMIT,
-    INCOMING_DEBOUNCE_SECONDS,
-    INCOMING_BURST_MAX_SECONDS,
     SLOW_BATCH_LOG_MS,
     MAX_TRIGGER_BATCH_AGE_MS,
     REPLY_DEDUP_WINDOW_MS,
     REPLY_DEDUP_MIN_CHARS,
     ASSISTANT_ECHO_MERGE_WINDOW_MS,
+    INCOMING_DEBOUNCE_SECONDS,
+    INCOMING_BURST_MAX_SECONDS,
   )
 except ImportError:
   from bridge.config import (  # type: ignore
-    _parse_positive_float,
-    _parse_non_negative_int,
-    HISTORY_LIMIT,
-    INCOMING_DEBOUNCE_SECONDS,
-    INCOMING_BURST_MAX_SECONDS,
     SLOW_BATCH_LOG_MS,
     MAX_TRIGGER_BATCH_AGE_MS,
     REPLY_DEDUP_WINDOW_MS,
     REPLY_DEDUP_MIN_CHARS,
     ASSISTANT_ECHO_MERGE_WINDOW_MS,
+    INCOMING_DEBOUNCE_SECONDS,
+    INCOMING_BURST_MAX_SECONDS,
   )
+
 logger = setup_logging()
-ACTION_LINE_RE = re.compile(r"^\[?\s*(REPLY_TO|DELETE|KICK|REACT_TO|STICKER)\s*[:=]\s*(.*?)\s*\]?$", re.IGNORECASE)
-CONTEXT_MSG_ID_RE = re.compile(r"^\s*(\d{6})\s*$")
-SENDER_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,31}$")
-EMPTY_TARGET_TOKENS = {"none", "null", "no", "nil", "-", ""}
-REQUEST_COUNTER = count(1)
-SYSTEM_CONTEXT_TOKEN = "system"
-MENTION_SUMMARY_MAX_ITEMS = 8
+
+# Backward compat re-exports (used by tests).
+# _quoted_preview, _build_burst_current, and _build_llm1_context_metadata
+# are imported above and are available as module-level names.
 
 
 @dataclass
@@ -110,851 +181,6 @@ class PendingChat:
   prefix_interrupt: asyncio.Event = field(default_factory=asyncio.Event)
   task: asyncio.Task | None = None
   lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-
-
-def _append_history(buf: Deque[WhatsAppMessage], msg: WhatsAppMessage) -> None:
-  buf.append(msg)
-  while len(buf) > HISTORY_LIMIT:
-    buf.popleft()
-
-
-def _normalize_preview_text(value: str | None, limit: int = 220) -> str:
-  text = " ".join((value or "").split())
-  if len(text) <= limit:
-    return text
-  if limit <= 3:
-    return text[:limit]
-  return f"{text[:limit - 3]}..."
-
-
-def _quoted_from_payload(payload: dict) -> dict:
-  quoted = payload.get("quoted")
-  if isinstance(quoted, dict):
-    return quoted
-  return {}
-
-
-def _infer_quoted_media(quoted: dict) -> str | None:
-  q_type = str(quoted.get("type") or "").strip().lower()
-  if not q_type:
-    return None
-  if "sticker" in q_type:
-    return "sticker"
-  if "image" in q_type:
-    return "image"
-  if "video" in q_type:
-    return "video"
-  if "audio" in q_type:
-    return "audio"
-  if "document" in q_type:
-    return "document"
-  return None
-
-
-def _quoted_sender(quoted: dict) -> str | None:
-  sender = quoted.get("senderName") or quoted.get("senderId")
-  if not sender:
-    return None
-  return str(sender)
-
-
-def _quoted_preview(payload: dict) -> str | None:
-  quoted = _quoted_from_payload(payload)
-  if not quoted:
-    return None
-
-  parts: list[str] = []
-  sender = _quoted_sender(quoted)
-  quoted_id = quoted.get("messageId")
-  quoted_context_id = _normalize_context_msg_id(quoted.get("contextMsgId"))
-  quoted_text = _normalize_preview_text(quoted.get("text"))
-  quoted_media = _infer_quoted_media(quoted)
-  quoted_text_is_media_stub = bool(
-    quoted_text and quoted_text.startswith("<media:") and quoted_text.endswith(">")
-  )
-
-  if sender:
-    parts.append(f"from={sender}")
-  if quoted_context_id:
-    parts.append(f"contextId={quoted_context_id}")
-  elif quoted_id:
-    parts.append(f"id={quoted_id}")
-  if quoted_media:
-    parts.append(f"quoted_media={quoted_media}")
-  if quoted_text and not (quoted_media and quoted_text_is_media_stub):
-    parts.append(f"quoted_text={quoted_text}")
-
-  if not parts:
-    return "reply_to:(present)"
-  return f"reply_to: {' | '.join(parts)}"
-
-
-def _mentioned_participant_rows(payload: dict) -> list[dict]:
-  rows: list[dict] = []
-  mentioned_participants = payload.get("mentionedParticipants")
-  if isinstance(mentioned_participants, list):
-    for item in mentioned_participants:
-      if not isinstance(item, dict):
-        continue
-      name = _clean_text(item.get("name")) or None
-      sender_ref = _clean_text(item.get("senderRef")) or None
-      jid = _clean_text(item.get("jid")) or None
-      if not (name or sender_ref or jid):
-        continue
-      rows.append(
-        {
-          "name": name,
-          "senderRef": sender_ref,
-          "jid": jid,
-          "isBot": bool(item.get("isBot")),
-        }
-      )
-  if rows:
-    return rows
-
-  mentioned = payload.get("mentionedJids")
-  if isinstance(mentioned, list):
-    for jid in mentioned:
-      token = _clean_text(jid)
-      if not token:
-        continue
-      rows.append(
-        {
-          "name": None,
-          "senderRef": None,
-          "jid": token,
-          "isBot": False,
-        }
-      )
-  return rows
-
-
-def _mention_label(row: dict) -> str:
-  if bool(row.get("isBot")):
-    name = _clean_text(row.get("name"))
-    return f"{name} (bot)" if name else "bot (bot)"
-  name = _clean_text(row.get("name"))
-  sender_ref = _clean_text(row.get("senderRef"))
-  jid = _clean_text(row.get("jid"))
-  if name and sender_ref:
-    return f"{name} ({sender_ref})"
-  if name:
-    return name
-  if sender_ref:
-    return sender_ref
-  return jid
-
-
-def _mention_labels(payload: dict, *, max_items: int = MENTION_SUMMARY_MAX_ITEMS) -> list[str]:
-  rows = _mentioned_participant_rows(payload)
-  if not rows:
-    return []
-
-  labels: list[str] = []
-  seen: set[str] = set()
-  for row in rows:
-    label = _mention_label(row)
-    if not label:
-      continue
-    key = label.casefold()
-    if key in seen:
-      continue
-    seen.add(key)
-    labels.append(label)
-  if max_items > 0:
-    return labels[:max_items]
-  return labels
-
-
-def _mention_number_candidates(row: dict) -> list[str]:
-  jid = _clean_text(row.get("jid"))
-  if not jid:
-    return []
-  local = jid.split("@", 1)[0].strip()
-  if not local:
-    return []
-  candidates = [f"@{local}"]
-  digits = re.sub(r"\D+", "", local)
-  if digits and digits != local:
-    candidates.append(f"@{digits}")
-  return candidates
-
-
-def _replace_mentions_in_text(base_text: str, rows: list[dict], labels: list[str]) -> tuple[str, int]:
-  if not base_text or not rows or not labels:
-    return base_text, 0
-
-  rendered = base_text
-  replaced = 0
-  for idx, row in enumerate(rows):
-    if idx >= len(labels):
-      break
-    replacement = f"@{labels[idx]}"
-    candidates = _mention_number_candidates(row)
-    applied = False
-    for candidate in candidates:
-      if not candidate:
-        continue
-      if candidate in rendered:
-        rendered = rendered.replace(candidate, replacement, 1)
-        replaced += 1
-        applied = True
-        break
-    if applied:
-      continue
-  return rendered, replaced
-
-
-def _bot_jid_from_rows(rows: list[dict]) -> str | None:
-  for row in rows:
-    if bool(row.get("isBot")):
-      jid = _clean_text(row.get("jid"))
-      if jid:
-        return jid
-  return None
-
-
-def _ensure_bot_token_in_text(text: str, *, bot_mentioned: bool, bot_jid: str | None = None, bot_name: str = "") -> str:
-  if not bot_mentioned:
-    return text
-  token = f"@{bot_name} (bot)" if bot_name else "@bot (bot)"
-  if token in text:
-    return text
-  if bot_jid:
-    for candidate in _mention_number_candidates({"jid": bot_jid}):
-      if candidate in text:
-        return text.replace(candidate, token, 1)
-  stripped = text.strip()
-  if stripped:
-    return f"{token} {text}"
-  return token
-
-
-def _payload_text_with_mentions(payload: dict) -> str | None:
-  base_text_raw = payload.get("text")
-  base_text = base_text_raw if isinstance(base_text_raw, str) else ""
-  if str(payload.get("messageType") or "").strip().lower() == "groupparticipantsupdate":
-    return base_text if base_text else None
-
-  rows = _mentioned_participant_rows(payload)
-  labels = _mention_labels(payload)
-  bot_jid = _bot_jid_from_rows(rows) if rows else None
-  bot_mentioned = bool(payload.get("botMentioned"))
-  configured_bot_name = assistant_name()
-  if not rows or not labels:
-    normalized = _ensure_bot_token_in_text(base_text, bot_mentioned=bot_mentioned, bot_jid=bot_jid, bot_name=configured_bot_name)
-    return normalized if normalized else None
-
-  rendered, replaced = _replace_mentions_in_text(base_text, rows, labels)
-  if replaced > 0:
-    normalized = _ensure_bot_token_in_text(rendered, bot_mentioned=bot_mentioned, bot_jid=bot_jid, bot_name=configured_bot_name)
-    return normalized
-
-  mention_tokens = [f"@{label}" for label in labels]
-  if base_text and base_text.strip():
-    normalized = f"{' '.join(mention_tokens)} {base_text}"
-    return _ensure_bot_token_in_text(normalized, bot_mentioned=bot_mentioned, bot_jid=bot_jid, bot_name=configured_bot_name)
-  normalized = " ".join(mention_tokens)
-  return _ensure_bot_token_in_text(normalized, bot_mentioned=bot_mentioned, bot_jid=bot_jid, bot_name=configured_bot_name)
-
-
-def _normalize_context_msg_id(value) -> str | None:
-  if value is None:
-    return None
-  token = str(value).strip()
-  if not token:
-    return None
-  match = CONTEXT_MSG_ID_RE.match(token)
-  if not match:
-    return None
-  return match.group(1)
-
-
-def _is_system_payload(payload: dict) -> bool:
-  if not isinstance(payload, dict):
-    return False
-  message_type = str(payload.get("messageType") or "").strip()
-  sender_id = str(payload.get("senderId") or "").strip().lower()
-  if message_type == "actionLog":
-    return True
-  if isinstance(payload.get("groupEvent"), dict):
-    return True
-  if sender_id == "group-system@wazzap.local":
-    return True
-  return False
-
-
-def _display_context_msg_id_from_payload(payload: dict) -> str:
-  if _is_system_payload(payload):
-    return SYSTEM_CONTEXT_TOKEN
-  return _normalize_context_msg_id(payload.get("contextMsgId")) or "000000"
-
-
-def _payload_to_message(payload: dict) -> WhatsAppMessage:
-  quoted = _quoted_from_payload(payload)
-  is_context_only = bool(payload.get("contextOnly"))
-  normalized_context_msg_id = _normalize_context_msg_id(payload.get("contextMsgId"))
-  context_msg_id = SYSTEM_CONTEXT_TOKEN if _is_system_payload(payload) else normalized_context_msg_id
-  role = "assistant" if bool(payload.get("fromMe")) else "user"
-  if role == "assistant":
-    sender = assistant_name()
-    sender_ref = assistant_sender_ref()
-    sender_is_admin = False
-  else:
-    sender = payload.get("senderName") or payload.get("senderId") or payload.get("chatId")
-    sender_ref = _clean_text(payload.get("senderRef")) or None
-    sender_is_admin = bool(payload.get("senderIsAdmin"))
-  return WhatsAppMessage(
-    timestamp_ms=int(payload["timestampMs"]),
-    sender=sender,
-    context_msg_id=context_msg_id,
-    sender_ref=sender_ref,
-    sender_is_admin=sender_is_admin,
-    text=_payload_text_with_mentions(payload),
-    media=_infer_media(payload),
-    quoted_message_id=(
-      _normalize_context_msg_id(quoted.get("contextMsgId"))
-      or (str(quoted.get("messageId")) if quoted.get("messageId") else None)
-    ),
-    quoted_sender=_quoted_sender(quoted),
-    quoted_text=quoted.get("text"),
-    quoted_media=_infer_quoted_media(quoted),
-    message_id=None if is_context_only else (str(payload.get("messageId")) if payload.get("messageId") else None),
-    role=role,
-  )
-
-
-def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
-  last = payloads[-1]
-  if len(payloads) == 1:
-    return _payload_to_message(last)
-
-  lines: list[str] = []
-  for item in payloads:
-    context_msg_id = _display_context_msg_id_from_payload(item)
-    if bool(item.get("fromMe")):
-      sender = assistant_name()
-      sender_ref = assistant_sender_ref()
-      sender_admin = ""
-    else:
-      sender = item.get("senderName") or item.get("senderId") or item.get("chatId") or "unknown"
-      sender_ref = _clean_text(item.get("senderRef")) or "unknown"
-      sender_admin = "[Admin]" if bool(item.get("senderIsAdmin")) else ""
-    timestamp_ms = int(item.get("timestampMs") or last.get("timestampMs") or 0)
-    formatted_time = format_context_time(timestamp_ms)
-    text = _normalize_preview_text(_payload_text_with_mentions(item))
-    media = _infer_media(item)
-    quoted = _quoted_preview(item)
-    suffix = f" | {quoted}" if quoted else ""
-    if text and media:
-      lines.append(f"<{context_msg_id}>[{formatted_time}]{sender_admin}{sender} ({sender_ref}):[{media}] {text}{suffix}")
-      continue
-    if text:
-      lines.append(f"<{context_msg_id}>[{formatted_time}]{sender_admin}{sender} ({sender_ref}):{text}{suffix}")
-      continue
-    if media:
-      lines.append(f"<{context_msg_id}>[{formatted_time}]{sender_admin}{sender} ({sender_ref}):[{media}]{suffix}")
-      continue
-    lines.append(f"<{context_msg_id}>[{formatted_time}]{sender_admin}{sender} ({sender_ref}):(empty){suffix}")
-
-  burst_text = (
-    f"Burst messages ({len(payloads)} total, latest last):\n" + "\n".join(lines)
-  )
-  return WhatsAppMessage(
-    timestamp_ms=int(last["timestampMs"]),
-    sender=last.get("senderName") or last.get("senderId") or last.get("chatId"),
-    context_msg_id=_normalize_context_msg_id(last.get("contextMsgId")),
-    sender_ref=_clean_text(last.get("senderRef")) or None,
-    sender_is_admin=bool(last.get("senderIsAdmin")),
-    text=burst_text,
-    media=_infer_media(last),
-    message_id=str(last.get("messageId")) if last.get("messageId") else None,
-    role="user",
-  )
-
-
-def _collect_context_ids(messages: list[WhatsAppMessage] | Deque[WhatsAppMessage]) -> set[str]:
-  ids: set[str] = set()
-  for msg in messages:
-    if not msg.context_msg_id:
-      continue
-    ids.add(msg.context_msg_id)
-  return ids
-
-
-def _chat_state_from_payload(payload: dict) -> tuple[str, bool, bool]:
-  raw_chat_type = str(payload.get("chatType") or "").strip().lower()
-  if raw_chat_type not in {"private", "group"}:
-    raw_chat_type = "group" if bool(payload.get("isGroup")) else "private"
-  return raw_chat_type, bool(payload.get("botIsAdmin")), bool(payload.get("botIsSuperAdmin"))
-
-
-def _payload_timestamp_ms(payload: dict) -> int | None:
-  raw = payload.get("timestampMs")
-  try:
-    ts = int(raw)
-  except (TypeError, ValueError):
-    return None
-  return ts if ts > 0 else None
-
-
-def _reply_signature(text: str | None) -> str:
-  if not isinstance(text, str):
-    return ""
-  return " ".join(text.split()).strip().lower()
-
-
-def _merge_fromme_echo_into_provisional(
-  history: Deque[WhatsAppMessage],
-  echo_msg: WhatsAppMessage,
-) -> bool:
-  if ASSISTANT_ECHO_MERGE_WINDOW_MS <= 0:
-    return False
-  if echo_msg.role != "assistant":
-    return False
-
-  echo_sig = _reply_signature(echo_msg.text)
-  if not echo_sig:
-    return False
-
-  for idx in range(len(history) - 1, -1, -1):
-    candidate = history[idx]
-    if candidate.role != "assistant":
-      continue
-
-    candidate_id = candidate.message_id or ""
-    if not candidate_id.startswith("local-send-"):
-      continue
-
-    age_delta = echo_msg.timestamp_ms - candidate.timestamp_ms
-    if age_delta > ASSISTANT_ECHO_MERGE_WINDOW_MS:
-      break
-
-    candidate_sig = _reply_signature(candidate.text)
-    if not candidate_sig or candidate_sig != echo_sig:
-      continue
-
-    candidate.timestamp_ms = echo_msg.timestamp_ms
-    candidate.sender = echo_msg.sender
-    candidate.context_msg_id = echo_msg.context_msg_id
-    candidate.sender_ref = echo_msg.sender_ref
-    candidate.sender_is_admin = echo_msg.sender_is_admin
-    candidate.text = echo_msg.text
-    candidate.media = echo_msg.media
-    candidate.quoted_message_id = echo_msg.quoted_message_id
-    candidate.quoted_sender = echo_msg.quoted_sender
-    candidate.quoted_text = echo_msg.quoted_text
-    candidate.quoted_media = echo_msg.quoted_media
-    candidate.message_id = echo_msg.message_id
-    candidate.role = echo_msg.role
-    return True
-
-  return False
-
-
-def _append_or_merge_history_payload(
-  history: Deque[WhatsAppMessage],
-  payload: dict,
-) -> None:
-  msg = _payload_to_message(payload)
-  if bool(payload.get("fromMe")) and _merge_fromme_echo_into_provisional(history, msg):
-    return
-  _append_history(history, msg)
-
-
-def _extract_send_ack_context_msg_id(payload: dict) -> str | None:
-  if not isinstance(payload, dict):
-    return None
-  result = payload.get("result")
-  if not isinstance(result, dict):
-    return None
-  sent = result.get("sent")
-  if not isinstance(sent, list):
-    return None
-
-  picked: dict | None = None
-  for row in sent:
-    if not isinstance(row, dict):
-      continue
-    if str(row.get("kind") or "").strip().lower() == "text":
-      picked = row
-      break
-    if picked is None:
-      picked = row
-
-  if not picked:
-    return None
-  return _normalize_context_msg_id(picked.get("contextMsgId"))
-
-
-def _hydrate_provisional_context_id_from_ack(
-  history: Deque[WhatsAppMessage],
-  *,
-  request_id: str,
-  context_msg_id: str | None,
-) -> bool:
-  if not request_id or not context_msg_id:
-    return False
-  local_message_id = f"local-send-{request_id}"
-  for idx in range(len(history) - 1, -1, -1):
-    candidate = history[idx]
-    if candidate.role != "assistant":
-      continue
-    if (candidate.message_id or "") != local_message_id:
-      continue
-    candidate.context_msg_id = context_msg_id
-    return True
-  return False
-
-
-def _make_request_id(action: str) -> str:
-  return f"{action}-{int(time.time() * 1000)}-{next(REQUEST_COUNTER):06d}"
-
-
-def _clean_text(value) -> str:
-  if isinstance(value, str):
-    return value.strip()
-  return ""
-
-
-def _is_context_only_payload(payload: dict) -> bool:
-  return bool(payload.get("contextOnly"))
-
-
-def _payload_triggers_llm1(payload: dict) -> bool:
-  message_type = str(payload.get("messageType") or "").strip().lower()
-  if message_type == "reactionmessage":
-    return False
-  if not _is_context_only_payload(payload):
-    return True
-  return bool(payload.get("triggerLlm1"))
-
-
-def _message_matches_prefix(payload: dict, triggers: set[str]) -> bool:
-  """Check if a payload matches any enabled prefix trigger."""
-  if not triggers:
-    return False
-  if "tag" in triggers and bool(payload.get("botMentioned")):
-    return True
-  if "reply" in triggers and bool(payload.get("repliedToBot")):
-    return True
-  if "join" in triggers:
-    msg_type = str(payload.get("messageType") or "").strip().lower()
-    if msg_type == "groupparticipantsupdate":
-      return True
-  if "name" in triggers:
-    text = _clean_text(payload.get("text"))
-    if text and assistant_name_pattern().search(text):
-      return True
-  return False
-
-
-def _payload_has_meaningful_content(payload: dict) -> bool:
-  if _is_context_only_payload(payload):
-    return True
-
-  text = _clean_text(payload.get("text"))
-  if text:
-    return True
-
-  attachments = payload.get("attachments") or []
-  if attachments:
-    return True
-
-  if payload.get("location"):
-    return True
-
-  quoted = payload.get("quoted")
-  if isinstance(quoted, dict):
-    if _clean_text(quoted.get("text")):
-      return True
-    if quoted.get("messageId") or quoted.get("type") or quoted.get("senderName") or quoted.get("senderId"):
-      return True
-
-  return False
-
-
-def _payload_is_human(payload: dict) -> bool:
-  # `contextOnly` non-fromMe events are synthetic context (e.g. group updates),
-  # not real human-authored chat messages.
-  return (not bool(payload.get("fromMe"))) and (not bool(payload.get("contextOnly")))
-
-
-def _is_provisional_assistant_echo(
-  history_messages: list[WhatsAppMessage],
-  payload: dict,
-) -> bool:
-  if not bool(payload.get("fromMe")):
-    return False
-  if not bool(payload.get("contextOnly")):
-    return False
-
-  payload_sig = _reply_signature(payload.get("text"))
-  if not payload_sig:
-    return False
-
-  payload_ts = _payload_timestamp_ms(payload)
-  for msg in reversed(history_messages):
-    if msg.role != "assistant":
-      continue
-    msg_id = msg.message_id or ""
-    if not msg_id.startswith("local-send-"):
-      continue
-    candidate_sig = _reply_signature(msg.text)
-    if not candidate_sig or candidate_sig != payload_sig:
-      continue
-    if payload_ts is not None and ASSISTANT_ECHO_MERGE_WINDOW_MS > 0:
-      age_delta = payload_ts - msg.timestamp_ms
-      if age_delta < 0 or age_delta > ASSISTANT_ECHO_MERGE_WINDOW_MS:
-        continue
-    return True
-  return False
-
-
-def _messages_since_last_assistant(
-  history_messages: list[WhatsAppMessage],
-  window_payloads: list[dict] | None = None,
-) -> int:
-  count = 0
-  if window_payloads:
-    for payload in reversed(window_payloads):
-      if bool(payload.get("fromMe")):
-        return count
-      count += 1
-  for msg in reversed(history_messages):
-    if msg.role == "assistant":
-      return count
-    count += 1
-  return count
-
-
-def _assistant_replies_in_recent(
-  history_messages: list[WhatsAppMessage],
-  recent_window: int = 20,
-  window_payloads: list[dict] | None = None,
-) -> int:
-  if recent_window <= 0:
-    return 0
-  combined_roles: list[str] = [msg.role for msg in history_messages]
-  if window_payloads:
-    combined_roles.extend(
-      "assistant" if bool(payload.get("fromMe")) else "user"
-      for payload in window_payloads
-    )
-  recent_roles = combined_roles[-recent_window:]
-  return sum(1 for role in recent_roles if role == "assistant")
-
-
-def _llm1_history_limit_for_metadata() -> int:
-  raw = os.getenv("LLM1_HISTORY_LIMIT")
-  if raw is None or not raw.strip():
-    raw = os.getenv("HISTORY_LIMIT")
-  try:
-    parsed = int(raw) if raw is not None else HISTORY_LIMIT
-  except (TypeError, ValueError):
-    parsed = HISTORY_LIMIT
-  if parsed > 0:
-    return parsed
-  return HISTORY_LIMIT if HISTORY_LIMIT > 0 else 20
-
-
-def _is_group_join_action(action) -> bool:
-  token = _clean_text(action).lower()
-  if not token:
-    return False
-  if token in {"join", "add", "invite", "approve"}:
-    return True
-  return "join" in token
-
-
-def _payload_has_explicit_join_event(payload: dict) -> bool:
-  group_event = payload.get("groupEvent")
-  if isinstance(group_event, dict) and _is_group_join_action(group_event.get("action")):
-    return True
-
-  message_type = str(payload.get("messageType") or "").strip().lower()
-  if message_type != "groupparticipantsupdate":
-    return False
-
-  text = _clean_text(payload.get("text")).lower()
-  return ("joined the group" in text) or ("new members joined the group" in text)
-
-
-def _bot_name_mentioned_in_text(text: str | None, bot_name: str) -> bool:
-  """Check if the bot's name appears in message text (case-insensitive, word boundary)."""
-  if not text or not bot_name:
-    return False
-  name_lower = bot_name.strip().lower()
-  if len(name_lower) < 2:
-    return False
-  text_lower = text.lower()
-  # Use word boundary check to avoid false positives (e.g. "allow" matching "al")
-  pattern = r'(?<![a-z0-9])' + re.escape(name_lower) + r'(?![a-z0-9])'
-  return bool(re.search(pattern, text_lower))
-
-
-def _bot_name_mentioned_in_payloads(payloads: list[dict], bot_name: str) -> bool:
-  """Check if any payload in the window mentions the bot by name in text."""
-  for payload in payloads:
-    text = payload.get("text")
-    if isinstance(text, str) and _bot_name_mentioned_in_text(text, bot_name):
-      return True
-    # Also check quoted text
-    quoted = payload.get("quoted")
-    if isinstance(quoted, dict):
-      quoted_text = quoted.get("text")
-      if isinstance(quoted_text, str) and _bot_name_mentioned_in_text(quoted_text, bot_name):
-        return True
-  return False
-
-
-def _build_llm1_context_metadata(
-  history_before_current: list[WhatsAppMessage],
-  trigger_window_payloads: list[dict],
-) -> dict:
-  effective_window_payloads = [
-    payload
-    for payload in trigger_window_payloads
-    if not _is_provisional_assistant_echo(history_before_current, payload)
-  ]
-  human_payloads = [payload for payload in effective_window_payloads if _payload_is_human(payload)]
-  bot_mentioned_in_window = any(bool(payload.get("botMentioned")) for payload in human_payloads)
-  replied_to_bot_in_window = any(bool(payload.get("repliedToBot")) for payload in human_payloads)
-  bot_mention_count_in_window = sum(
-    1
-    for payload in human_payloads
-    if bool(payload.get("botMentioned"))
-  )
-
-  # Detect bot name mentioned in text (without explicit @mention)
-  configured_bot_name = assistant_name()
-  bot_name_in_text = _bot_name_mentioned_in_payloads(human_payloads, configured_bot_name)
-
-  trigger_payload = (
-    effective_window_payloads[-1]
-    if effective_window_payloads
-    else (trigger_window_payloads[-1] if trigger_window_payloads else {})
-  )
-  current_has_media = bool(_infer_media(trigger_payload))
-  quoted_has_media = bool(_infer_quoted_media(_quoted_from_payload(trigger_payload)))
-
-  explicit_join_payloads = [
-    payload for payload in effective_window_payloads if _payload_has_explicit_join_event(payload)
-  ]
-  explicit_join_participants: set[str] = set()
-  for payload in explicit_join_payloads:
-    group_event = payload.get("groupEvent")
-    if not isinstance(group_event, dict):
-      continue
-    participants = group_event.get("participants")
-    if not isinstance(participants, list):
-      continue
-    for participant in participants:
-      token = _clean_text(participant)
-      if token:
-        explicit_join_participants.add(token.lower())
-
-  history_limit = _llm1_history_limit_for_metadata()
-  standard_windows = [20, 50, 100, 200]
-  assistant_reply_windows = [window for window in standard_windows if window <= history_limit]
-  if history_limit not in standard_windows:
-    assistant_reply_windows.append(history_limit)
-  assistant_reply_windows = sorted(set(assistant_reply_windows))
-  assistant_replies_by_window = {
-    str(window): _assistant_replies_in_recent(
-      history_before_current,
-      recent_window=window,
-      window_payloads=effective_window_payloads,
-    )
-    for window in assistant_reply_windows
-  }
-  return {
-    "botMentionedInWindow": bot_mentioned_in_window,
-    "repliedToBotInWindow": replied_to_bot_in_window,
-    "botMentionCountInWindow": bot_mention_count_in_window,
-    "botNameMentionedInText": bot_name_in_text,
-    "currentHasMedia": current_has_media,
-    "quotedHasMedia": quoted_has_media,
-    "messagesSinceAssistantReply": _messages_since_last_assistant(
-      history_before_current,
-      effective_window_payloads,
-    ),
-    "assistantRepliesByWindow": assistant_replies_by_window,
-    "humanMessagesInWindow": len(human_payloads),
-    "explicitJoinEventsInWindow": len(explicit_join_payloads),
-    "explicitJoinParticipantsInWindow": len(explicit_join_participants),
-  }
-
-
-def _resolve_group_prompt_context(payload: dict) -> tuple[str | None, str | None]:
-  chat_id = payload.get("chatId")
-  raw_description = payload.get("groupDescription")
-  description = _clean_text(raw_description) or None
-
-  db_prompt = db_get_prompt(chat_id) if chat_id else None
-  return description, db_prompt
-
-
-def _moderation_permissions(
-  *,
-  bot_is_admin: bool,
-  bot_is_super_admin: bool,
-  chat_id: str | None = None,
-) -> dict:
-  admin_ok = bool(bot_is_admin or bot_is_super_admin)
-
-  db_level = db_get_permission(chat_id) if chat_id else None
-  allow_kick = admin_ok and permission_allows_kick(db_level)
-  allow_delete = admin_ok and permission_allows_delete(db_level)
-  return {
-    "allowKick": allow_kick,
-    "allowDelete": allow_delete,
-    "adminOk": admin_ok,
-    "permissionLevel": db_level,
-  }
-
-
-def _enforce_moderation_permissions(actions: list[dict], permissions: dict) -> tuple[list[dict], dict]:
-  filtered: list[dict] = []
-  blocked = {"kick_member": 0, "delete_message": 0}
-  allow_kick = bool(permissions.get("allowKick"))
-  allow_delete = bool(permissions.get("allowDelete"))
-
-  for action in actions:
-    action_type = action.get("type")
-    if action_type == "kick_member" and not allow_kick:
-      blocked["kick_member"] += 1
-      continue
-    if action_type == "delete_message" and not allow_delete:
-      blocked["delete_message"] += 1
-      continue
-    filtered.append(action)
-
-  return filtered, blocked
-
-
-def _merge_payload_attachments(payloads: list[dict], base_payload: dict) -> dict:
-  merged = dict(base_payload)
-  merged_attachments: list[dict] = []
-  seen_keys: set[str] = set()
-  for payload in payloads:
-    attachments = payload.get("attachments") or []
-    if not isinstance(attachments, list):
-      continue
-    for attachment in attachments:
-      if not isinstance(attachment, dict):
-        continue
-      path = str(attachment.get("path") or "").strip()
-      kind = str(attachment.get("kind") or "").strip().lower()
-      mime = str(attachment.get("mime") or "").strip().lower()
-      file_name = str(attachment.get("fileName") or "").strip().lower()
-      dedup_key = path or f"{kind}|{mime}|{file_name}"
-      if dedup_key in seen_keys:
-        continue
-      seen_keys.add(dedup_key)
-      merged_attachments.append(attachment)
-  merged["attachments"] = merged_attachments
-  return merged
 
 
 async def handle_socket(ws):
@@ -1085,7 +311,13 @@ async def handle_socket(ws):
     history = per_chat[chat_id]
     lock = per_chat_lock[chat_id]
     batch_started = time.perf_counter()
-    last_payload_ts = _payload_timestamp_ms(last_payload)
+    last_payload_ts = None
+    raw_ts = last_payload.get("timestampMs")
+    try:
+      ts = int(raw_ts)
+      last_payload_ts = ts if ts > 0 else None
+    except (TypeError, ValueError):
+      last_payload_ts = None
     lock_wait_started = time.perf_counter()
     async with lock:
       lock_wait_ms = int((time.perf_counter() - lock_wait_started) * 1000)
@@ -1805,574 +1037,6 @@ async def handle_socket(ws):
       task.cancel()
     if tasks:
       await asyncio.gather(*tasks, return_exceptions=True)
-
-
-async def send_message(
-  ws,
-  chat_id: str,
-  text: str,
-  reply_to: str | None,
-  *,
-  request_id: str,
-):
-  logger.debug(
-    "outbound",
-    extra={
-      "chat_id": chat_id,
-      "action": "send_message",
-      "request_id": request_id,
-      "reply_to": reply_to,
-      "text_preview": text[:200],
-      "text_len": len(text or ""),
-    },
-  )
-  await ws.send(
-    json.dumps(
-      {
-        "type": "send_message",
-        "payload": {
-          "requestId": request_id,
-          "chatId": chat_id,
-          "text": text,
-          "replyTo": reply_to,
-        },
-      }
-    )
-  )
-
-
-async def send_delete_message(
-  ws,
-  chat_id: str,
-  context_msg_id: str | None,
-  *,
-  request_id: str,
-):
-  normalized_context_msg_id = _normalize_context_msg_id(context_msg_id)
-  if not normalized_context_msg_id:
-    return
-  logger.debug(
-    "outbound",
-    extra={
-      "chat_id": chat_id,
-      "action": "delete_message",
-      "request_id": request_id,
-      "context_msg_id": normalized_context_msg_id,
-    },
-  )
-  await ws.send(
-    json.dumps(
-      {
-        "type": "delete_message",
-        "payload": {
-          "requestId": request_id,
-          "chatId": chat_id,
-          "contextMsgId": normalized_context_msg_id,
-        },
-      }
-    )
-  )
-
-
-async def send_kick_member(
-  ws,
-  chat_id: str,
-  targets: list[dict[str, str]],
-  *,
-  request_id: str,
-  mode: str = "partial_success",
-  auto_reply_anchor: bool = False,
-):
-  if not targets:
-    return
-  logger.debug(
-    "outbound",
-    extra={
-      "chat_id": chat_id,
-      "action": "kick_member",
-      "request_id": request_id,
-      "targets": targets,
-      "mode": mode,
-      "auto_reply_anchor": auto_reply_anchor,
-    },
-  )
-  await ws.send(
-    json.dumps(
-      {
-        "type": "kick_member",
-        "payload": {
-          "requestId": request_id,
-          "chatId": chat_id,
-          "targets": targets,
-          "mode": mode,
-          "autoReplyAnchor": auto_reply_anchor,
-        },
-      }
-    )
-  )
-
-
-async def send_react_message(
-  ws,
-  chat_id: str,
-  context_msg_id: str | None,
-  emoji: str | None,
-  *,
-  request_id: str,
-):
-  normalized_context_msg_id = _normalize_context_msg_id(context_msg_id)
-  if not normalized_context_msg_id or not emoji:
-    return
-  logger.debug(
-    "outbound",
-    extra={
-      "chat_id": chat_id,
-      "action": "react_message",
-      "request_id": request_id,
-      "context_msg_id": normalized_context_msg_id,
-      "emoji": emoji,
-    },
-  )
-  await ws.send(
-    json.dumps(
-      {
-        "type": "react_message",
-        "payload": {
-          "requestId": request_id,
-          "chatId": chat_id,
-          "contextMsgId": normalized_context_msg_id,
-          "emoji": emoji,
-        },
-      }
-    )
-  )
-
-
-async def send_sticker(
-  ws,
-  chat_id: str,
-  sticker_path: str,
-  reply_to: str | None,
-  *,
-  request_id: str,
-):
-  normalized_reply_to = _normalize_context_msg_id(reply_to) if reply_to else None
-  logger.debug(
-    "outbound",
-    extra={
-      "chat_id": chat_id,
-      "action": "send_sticker",
-      "request_id": request_id,
-      "sticker_path": sticker_path,
-      "reply_to": normalized_reply_to,
-    },
-  )
-  payload: dict = {
-    "requestId": request_id,
-    "chatId": chat_id,
-    "attachments": [{"kind": "sticker", "path": sticker_path}],
-  }
-  if normalized_reply_to:
-    payload["replyTo"] = normalized_reply_to
-  await ws.send(
-    json.dumps({"type": "send_message", "payload": payload})
-  )
-
-
-async def send_mark_read(
-  ws,
-  chat_id: str,
-  message_id: str | None,
-  participant: str | None = None,
-):
-  """Send a read receipt signal to the gateway."""
-  if not message_id:
-    return
-  payload: dict = {"chatId": chat_id, "messageId": message_id}
-  if participant:
-    payload["participant"] = participant
-  try:
-    await ws.send(json.dumps({"type": "mark_read", "payload": payload}))
-  except Exception as err:
-    logger.debug("send_mark_read failed: %s", err)
-
-
-async def send_typing(ws, chat_id: str, composing: bool = True):
-  """Send typing presence to the gateway."""
-  presence_type = "composing" if composing else "paused"
-  try:
-    await ws.send(
-      json.dumps({"type": "send_presence", "payload": {"chatId": chat_id, "type": presence_type}})
-    )
-  except Exception as err:
-    logger.debug("send_typing failed: %s", err)
-
-
-@contextlib.asynccontextmanager
-async def typing_indicator(ws, chat_id: str, interval: float = 8.0):
-  """Context manager that keeps the typing indicator alive by refreshing it periodically.
-
-  WhatsApp's typing indicator expires after ~10-15 seconds on the client side.
-  This sends a fresh 'composing' presence every *interval* seconds so the
-  indicator stays visible even when LLM2 takes a long time to respond.
-  """
-
-  async def _keep_alive():
-    try:
-      while True:
-        await asyncio.sleep(interval)
-        await send_typing(ws, chat_id, composing=True)
-    except asyncio.CancelledError:
-      pass
-
-  await send_typing(ws, chat_id, composing=True)
-  task = asyncio.create_task(_keep_alive())
-  try:
-    yield
-  finally:
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-      await task
-    await send_typing(ws, chat_id, composing=False)
-
-
-def _infer_media(payload: dict) -> str | None:
-  atts = payload.get("attachments") or []
-  if not atts:
-    if payload.get("messageType") == "stickerMessage":
-      return "sticker"
-    return None
-  return atts[0].get("kind") or atts[0].get("mime") or "media"
-
-
-def _extract_reply_text(msg) -> str | None:
-  if hasattr(msg, "content") and isinstance(msg.content, str):
-    return msg.content.strip()
-  if hasattr(msg, "content") and isinstance(msg.content, list):
-    parts = [part for part in msg.content if isinstance(part, str)]
-    return "\n".join(parts).strip() if parts else None
-  return None
-
-
-def _is_empty_target_token(value: str | None) -> bool:
-  if value is None:
-    return True
-  return value.strip().lower() in EMPTY_TARGET_TOKENS
-
-
-def _unwrap_angle_group(value: str | None) -> str:
-  return "" if value is None else str(value).strip()
-
-
-
-def _resolve_reply_target(
-  token: str | None,
-  *,
-  fallback_reply_to: str | None,
-  allowed_context_ids: set[str],
-) -> str | None:
-  if token is None:
-    return fallback_reply_to
-  token_value = _unwrap_angle_group(token)
-  if not token_value:
-    return None
-  lowered = token_value.lower()
-  if lowered in EMPTY_TARGET_TOKENS:
-    return None
-  normalized = _normalize_context_msg_id(token_value)
-  if not normalized:
-    logger.warning("reply target ignored: invalid context id token=%r", token)
-    return None
-  if allowed_context_ids and normalized not in allowed_context_ids:
-    logger.warning("reply target ignored: context id %s not present in allowed context ids", normalized)
-    return None
-  return normalized
-
-
-def _resolve_delete_target(
-  token: str | None,
-  *,
-  allowed_context_ids: set[str],
-) -> str | None:
-  if _is_empty_target_token(token):
-    return None
-  normalized = _normalize_context_msg_id(token)
-  if not normalized:
-    return None
-  if allowed_context_ids and normalized not in allowed_context_ids:
-    return None
-  return normalized
-
-
-def _parse_delete_targets(
-  token: str | None,
-  *,
-  allowed_context_ids: set[str],
-) -> list[str]:
-  token_value = _unwrap_angle_group(token)
-  if not token_value:
-    return []
-  if _is_empty_target_token(token_value):
-    return []
-  parsed_targets: list[str] = []
-  dedup: set[str] = set()
-  parts = re.split(r"[,\s]+", token_value)
-  for part in parts:
-    normalized = _resolve_delete_target(part, allowed_context_ids=allowed_context_ids)
-    if not normalized:
-      continue
-    if normalized in dedup:
-      continue
-    dedup.add(normalized)
-    parsed_targets.append(normalized)
-  return parsed_targets
-
-
-def _parse_kick_targets(
-  token: str | None,
-  *,
-  allowed_context_ids: set[str],
-) -> list[dict[str, str]]:
-  token_value = _unwrap_angle_group(token)
-  if not token_value:
-    return []
-  if _is_empty_target_token(token_value):
-    return []
-
-  parsed_targets: list[dict[str, str]] = []
-  dedup: set[tuple[str, str]] = set()
-  segments = [segment.strip() for segment in token_value.split(",")]
-  active_sender_ref: str | None = None
-  for segment in segments:
-    cleaned_segment = _unwrap_angle_group(segment)
-    if not cleaned_segment:
-      continue
-
-    if "@" in cleaned_segment:
-      sender_part, anchors_part = cleaned_segment.split("@", 1)
-      sender_ref = _unwrap_angle_group(sender_part).strip().lower()
-      if not SENDER_REF_RE.match(sender_ref):
-        active_sender_ref = None
-        continue
-      active_sender_ref = sender_ref
-      anchor_tokens = [anchors_part.strip()]
-    else:
-      if not active_sender_ref:
-        continue
-      sender_ref = active_sender_ref
-      anchor_tokens = [cleaned_segment]
-
-    for anchor_token in anchor_tokens:
-      anchor_context_msg_id = _normalize_context_msg_id(_unwrap_angle_group(anchor_token))
-      if not anchor_context_msg_id:
-        continue
-      if allowed_context_ids and anchor_context_msg_id not in allowed_context_ids:
-        continue
-      dedup_key = (sender_ref, anchor_context_msg_id)
-      if dedup_key in dedup:
-        continue
-      dedup.add(dedup_key)
-      parsed_targets.append(
-        {
-          "senderRef": sender_ref,
-          "anchorContextMsgId": anchor_context_msg_id,
-        }
-      )
-  return parsed_targets
-
-
-REACT_TOKEN_RE = re.compile(r"^(.+?)@(\d{6})$")
-
-
-def _parse_react_context_ids(
-  token: str | None,
-  *,
-  allowed_context_ids: set[str],
-) -> list[str]:
-  """Parse ``REACT_TO:<NNNNNN,NNNNNN,...>`` value into a list of context message IDs."""
-  token_value = _unwrap_angle_group(token)
-  if not token_value:
-    return []
-  if _is_empty_target_token(token_value):
-    return []
-
-  result: list[str] = []
-  seen: set[str] = set()
-  for segment in token_value.split(","):
-    cleaned = _unwrap_angle_group(segment.strip())
-    if not cleaned:
-      continue
-    context_msg_id = _normalize_context_msg_id(cleaned)
-    if not context_msg_id:
-      continue
-    if allowed_context_ids and context_msg_id not in allowed_context_ids:
-      continue
-    if context_msg_id in seen:
-      continue
-    seen.add(context_msg_id)
-    result.append(context_msg_id)
-  return result
-
-
-def _extract_actions(
-  msg,
-  *,
-  fallback_reply_to: str | None,
-  allowed_context_ids: set[str],
-) -> list[dict]:
-  text = _extract_reply_text(msg)
-  if not text:
-    return []
-
-  actions: list[dict] = []
-  orphan_lines: list[str] = []
-  reply_declared = False
-  reply_target = fallback_reply_to
-  reply_lines: list[str] = []
-  react_declared = False
-  react_context_ids: list[str] = []
-  sticker_declared = False
-  sticker_reply_to: str | None = None
-
-  def flush_reply_block() -> None:
-    nonlocal reply_declared, reply_target, reply_lines
-    if not reply_declared:
-      return
-    body_text = "\n".join(reply_lines).strip()
-    if body_text:
-      actions.append(
-        {
-          "type": "send_message",
-          "text": body_text,
-          "replyTo": reply_target,
-        }
-      )
-    reply_declared = False
-    reply_target = fallback_reply_to
-    reply_lines = []
-
-  def flush_react_block() -> None:
-    nonlocal react_declared, react_context_ids
-    if not react_declared:
-      return
-    react_declared = False
-    react_context_ids = []
-
-  def flush_sticker_block() -> None:
-    nonlocal sticker_declared, sticker_reply_to
-    if not sticker_declared:
-      return
-    sticker_declared = False
-    sticker_reply_to = None
-
-  lines = text.splitlines()
-  for raw_line in lines:
-    stripped = raw_line.strip()
-    marker = ACTION_LINE_RE.match(stripped)
-    if not marker:
-      if sticker_declared and stripped:
-        # Next non-empty line after STICKER: is the sticker name
-        actions.append(
-          {
-            "type": "send_sticker",
-            "stickerName": stripped,
-            "replyTo": sticker_reply_to,
-          }
-        )
-        flush_sticker_block()
-      elif react_declared and stripped:
-        emoji = stripped
-        for ctx_id in react_context_ids:
-          actions.append(
-            {
-              "type": "react_message",
-              "contextMsgId": ctx_id,
-              "emoji": emoji,
-            }
-          )
-        flush_react_block()
-      elif reply_declared:
-        reply_lines.append(raw_line)
-      else:
-        orphan_lines.append(raw_line)
-      continue
-
-    control = marker.group(1).upper()
-    value = marker.group(2).strip()
-
-    flush_react_block()
-
-    if control == "REPLY_TO":
-      flush_reply_block()
-      reply_declared = True
-      reply_target = _resolve_reply_target(
-        value,
-        fallback_reply_to=fallback_reply_to,
-        allowed_context_ids=allowed_context_ids,
-      )
-      continue
-
-    if control == "DELETE":
-      for target in _parse_delete_targets(
-        value,
-        allowed_context_ids=allowed_context_ids,
-      ):
-        actions.append({"type": "delete_message", "contextMsgId": target})
-      continue
-
-    if control == "KICK":
-      kick_targets = _parse_kick_targets(
-        value,
-        allowed_context_ids=allowed_context_ids,
-      )
-      if kick_targets:
-        actions.append(
-          {
-            "type": "kick_member",
-            "targets": kick_targets,
-            "mode": "partial_success",
-            "autoReplyAnchor": True,
-          }
-        )
-      continue
-
-    if control == "REACT_TO":
-      flush_reply_block()
-      flush_sticker_block()
-      ctx_ids = _parse_react_context_ids(
-        value,
-        allowed_context_ids=allowed_context_ids,
-      )
-      if ctx_ids:
-        react_declared = True
-        react_context_ids = ctx_ids
-      continue
-
-    if control == "STICKER":
-      flush_reply_block()
-      flush_react_block()
-      sticker_declared = True
-      sticker_reply_to = _resolve_reply_target(
-        value,
-        fallback_reply_to=fallback_reply_to,
-        allowed_context_ids=allowed_context_ids,
-      )
-
-  flush_reply_block()
-  flush_react_block()
-  flush_sticker_block()
-
-  orphan_text = "\n".join(orphan_lines).strip()
-  if orphan_text:
-    logger.info(
-      "dropping llm2 text outside REPLY_TO block",
-      extra={
-        "text_preview": _normalize_preview_text(orphan_text, limit=180),
-        "fallback_reply_to": fallback_reply_to,
-      },
-    )
-
-  return actions
 
 
 def _parse_endpoint(url: str):
