@@ -2,12 +2,13 @@ import logger from '../logger.js';
 import { isOwnerJid } from '../participants.js';
 import { messageCache } from '../caches.js';
 import { getSock } from './connection.js';
+import { sendButtons, sendCarousel } from './interactive/index.js';
 
 // ---------------------------------------------------------------------------
 // Slash command parsing
 // ---------------------------------------------------------------------------
 
-const SLASH_CMD_RE = /^\/(broadcast|prompt|reset|permission|info|mode|trigger|dashboard|help)\b\s*([\s\S]*)/i;
+const SLASH_CMD_RE = /^\/(broadcast|prompt|reset|permission|info|mode|trigger|dashboard|help|debug)\b\s*([\s\S]*)/i;
 
 function parseSlashCommand(text) {
   if (!text || typeof text !== 'string') return null;
@@ -150,9 +151,206 @@ async function handleInfoCommand({ chatId, senderId, senderDisplay, senderRole, 
   }
 }
 
+// ---------------------------------------------------------------------------
+// /debug command
+// ---------------------------------------------------------------------------
+
+const DEBUG_TYPES = ['buttons', 'menu', 'carousel', 'all'];
+
+async function sendDebugButtons(chatId) {
+  // quick_reply × 3
+  await sendButtons({
+    chatId,
+    text: '[DEBUG] quick_reply buttons',
+    footer: 'Tap any button to test',
+    buttons: [
+      { name: 'quick_reply', buttonParams: { display_text: 'Option A', id: 'debug_qr_a' } },
+      { name: 'quick_reply', buttonParams: { display_text: 'Option B', id: 'debug_qr_b' } },
+      { name: 'quick_reply', buttonParams: { display_text: 'Option C', id: 'debug_qr_c' } },
+    ],
+  });
+
+  // cta_url
+  await sendButtons({
+    chatId,
+    text: '[DEBUG] cta_url button',
+    footer: 'Opens a URL',
+    buttons: [
+      {
+        name: 'cta_url',
+        buttonParams: {
+          display_text: 'Open Link',
+          url: 'https://github.com/chomosuke9/wazzapagents',
+          merchant_url: 'https://github.com/chomosuke9/wazzapagents',
+        },
+      },
+    ],
+  });
+
+  // cta_copy
+  await sendButtons({
+    chatId,
+    text: '[DEBUG] cta_copy button',
+    footer: 'Tap to copy code to clipboard',
+    buttons: [
+      {
+        name: 'cta_copy',
+        buttonParams: { display_text: 'Copy Code', id: 'debug_copy', copy_code: 'DEBUG-CODE-123' },
+      },
+    ],
+  });
+
+  // cta_call
+  await sendButtons({
+    chatId,
+    text: '[DEBUG] cta_call button',
+    footer: 'Tap to call',
+    buttons: [
+      {
+        name: 'cta_call',
+        buttonParams: { display_text: 'Call Now', id: 'debug_call', phone_number: '+621234567890' },
+      },
+    ],
+  });
+}
+
+async function sendDebugMenu(chatId) {
+  await sendButtons({
+    chatId,
+    text: '[DEBUG] single_select (menu/dropdown)',
+    footer: 'Tap to open dropdown menu',
+    buttons: [
+      {
+        name: 'single_select',
+        buttonParams: {
+          title: 'Pilih opsi',
+          sections: [
+            {
+              title: 'Kategori 1',
+              rows: [
+                { title: 'Item A', description: 'Deskripsi item A', id: 'debug_menu_a' },
+                { title: 'Item B', description: 'Deskripsi item B', id: 'debug_menu_b' },
+              ],
+            },
+            {
+              title: 'Kategori 2',
+              rows: [
+                { title: 'Item C', id: 'debug_menu_c' },
+                { title: 'Item D', id: 'debug_menu_d' },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  });
+}
+
+async function sendDebugCarousel(chatId) {
+  await sendCarousel({
+    chatId,
+    text: '[DEBUG] carousel message',
+    cards: [
+      {
+        body: { text: 'Kartu 1 — quick_reply buttons' },
+        footer: { text: 'Footer kartu 1' },
+        buttons: [
+          { name: 'quick_reply', buttonParams: { display_text: 'Pilih Ini', id: 'debug_c1_qr' } },
+          {
+            name: 'cta_url',
+            buttonParams: {
+              display_text: 'Buka Link',
+              url: 'https://github.com/chomosuke9/wazzapagents',
+              merchant_url: 'https://github.com/chomosuke9/wazzapagents',
+            },
+          },
+        ],
+      },
+      {
+        body: { text: 'Kartu 2 — cta_copy & cta_call' },
+        footer: { text: 'Footer kartu 2' },
+        buttons: [
+          {
+            name: 'cta_copy',
+            buttonParams: { display_text: 'Salin Kode', id: 'debug_c2_copy', copy_code: 'CAROUSEL-456' },
+          },
+          {
+            name: 'cta_call',
+            buttonParams: { display_text: 'Hubungi', id: 'debug_c2_call', phone_number: '+621234567890' },
+          },
+        ],
+      },
+      {
+        body: { text: 'Kartu 3 — single_select' },
+        footer: { text: 'Footer kartu 3' },
+        buttons: [
+          {
+            name: 'single_select',
+            buttonParams: {
+              title: 'Pilih dari menu',
+              sections: [
+                {
+                  title: 'Pilihan',
+                  rows: [
+                    { title: 'Opsi X', id: 'debug_c3_x' },
+                    { title: 'Opsi Y', id: 'debug_c3_y' },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  });
+}
+
+async function handleDebugCommand({ chatId, senderId, args }) {
+  const sock = getSock();
+  if (!isOwnerJid(senderId)) {
+    logger.info({ senderId, chatId }, '/debug rejected: not owner');
+    try {
+      await sock.sendMessage(chatId, { text: 'Only bot owners can use /debug.' });
+    } catch (err) {
+      logger.warn({ err }, 'failed sending debug rejection');
+    }
+    return;
+  }
+
+  const subType = (args || '').trim().toLowerCase();
+
+  if (!subType || !DEBUG_TYPES.includes(subType)) {
+    try {
+      await sock.sendMessage(chatId, {
+        text: `Usage: /debug <type>\n\nTypes: ${DEBUG_TYPES.join(', ')}\n\n- buttons  → quick_reply, cta_url, cta_copy, cta_call\n- menu     → single_select dropdown\n- carousel → swipeable cards\n- all      → semua tipe di atas`,
+      });
+    } catch (err) {
+      logger.warn({ err }, 'failed sending debug usage');
+    }
+    return;
+  }
+
+  const send = async (fn, label) => {
+    try {
+      await fn(chatId);
+      logger.info({ chatId, label }, 'debug interactive message sent');
+    } catch (err) {
+      logger.warn({ err, label }, 'debug send failed');
+      try {
+        await sock.sendMessage(chatId, { text: `❌ Gagal mengirim ${label}: ${err?.message || err}` });
+      } catch (e) { /* ignore */ }
+    }
+  };
+
+  if (subType === 'buttons' || subType === 'all') await send(sendDebugButtons, 'buttons');
+  if (subType === 'menu' || subType === 'all') await send(sendDebugMenu, 'menu');
+  if (subType === 'carousel' || subType === 'all') await send(sendDebugCarousel, 'carousel');
+}
+
 export {
   parseSlashCommand,
   handleBroadcastCommand,
   truncateText,
   handleInfoCommand,
+  handleDebugCommand,
 };
