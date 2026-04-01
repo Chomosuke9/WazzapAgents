@@ -8,7 +8,7 @@ import {
   kickMembers,
   markChatRead,
   sendPresence,
-} from './waClient.js';
+} from './wa/index.js';
 import config from './config.js';
 
 function actionErrorCode(err) {

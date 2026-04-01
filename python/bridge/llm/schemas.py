@@ -1,4 +1,4 @@
-# File: python/bridge/llm1_schemas.py
+# File: python/bridge/llm/schemas.py
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

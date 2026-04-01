@@ -20,8 +20,8 @@ try:
     assistant_name_pattern,
   )
   from .log import setup_logging, set_chat_log_context, reset_chat_log_context
-  from .llm1 import call_llm1, LLM1Decision
-  from .llm2 import generate_reply
+  from .llm.llm1 import call_llm1, LLM1Decision
+  from .llm.llm2 import generate_reply
   from .commands import parse_command, handle_command, CommandResult
   from .db import (
     get_mode as db_get_mode,
@@ -29,7 +29,7 @@ try:
   )
   from .dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop
   from .stickers import resolve_sticker
-  from .message_processing import (
+  from .messaging.processing import (
     _append_history,
     _append_or_merge_history_payload,
     _build_burst_current,
@@ -46,26 +46,26 @@ try:
     _quoted_preview,
     _reply_signature,
   )
-  from .payload_filtering import (
+  from .messaging.filtering import (
     _chat_state_from_payload,
     _message_matches_prefix,
     _payload_has_meaningful_content,
     _payload_triggers_llm1,
   )
-  from .llm1_metadata import (
+  from .llm.metadata import (
     _build_llm1_context_metadata,
     _resolve_group_prompt_context,
   )
-  from .moderation import (
+  from .messaging.moderation import (
     _enforce_moderation_permissions,
     _merge_payload_attachments,
     _moderation_permissions,
   )
-  from .action_parsing import (
+  from .messaging.actions import (
     _extract_actions,
     _extract_reply_text,
   )
-  from .gateway_actions import (
+  from .messaging.gateway import (
     send_delete_message,
     send_kick_member,
     send_mark_read,
@@ -86,8 +86,8 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     assistant_name_pattern,
   )
   from bridge.log import setup_logging, set_chat_log_context, reset_chat_log_context  # type: ignore
-  from bridge.llm1 import call_llm1, LLM1Decision  # type: ignore
-  from bridge.llm2 import generate_reply  # type: ignore
+  from bridge.llm.llm1 import call_llm1, LLM1Decision  # type: ignore
+  from bridge.llm.llm2 import generate_reply  # type: ignore
   from bridge.commands import parse_command, handle_command, CommandResult  # type: ignore
   from bridge.db import (  # type: ignore
     get_mode as db_get_mode,
@@ -95,7 +95,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
   )
   from bridge.dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop  # type: ignore
   from bridge.stickers import resolve_sticker  # type: ignore
-  from bridge.message_processing import (  # type: ignore
+  from bridge.messaging.processing import (  # type: ignore
     _append_history,
     _append_or_merge_history_payload,
     _build_burst_current,
@@ -112,26 +112,26 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     _quoted_preview,
     _reply_signature,
   )
-  from bridge.payload_filtering import (  # type: ignore
+  from bridge.messaging.filtering import (  # type: ignore
     _chat_state_from_payload,
     _message_matches_prefix,
     _payload_has_meaningful_content,
     _payload_triggers_llm1,
   )
-  from bridge.llm1_metadata import (  # type: ignore
+  from bridge.llm.metadata import (  # type: ignore
     _build_llm1_context_metadata,
     _resolve_group_prompt_context,
   )
-  from bridge.moderation import (  # type: ignore
+  from bridge.messaging.moderation import (  # type: ignore
     _enforce_moderation_permissions,
     _merge_payload_attachments,
     _moderation_permissions,
   )
-  from bridge.action_parsing import (  # type: ignore
+  from bridge.messaging.actions import (  # type: ignore
     _extract_actions,
     _extract_reply_text,
   )
-  from bridge.gateway_actions import (  # type: ignore
+  from bridge.messaging.gateway import (  # type: ignore
     send_delete_message,
     send_kick_member,
     send_mark_read,

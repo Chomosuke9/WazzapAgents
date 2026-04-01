@@ -139,7 +139,7 @@ async function getGroupContext(jid, { forceRefresh = false } = {}) {
   }
 
   try {
-    const { withTimeout } = await import('./waClient.js');
+    const { withTimeout } = await import('./wa/index.js');
     const meta = await withTimeout(
       sock.groupMetadata(jid),
       config.groupMetadataTimeoutMs,

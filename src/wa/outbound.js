@@ -1,5 +1,5 @@
 import path from 'path';
-import logger from './logger.js';
+import logger from '../logger.js';
 import {
   normalizeJid,
   normalizeContextMsgId,
@@ -10,12 +10,12 @@ import {
   resolveMentionTargetBySenderRef,
   mentionHandleForJid,
   resolveQuotedMessage,
-} from './identifiers.js';
-import { getGroupContext } from './groupContext.js';
-import { resolveAllowedAttachmentPath } from './mediaHandler.js';
-import { getSock } from './waConnection.js';
-import { escapeRegex } from './waUtils.js';
-import { actionError } from './waActions.js';
+} from '../identifiers.js';
+import { getGroupContext } from '../groupContext.js';
+import { resolveAllowedAttachmentPath } from '../mediaHandler.js';
+import { getSock } from './connection.js';
+import { escapeRegex } from './utils.js';
+import { actionError } from './actions.js';
 
 async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   if (typeof rawText !== 'string') {

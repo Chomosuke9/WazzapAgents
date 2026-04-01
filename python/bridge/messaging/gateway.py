@@ -6,14 +6,14 @@ import json
 import time
 
 try:
-  from .log import setup_logging
-  from .message_processing import _normalize_context_msg_id
+  from ..log import setup_logging
+  from .processing import _normalize_context_msg_id
 except ImportError:
   import sys
   from pathlib import Path
-  sys.path.append(str(Path(__file__).resolve().parent.parent))
+  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.log import setup_logging  # type: ignore
-  from bridge.message_processing import _normalize_context_msg_id  # type: ignore
+  from bridge.messaging.processing import _normalize_context_msg_id  # type: ignore
 
 logger = setup_logging()
 

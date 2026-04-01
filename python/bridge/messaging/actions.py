@@ -3,9 +3,8 @@ from __future__ import annotations
 import re
 
 try:
-  from .log import setup_logging
-  from .stickers import resolve_sticker
-  from .message_processing import (
+  from ..log import setup_logging
+  from .processing import (
     _normalize_context_msg_id,
     _normalize_preview_text,
     EMPTY_TARGET_TOKENS,
@@ -14,10 +13,9 @@ try:
 except ImportError:
   import sys
   from pathlib import Path
-  sys.path.append(str(Path(__file__).resolve().parent.parent))
+  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.log import setup_logging  # type: ignore
-  from bridge.stickers import resolve_sticker  # type: ignore
-  from bridge.message_processing import (  # type: ignore
+  from bridge.messaging.processing import (  # type: ignore
     _normalize_context_msg_id,
     _normalize_preview_text,
     EMPTY_TARGET_TOKENS,
@@ -28,15 +26,6 @@ logger = setup_logging()
 
 ACTION_LINE_RE = re.compile(r"^\[?\s*(REPLY_TO|DELETE|KICK|REACT_TO|STICKER)\s*[:=]\s*(.*?)\s*\]?$", re.IGNORECASE)
 REACT_TOKEN_RE = re.compile(r"^(.+?)@(\d{6})$")
-
-
-def _infer_media(payload: dict) -> str | None:
-  atts = payload.get("attachments") or []
-  if not atts:
-    if payload.get("messageType") == "stickerMessage":
-      return "sticker"
-    return None
-  return atts[0].get("kind") or atts[0].get("mime") or "media"
 
 
 def _extract_reply_text(msg) -> str | None:

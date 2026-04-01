@@ -1,4 +1,4 @@
-# File: python/bridge/llm1.py
+# File: python/bridge/llm/llm1.py
 from __future__ import annotations
 
 import json
@@ -13,11 +13,11 @@ from langchain_openai import ChatOpenAI
 from pydantic import ValidationError
 
 try:
-  from .history import WhatsAppMessage
-  from .log import setup_logging, trunc, dump_json, env_flag
-  from .media import build_visual_parts, llm1_media_enabled, redact_multimodal_content
-  from .llm1_schemas import LLM1Decision, LLM1_TOOLS, LLM1_TOOL, LLM1_REACT_TOOL  # noqa: F401
-  from .llm1_client import (  # noqa: F401
+  from ..history import WhatsAppMessage
+  from ..log import setup_logging, trunc, dump_json, env_flag
+  from ..media import build_visual_parts, llm1_media_enabled, redact_multimodal_content
+  from .schemas import LLM1Decision, LLM1_TOOLS, LLM1_TOOL, LLM1_REACT_TOOL  # noqa: F401
+  from .client import (  # noqa: F401
     LLM1Target,
     _llm1_history_limit,
     _llm1_message_max_chars,
@@ -32,7 +32,7 @@ try:
     _llm1_targets,
     get_llm1,
   )
-  from .llm1_prompt import (  # noqa: F401
+  from .prompt import (  # noqa: F401
     _truncate_text,
     _truncate_burst_text,
     _truncate_message,
@@ -45,12 +45,12 @@ try:
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
-  sys.path.append(str(Path(__file__).resolve().parent.parent))
+  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.history import WhatsAppMessage  # type: ignore
   from bridge.log import setup_logging, trunc, dump_json, env_flag  # type: ignore
   from bridge.media import build_visual_parts, llm1_media_enabled, redact_multimodal_content  # type: ignore
-  from bridge.llm1_schemas import LLM1Decision, LLM1_TOOLS, LLM1_TOOL, LLM1_REACT_TOOL  # type: ignore  # noqa: F401
-  from bridge.llm1_client import (  # type: ignore  # noqa: F401
+  from bridge.llm.schemas import LLM1Decision, LLM1_TOOLS, LLM1_TOOL, LLM1_REACT_TOOL  # type: ignore  # noqa: F401
+  from bridge.llm.client import (  # type: ignore  # noqa: F401
     LLM1Target,
     _llm1_history_limit,
     _llm1_message_max_chars,
@@ -65,7 +65,7 @@ except ImportError:  # allow running as script
     _llm1_targets,
     get_llm1,
   )
-  from bridge.llm1_prompt import (  # type: ignore  # noqa: F401
+  from bridge.llm.prompt import (  # type: ignore  # noqa: F401
     _truncate_text,
     _truncate_burst_text,
     _truncate_message,

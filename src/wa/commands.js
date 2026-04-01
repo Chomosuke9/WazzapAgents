@@ -1,7 +1,7 @@
-import logger from './logger.js';
-import { isOwnerJid } from './participants.js';
-import { messageCache } from './caches.js';
-import { getSock } from './waConnection.js';
+import logger from '../logger.js';
+import { isOwnerJid } from '../participants.js';
+import { messageCache } from '../caches.js';
+import { getSock } from './connection.js';
 
 // ---------------------------------------------------------------------------
 // Slash command parsing

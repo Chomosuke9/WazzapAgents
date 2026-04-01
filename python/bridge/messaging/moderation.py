@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 try:
-  from .db import (
+  from ..db import (
     get_permission as db_get_permission,
     permission_allows_kick,
     permission_allows_delete,
   )
-  from .log import setup_logging
+  from ..log import setup_logging
 except ImportError:
   import sys
   from pathlib import Path
-  sys.path.append(str(Path(__file__).resolve().parent.parent))
+  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.db import (  # type: ignore
     get_permission as db_get_permission,
     permission_allows_kick,

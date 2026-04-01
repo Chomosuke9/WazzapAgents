@@ -7,21 +7,21 @@ from itertools import count
 from typing import Deque
 
 try:
-  from .history import (
+  from ..history import (
     WhatsAppMessage,
     assistant_name,
     assistant_sender_ref,
     format_context_time,
   )
-  from .log import setup_logging
-  from .config import (
+  from ..log import setup_logging
+  from ..config import (
     HISTORY_LIMIT,
     ASSISTANT_ECHO_MERGE_WINDOW_MS,
   )
 except ImportError:
   import sys
   from pathlib import Path
-  sys.path.append(str(Path(__file__).resolve().parent.parent))
+  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.history import (  # type: ignore
     WhatsAppMessage,
     assistant_name,

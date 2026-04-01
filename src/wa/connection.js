@@ -4,11 +4,11 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
 } from 'baileys';
-import logger from './logger.js';
-import config from './config.js';
-import wsClient from './wsClient.js';
-import { setSockAccessor, invalidateGroupMetadata } from './groupContext.js';
-import { runWithConcurrency } from './waUtils.js';
+import logger from '../logger.js';
+import config from '../config.js';
+import wsClient from '../wsClient.js';
+import { setSockAccessor, invalidateGroupMetadata } from '../groupContext.js';
+import { runWithConcurrency } from './utils.js';
 
 let sock;
 
@@ -34,13 +34,13 @@ function printQrInTerminal(qr) {
 }
 
 async function startWhatsApp() {
-  // Lazy import to avoid circular dependency: waInbound/waEvents import getSock from waConnection,
-  // and waConnection imports handlers from waInbound/waEvents at call time only.
-  const { handleIncomingMessage, handleGroupParticipantsUpdate } = await import('./waInbound.js');
-  const { emitGroupJoinContextEvent } = await import('./waEvents.js');
-  const { ensureContextMsgId, messageIdIndexKey } = await import('./identifiers.js');
-  const { GROUP_JOIN_STUB_TYPES } = await import('./caches.js');
-  const { parseGroupJoinStub } = await import('./groupContext.js');
+  // Lazy import to avoid circular dependency: inbound/events import getSock from connection,
+  // and connection imports handlers from inbound/events at call time only.
+  const { handleIncomingMessage, handleGroupParticipantsUpdate } = await import('./inbound.js');
+  const { emitGroupJoinContextEvent } = await import('./events.js');
+  const { ensureContextMsgId, messageIdIndexKey } = await import('../identifiers.js');
+  const { GROUP_JOIN_STUB_TYPES } = await import('../caches.js');
+  const { parseGroupJoinStub } = await import('../groupContext.js');
 
   const { state, saveCreds } = await useMultiFileAuthState(config.authDir);
   const { version } = await fetchLatestBaileysVersion();

@@ -11,15 +11,15 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 try:
-  from .history import WhatsAppMessage, assistant_name, format_history
-  from .log import setup_logging, trunc, dump_json, env_flag
-  from .media import build_visual_parts, llm2_media_enabled, redact_multimodal_content
-  from .db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete
-  from .config import _parse_positive_float, _parse_non_negative_int
+  from ..history import WhatsAppMessage, assistant_name, format_history
+  from ..log import setup_logging, trunc, dump_json, env_flag
+  from ..media import build_visual_parts, llm2_media_enabled, redact_multimodal_content
+  from ..db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete
+  from ..config import _parse_positive_float, _parse_non_negative_int
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
-  sys.path.append(str(Path(__file__).resolve().parent.parent))
+  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.history import WhatsAppMessage, assistant_name, format_history  # type: ignore
   from bridge.log import setup_logging, trunc, dump_json, env_flag  # type: ignore
   from bridge.media import build_visual_parts, llm2_media_enabled, redact_multimodal_content  # type: ignore
@@ -27,7 +27,7 @@ except ImportError:  # allow running as script
   from bridge.config import _parse_positive_float, _parse_non_negative_int  # type: ignore
 
 logger = setup_logging()
-SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent.parent / "systemprompt.txt"
+SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "systemprompt.txt"
 _SYSTEM_PROMPT_CACHE: str | None = None
 
 

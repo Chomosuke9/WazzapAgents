@@ -23,7 +23,6 @@ Additional directories and files:
 | File | Purpose |
 |------|---------|
 | `index.js` | Bootstrap, routes LLM commands to WhatsApp actions |
-| `waClient.js` | WhatsApp connection via Baileys v7, message send/receive/moderation |
 | `wsClient.js` | Outbound WebSocket to LLM bridge |
 | `config.js` | Environment variable loading |
 | `logger.js` | Pino-based structured logging |
@@ -35,12 +34,24 @@ Additional directories and files:
 | `groupContext.js` | Group metadata caching (60s TTL), bot role tracking |
 | `caches.js` | In-memory caches: message cache, metadata TTL, participant names, sender ref registry |
 
+#### WhatsApp modules (`src/wa/`)
+| File | Purpose |
+|------|---------|
+| `index.js` | Barrel re-export for all WhatsApp functionality |
+| `connection.js` | WhatsApp connection via Baileys v7, socket lifecycle |
+| `inbound.js` | Incoming message handling, mention resolution |
+| `outbound.js` | Outgoing message sending, mention rendering |
+| `actions.js` | Reaction and delete actions |
+| `moderation.js` | Kick members, moderation workflows |
+| `commands.js` | Slash command parsing, `/broadcast`, `/info` |
+| `events.js` | Synthetic event emission (group join, bot action context) |
+| `presence.js` | Mark read and typing presence |
+| `utils.js` | Concurrency, timeout, and regex utilities |
+
 ### Python Bridge (`python/bridge/`)
 | File | Purpose |
 |------|---------|
 | `main.py` | WebSocket handler, message batching, burst debounce |
-| `llm1.py` | LLM1 decision/gating stage (LangChain + OpenAI SDK, multimodal input) |
-| `llm2.py` | LLM2 response generation (system prompt from `python/systemprompt.txt`) |
 | `commands.py` | Slash command parsing (`/prompt`, `/reset`, `/permission`, `/broadcast`, `/mode`, `/trigger`, `/dashboard`) |
 | `config.py` | Shared env variable parsing with type-safe helpers |
 | `db.py` | SQLite settings storage (prompts, permissions, mode, triggers), dashboard stats tables, thread-safe with in-memory cache |
@@ -49,6 +60,25 @@ Additional directories and files:
 | `dashboard.py` | Usage stats tracking (RAM buffer + periodic DB flush), `/dashboard` output formatting |
 | `stickers.py` | Sticker catalog scanning from `data/stickers/`, name-to-path resolution |
 | `log.py` | Structured logging with contextvars, configurable extras and chat labels |
+
+#### LLM pipeline (`python/bridge/llm/`)
+| File | Purpose |
+|------|---------|
+| `llm1.py` | LLM1 decision/gating stage (LangChain + OpenAI SDK, multimodal input) |
+| `llm2.py` | LLM2 response generation (system prompt from `python/systemprompt.txt`) |
+| `schemas.py` | LLM1 tool/function schemas, `LLM1Decision` pydantic model |
+| `prompt.py` | LLM1 prompt construction and metadata blocks |
+| `client.py` | LLM1 client config, target resolution, OpenAI SDK setup |
+| `metadata.py` | LLM1 context metadata (mention counts, reply windows, group prompts) |
+
+#### Messaging pipeline (`python/bridge/messaging/`)
+| File | Purpose |
+|------|---------|
+| `processing.py` | Message normalization, history append, burst building, context ID management |
+| `filtering.py` | Payload filtering: prefix matching, content checks, LLM1 trigger logic |
+| `actions.py` | LLM2 output parsing: REPLY_TO, DELETE, KICK, REACT_TO, STICKER control lines |
+| `gateway.py` | Outbound WebSocket actions: send, delete, kick, react, sticker, typing |
+| `moderation.py` | Permission checks, action enforcement, attachment merging |
 
 ## Development Commands
 

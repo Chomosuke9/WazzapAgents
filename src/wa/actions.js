@@ -1,10 +1,10 @@
-import logger from './logger.js';
+import logger from '../logger.js';
 import {
   normalizeContextMsgId,
   getIndexedMessageByContextId,
-} from './identifiers.js';
-import { getSock } from './waConnection.js';
-import { emitBotActionContextEvent } from './waEvents.js';
+} from '../identifiers.js';
+import { getSock } from './connection.js';
+import { emitBotActionContextEvent } from './events.js';
 
 function actionError(code, message, detail = null) {
   const err = new Error(message);

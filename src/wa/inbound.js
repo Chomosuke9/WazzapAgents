@@ -1,13 +1,13 @@
-import logger from './logger.js';
-import config from './config.js';
-import wsClient from './wsClient.js';
+import logger from '../logger.js';
+import config from '../config.js';
+import wsClient from '../wsClient.js';
 import {
   normalizeJid,
   normalizeContextMsgId,
   ensureContextMsgId,
   rememberSenderRef,
   rememberMessage,
-} from './identifiers.js';
+} from '../identifiers.js';
 import {
   rememberParticipantName,
   lookupParticipantName,
@@ -15,7 +15,7 @@ import {
   fallbackParticipantLabel,
   compactParticipantJids,
   isOwnerJid,
-} from './participants.js';
+} from '../participants.js';
 import {
   getCachedGroupMetadata,
   defaultGroupContext,
@@ -25,7 +25,7 @@ import {
   parseGroupJoinStub,
   getGroupParticipantName,
   currentBotAliases,
-} from './groupContext.js';
+} from '../groupContext.js';
 import {
   unwrapMessage,
   extractMentionedJids,
@@ -33,15 +33,15 @@ import {
   formatLocationText,
   extractText,
   extractQuoted,
-} from './messageParser.js';
-import { saveMedia } from './mediaHandler.js';
-import { getSock } from './waConnection.js';
-import { withTimeout, escapeRegex } from './waUtils.js';
+} from '../messageParser.js';
+import { saveMedia } from '../mediaHandler.js';
+import { getSock } from './connection.js';
+import { withTimeout, escapeRegex } from './utils.js';
 import {
   resolveParticipantLabel,
   emitGroupJoinContextEvent,
-} from './waEvents.js';
-import { parseSlashCommand, handleBroadcastCommand, handleInfoCommand } from './waCommands.js';
+} from './events.js';
+import { parseSlashCommand, handleBroadcastCommand, handleInfoCommand } from './commands.js';
 
 async function buildMentionedParticipants(chatId, mentionedJids, botAliasSet = null) {
   if (!Array.isArray(mentionedJids) || mentionedJids.length === 0) return null;
