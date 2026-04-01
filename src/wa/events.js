@@ -1,26 +1,26 @@
-import logger from './logger.js';
-import config from './config.js';
-import wsClient from './wsClient.js';
+import logger from '../logger.js';
+import config from '../config.js';
+import wsClient from '../wsClient.js';
 import {
   normalizeJid,
   nextContextMsgId,
   rememberSenderRef,
   rememberMessageKeyIndex,
-} from './identifiers.js';
+} from '../identifiers.js';
 import {
   compactParticipantJids,
   lookupParticipantName,
   roleFlagsForJid,
   fallbackParticipantLabel,
-} from './participants.js';
+} from '../participants.js';
 import {
   getCachedGroupMetadata,
   defaultGroupContext,
   getGroupContext,
   dedupeGroupJoinEvent,
   getGroupParticipantName,
-} from './groupContext.js';
-import { getSock } from './waConnection.js';
+} from '../groupContext.js';
+import { getSock } from './connection.js';
 
 function makeEventMessageId(prefix) {
   const stamp = Date.now();

@@ -1,4 +1,4 @@
-# File: python/bridge/llm1_client.py
+# File: python/bridge/llm/client.py
 from __future__ import annotations
 
 import os
@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from langchain_openai import ChatOpenAI
 
 try:
-  from .config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _parse_non_negative_float
+  from ..config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _parse_non_negative_float
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
-  sys.path.append(str(Path(__file__).resolve().parent.parent))
+  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _parse_non_negative_float  # type: ignore
 
 

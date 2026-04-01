@@ -1,5 +1,5 @@
-import logger from './logger.js';
-import { getSock } from './waConnection.js';
+import logger from '../logger.js';
+import { getSock } from './connection.js';
 
 async function markChatRead({ chatId, messageId, participant }) {
   const sock = getSock();

@@ -1,8 +1,11 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `src/` – Node.js gateway runtime. Key files: `index.js` (bootstrap), `waClient.js` (WhatsApp via Baileys v7), `wsClient.js` (LLM WebSocket), `config.js`, `logger.js`, `utils.js`, `mediaHandler.js` (media download/validation), `messageParser.js` (Baileys message unwrapping), `identifiers.js` (contextMsgId/senderRef management), `participants.js` (group roles/names), `groupContext.js` (group metadata caching), `caches.js` (in-memory caches).
-- `python/bridge/` – Python LLM bridge. Key files: `main.py` (WebSocket handler, message batching), `llm1.py` (decision routing), `llm2.py` (response generation), `commands.py` (slash commands), `config.py` (shared env parsing), `db.py` (SQLite settings), `history.py` (message dataclass), `media.py` (visual attachment processing), `log.py` (structured logging).
+- `src/` – Node.js gateway runtime. Key files: `index.js` (bootstrap), `wsClient.js` (LLM WebSocket), `config.js`, `logger.js`, `utils.js`, `mediaHandler.js` (media download/validation), `messageParser.js` (Baileys message unwrapping), `identifiers.js` (contextMsgId/senderRef management), `participants.js` (group roles/names), `groupContext.js` (group metadata caching), `caches.js` (in-memory caches).
+- `src/wa/` – WhatsApp modules: `index.js` (barrel re-export), `connection.js` (Baileys v7 socket), `inbound.js` (incoming messages), `outbound.js` (outgoing messages), `actions.js` (react/delete), `moderation.js` (kick), `commands.js` (slash commands), `events.js` (synthetic events), `presence.js` (mark read/typing), `utils.js` (concurrency helpers).
+- `python/bridge/` – Python LLM bridge. Key files: `main.py` (WebSocket handler, message batching), `commands.py` (slash commands), `config.py` (shared env parsing), `db.py` (SQLite settings), `history.py` (message dataclass), `media.py` (visual attachment processing), `log.py` (structured logging).
+- `python/bridge/llm/` – LLM pipeline: `llm1.py` (decision routing), `llm2.py` (response generation), `schemas.py`, `prompt.py`, `client.py`, `metadata.py`.
+- `python/bridge/messaging/` – Message pipeline: `processing.py` (normalization/burst building), `filtering.py` (prefix/trigger logic), `actions.py` (control line parsing), `gateway.py` (outbound WS actions), `moderation.py` (permission checks).
 - `data/` – runtime artifacts: `auth/` (Baileys multi-file auth), `media/` (downloaded inbound media). Created automatically.
 - `examples/` – example LLM WebSocket server (`llm_ws_echo.py`).
 - `website/` – Docusaurus documentation site (Indonesian + English i18n).

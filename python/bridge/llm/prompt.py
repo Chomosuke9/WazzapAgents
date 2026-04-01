@@ -1,17 +1,17 @@
-# File: python/bridge/llm1_prompt.py
+# File: python/bridge/llm/prompt.py
 from __future__ import annotations
 
 from typing import Iterable, Optional
 
 try:
-  from .history import WhatsAppMessage, assistant_name, format_history
-  from .llm1_schemas import LLM1_TOOL, LLM1_REACT_TOOL  # noqa: F401 (used indirectly via sticker catalog)
+  from ..history import WhatsAppMessage, assistant_name, format_history
+  from .schemas import LLM1_TOOL, LLM1_REACT_TOOL  # noqa: F401 (used indirectly via sticker catalog)
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
-  sys.path.append(str(Path(__file__).resolve().parent.parent))
+  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.history import WhatsAppMessage, assistant_name, format_history  # type: ignore
-  from bridge.llm1_schemas import LLM1_TOOL, LLM1_REACT_TOOL  # type: ignore  # noqa: F401
+  from bridge.llm.schemas import LLM1_TOOL, LLM1_REACT_TOOL  # type: ignore  # noqa: F401
 
 
 def _truncate_text(text: str | None, max_chars: int) -> str | None:

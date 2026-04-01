@@ -4,17 +4,17 @@ import os
 import re
 
 try:
-  from .history import WhatsAppMessage, assistant_name
-  from .db import get_prompt as db_get_prompt
-  from .log import setup_logging
-  from .config import HISTORY_LIMIT
-  from .message_processing import (
+  from ..history import WhatsAppMessage, assistant_name
+  from ..db import get_prompt as db_get_prompt
+  from ..log import setup_logging
+  from ..config import HISTORY_LIMIT
+  from ..messaging.processing import (
     _clean_text,
     _infer_media,
     _infer_quoted_media,
     _quoted_from_payload,
   )
-  from .payload_filtering import (
+  from ..messaging.filtering import (
     _is_provisional_assistant_echo,
     _payload_is_human,
     _payload_has_explicit_join_event,
@@ -22,18 +22,18 @@ try:
 except ImportError:
   import sys
   from pathlib import Path
-  sys.path.append(str(Path(__file__).resolve().parent.parent))
+  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.history import WhatsAppMessage, assistant_name  # type: ignore
   from bridge.db import get_prompt as db_get_prompt  # type: ignore
   from bridge.log import setup_logging  # type: ignore
   from bridge.config import HISTORY_LIMIT  # type: ignore
-  from bridge.message_processing import (  # type: ignore
+  from bridge.messaging.processing import (  # type: ignore
     _clean_text,
     _infer_media,
     _infer_quoted_media,
     _quoted_from_payload,
   )
-  from bridge.payload_filtering import (  # type: ignore
+  from bridge.messaging.filtering import (  # type: ignore
     _is_provisional_assistant_echo,
     _payload_is_human,
     _payload_has_explicit_join_event,

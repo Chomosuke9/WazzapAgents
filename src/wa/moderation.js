@@ -1,4 +1,4 @@
-import logger from './logger.js';
+import logger from '../logger.js';
 import {
   normalizeJid,
   nextContextMsgId,
@@ -8,19 +8,19 @@ import {
   getIndexedMessageByContextId,
   resolveSenderByRef,
   resolveParticipantBySenderId,
-} from './identifiers.js';
+} from '../identifiers.js';
 import {
   roleFlagsForJid,
   normalizeKickTargets,
   isOwnerJid,
-} from './participants.js';
+} from '../participants.js';
 import {
   getGroupContext,
   currentBotAliases,
-} from './groupContext.js';
-import { getSock } from './waConnection.js';
-import { emitBotActionContextEvent } from './waEvents.js';
-import { actionError } from './waActions.js';
+} from '../groupContext.js';
+import { getSock } from './connection.js';
+import { emitBotActionContextEvent } from './events.js';
+import { actionError } from './actions.js';
 
 function parseParticipantUpdateStatus(rawStatus) {
   const status = Number(rawStatus);
