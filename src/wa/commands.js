@@ -155,7 +155,7 @@ async function handleInfoCommand({ chatId, senderId, senderDisplay, senderRole, 
 // /debug command
 // ---------------------------------------------------------------------------
 
-const DEBUG_TYPES = ['buttons', 'menu', 'carousel', 'all'];
+const DEBUG_TYPES = ['buttons', 'menu', 'carousel', 'carousel-img', 'all'];
 
 async function sendDebugButtons(chatId) {
   // quick_reply × 3
@@ -305,6 +305,59 @@ async function sendDebugCarousel(chatId) {
   });
 }
 
+// Default fallback image — picsum.photos is a standard dev placeholder service
+const DEBUG_IMG_DEFAULT = 'https://picsum.photos/seed/wazzap/600/400';
+const DEBUG_IMG_MIME = 'image/jpeg';
+
+async function sendDebugCarouselImg(chatId, imageUrl) {
+  const url = imageUrl || DEBUG_IMG_DEFAULT;
+  await sendCarousel({
+    chatId,
+    text: `[DEBUG] carousel + image header (${url})`,
+    cards: [
+      {
+        header: { imageMessage: { url, mimetype: DEBUG_IMG_MIME } },
+        body: { text: 'Kartu 1 — header image + quick_reply' },
+        footer: { text: 'Footer kartu 1' },
+        buttons: [
+          { name: 'quick_reply', buttonParams: { display_text: 'Pilih Ini', id: 'debug_ci1_qr' } },
+          {
+            name: 'cta_url',
+            buttonParams: {
+              display_text: 'Buka Link',
+              url: 'https://github.com/chomosuke9/wazzapagents',
+              merchant_url: 'https://github.com/chomosuke9/wazzapagents',
+            },
+          },
+        ],
+      },
+      {
+        header: { imageMessage: { url, mimetype: DEBUG_IMG_MIME } },
+        body: { text: 'Kartu 2 — header image + cta_copy & cta_call' },
+        footer: { text: 'Footer kartu 2' },
+        buttons: [
+          {
+            name: 'cta_copy',
+            buttonParams: { display_text: 'Salin Kode', id: 'debug_ci2_copy', copy_code: 'IMG-CAROUSEL-789' },
+          },
+          {
+            name: 'cta_call',
+            buttonParams: { display_text: 'Hubungi', id: 'debug_ci2_call', phone_number: '+621234567890' },
+          },
+        ],
+      },
+      {
+        // No header — compare rendering with vs without image
+        body: { text: 'Kartu 3 — tanpa header image (baseline)' },
+        footer: { text: 'Footer kartu 3' },
+        buttons: [
+          { name: 'quick_reply', buttonParams: { display_text: 'Baseline', id: 'debug_ci3_qr' } },
+        ],
+      },
+    ],
+  });
+}
+
 async function handleDebugCommand({ chatId, senderId, args }) {
   const sock = getSock();
   if (!isOwnerJid(senderId)) {
@@ -317,12 +370,25 @@ async function handleDebugCommand({ chatId, senderId, args }) {
     return;
   }
 
-  const subType = (args || '').trim().toLowerCase();
+  const [subTypeRaw = '', ...restParts] = (args || '').trim().split(/\s+/);
+  const subType = subTypeRaw.toLowerCase();
+  const extraArg = restParts.join(' ').trim();
 
   if (!subType || !DEBUG_TYPES.includes(subType)) {
     try {
       await sock.sendMessage(chatId, {
-        text: `Usage: /debug <type>\n\nTypes: ${DEBUG_TYPES.join(', ')}\n\n- buttons  → quick_reply, cta_url, cta_copy, cta_call\n- menu     → single_select dropdown\n- carousel → swipeable cards\n- all      → semua tipe di atas`,
+        text: [
+          'Usage: /debug <type>',
+          '',
+          `Types: ${DEBUG_TYPES.join(', ')}`,
+          '',
+          '- buttons      → quick_reply, cta_url, cta_copy, cta_call',
+          '- menu         → single_select dropdown',
+          '- carousel     → swipeable cards (tanpa header image)',
+          '- carousel-img → swipeable cards dengan header image',
+          '                 Opsional: /debug carousel-img <url>',
+          '- all          → buttons + menu + carousel + carousel-img',
+        ].join('\n'),
       });
     } catch (err) {
       logger.warn({ err }, 'failed sending debug usage');
@@ -330,9 +396,9 @@ async function handleDebugCommand({ chatId, senderId, args }) {
     return;
   }
 
-  const send = async (fn, label) => {
+  const send = async (fn, label, ...fnArgs) => {
     try {
-      await fn(chatId);
+      await fn(chatId, ...fnArgs);
       logger.info({ chatId, label }, 'debug interactive message sent');
     } catch (err) {
       logger.warn({ err, label }, 'debug send failed');
@@ -345,6 +411,7 @@ async function handleDebugCommand({ chatId, senderId, args }) {
   if (subType === 'buttons' || subType === 'all') await send(sendDebugButtons, 'buttons');
   if (subType === 'menu' || subType === 'all') await send(sendDebugMenu, 'menu');
   if (subType === 'carousel' || subType === 'all') await send(sendDebugCarousel, 'carousel');
+  if (subType === 'carousel-img' || subType === 'all') await send(sendDebugCarouselImg, 'carousel-img', extraArg || null);
 }
 
 export {
