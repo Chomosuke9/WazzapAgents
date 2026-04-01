@@ -5,3 +5,4 @@ export { sendOutgoing } from './outbound.js';
 export { reactToMessage, deleteMessageByContextId } from './actions.js';
 export { kickMembers } from './moderation.js';
 export { markChatRead, sendPresence } from './presence.js';
+export { sendButtons, sendCarousel } from './interactive/index.js';
