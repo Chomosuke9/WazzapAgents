@@ -64,7 +64,8 @@ async function sendCarousel({ chatId, text, cards }) {
       buttons: (card.buttons || []).map((btn) => ({
         name: btn.name,
         buttonParamsJson: JSON.stringify(btn.buttonParams)
-      }))
+      })),
+      messageVersion: 1
     }
   }));
 

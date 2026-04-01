@@ -83,8 +83,7 @@ async function sendButtons({ chatId, text, footer, buttons }) {
   const interactiveContent = {
     body: { text: text || '' },
     footer: { text: footer || '' },
-    header: { hasMediaAttachment: false },
-    nativeFlowMessage: { buttons: nativeButtons }
+    nativeFlowMessage: { buttons: nativeButtons, messageVersion: 1 }
   };
 
   const msg = await sendInteractive(sock, chatId, interactiveContent);
