@@ -8,6 +8,8 @@ import {
   kickMembers,
   markChatRead,
   sendPresence,
+  sendButtons,
+  sendCarousel,
 } from './wa/index.js';
 import config from './config.js';
 
@@ -144,6 +146,18 @@ async function dispatchCommand(msg) {
 
   if (type === 'send_presence') {
     await sendPresence(payload);
+    return;
+  }
+
+  if (type === 'send_buttons') {
+    const result = await sendButtons(payload);
+    emitActionAck({ requestId, action: 'send_buttons', ok: true, detail: 'sent', result });
+    return;
+  }
+
+  if (type === 'send_carousel') {
+    const result = await sendCarousel(payload);
+    emitActionAck({ requestId, action: 'send_carousel', ok: true, detail: 'sent', result });
     return;
   }
 
