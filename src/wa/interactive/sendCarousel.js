@@ -1,8 +1,11 @@
 /**
  * sendCarousel.js — Carousel / swipeable Cards messages.
  *
- * Cards are passed directly to `sock.sendMessage` without proto imports.
+ * Carousel is an interactiveMessage with carouselMessage inside.
+ * Must be sent via generateWAMessageFromContent + sock.relayMessage —
+ * sock.sendMessage does not support this content shape.
  */
+import { _sendInteractive } from './sendInteractive.js';
 
 /**
  * Send a carousel message with swipeable cards.
@@ -31,14 +34,30 @@
  * ], { text: 'Produk Unggulan', footer: 'Swipe untuk lihat lebih' });
  */
 async function sendCarousel(sock, jid, cards, options = {}) {
-  const content = {
-    ...(options.text ? { text: options.text } : {}),
-    ...(options.title ? { title: options.title } : {}),
-    ...(options.subtitle ? { subtitle: options.subtitle } : {}),
-    ...(options.footer ? { footer: options.footer } : {}),
-    cards,
-  };
-  return sock.sendMessage(jid, content, { quoted: options.quoted });
+  const mappedCards = cards.map((card) => {
+    const header = {};
+    if (card.image) header.imageMessage = { url: card.image.url ?? card.image };
+    if (card.video) header.videoMessage = { url: card.video.url ?? card.video };
+    if (card.title) header.title = card.title;
+
+    return {
+      header,
+      body: { text: typeof card.body === 'string' ? card.body : (card.body?.text || '') },
+      footer: { text: typeof card.footer === 'string' ? card.footer : (card.footer?.text || '') },
+      nativeFlowMessage: {
+        buttons: (card.buttons || []).map((btn) => ({
+          name: btn.name,
+          buttonParamsJson: btn.buttonParamsJson,
+        })),
+      },
+    };
+  });
+
+  return _sendInteractive(sock, jid, {
+    body: { text: options.text || '' },
+    ...(options.footer ? { footer: { text: options.footer } } : {}),
+    carouselMessage: { cards: mappedCards },
+  }, options.quoted);
 }
 
 export { sendCarousel };
