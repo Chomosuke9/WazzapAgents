@@ -12,6 +12,7 @@ export {
   sendCombinedButtons,
   sendList,
   sendNativeFlow,
+  sendRichMessage,
   sendLegacyButtons,
   sendTemplate,
   sendCarousel,
