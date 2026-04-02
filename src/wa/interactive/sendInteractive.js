@@ -7,7 +7,7 @@
  * because Baileys tries to process it through prepareWAMessageMedia and fails.
  * sendList uses listMessage which works fine with sock.sendMessage directly.
  */
-import { generateWAMessageFromContent } from 'baileys';
+import { proto, generateWAMessageFromContent } from 'baileys';
 import logger from '../../logger.js';
 
 /**
@@ -20,7 +20,7 @@ import logger from '../../logger.js';
  * @returns {Promise<object>} Generated message object
  */
 async function _sendInteractive(sock, jid, interactiveContent, quoted) {
-  const msg = generateWAMessageFromContent(jid, {
+  const msg = generateWAMessageFromContent(jid, proto.Message.fromObject({
     messageContextInfo: {
       deviceListMetadata: {},
       deviceListMetadataVersion: 2,
@@ -31,7 +31,7 @@ async function _sendInteractive(sock, jid, interactiveContent, quoted) {
       },
     },
     interactiveMessage: interactiveContent,
-  }, {
+  }), {
     userJid: sock.user.id,
     ...(quoted ? { quoted } : {}),
   });
