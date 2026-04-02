@@ -2,9 +2,43 @@
  * sendInteractive.js — NativeFlow-based interactive messages.
  * (quick reply, URL, copy, call, list, combined, raw native flow)
  *
- * All functions accept `sock` as the first parameter and pass the resulting
- * message content directly to `sock.sendMessage`. No proto imports required.
+ * interactiveMessage content must be sent via generateWAMessageFromContent +
+ * sock.relayMessage — sock.sendMessage does not support interactiveMessage
+ * because Baileys tries to process it through prepareWAMessageMedia and fails.
+ * sendList uses listMessage which works fine with sock.sendMessage directly.
  */
+import { generateWAMessageFromContent } from 'baileys';
+import logger from '../../logger.js';
+
+/**
+ * Internal helper: wrap an interactiveMessage payload and relay it.
+ *
+ * @param {object} sock - Baileys socket instance
+ * @param {string} jid - Recipient JID
+ * @param {object} interactiveContent - Plain JS interactiveMessage object
+ * @param {object} [quoted] - Optional quoted message
+ * @returns {Promise<object>} Generated message object
+ */
+async function _sendInteractive(sock, jid, interactiveContent, quoted) {
+  const msg = generateWAMessageFromContent(jid, {
+    messageContextInfo: {
+      deviceListMetadata: {},
+      deviceListMetadataVersion: 2,
+      forwardedNewsletterMessageInfo: {
+        newsletterJid: '0@newsletter',
+        serverMessageId: -1,
+        newsletterName: 'WazzapAgents',
+      },
+    },
+    interactiveMessage: interactiveContent,
+  }, {
+    userJid: sock.user.id,
+    ...(quoted ? { quoted } : {}),
+  });
+  logger.debug({ jid, messageId: msg.key.id }, 'relaying interactive message');
+  await sock.relayMessage(jid, msg.message, { messageId: msg.key.id });
+  return msg;
+}
 
 /**
  * Send quick-reply buttons.
@@ -26,14 +60,12 @@ async function sendQuickReply(sock, jid, body, buttons, options = {}) {
     name: 'quick_reply',
     buttonParamsJson: JSON.stringify({ display_text: btn.displayText, id: btn.id }),
   }));
-  return sock.sendMessage(jid, {
-    interactiveMessage: {
-      body: { text: body },
-      footer: { text: options.footer || '' },
-      header: { title: options.title || '', hasMediaAttachment: false },
-      nativeFlowMessage: { buttons: nativeButtons, messageParamsJson: '' },
-    },
-  }, { quoted: options.quoted });
+  return _sendInteractive(sock, jid, {
+    body: { text: body },
+    footer: { text: options.footer || '' },
+    header: { title: options.title || '', hasMediaAttachment: false },
+    nativeFlowMessage: { buttons: nativeButtons, messageParamsJson: '' },
+  }, options.quoted);
 }
 
 /**
@@ -59,14 +91,12 @@ async function sendUrlButtons(sock, jid, body, buttons, options = {}) {
       ...(btn.merchantUrl ? { merchant_url: btn.merchantUrl } : {}),
     }),
   }));
-  return sock.sendMessage(jid, {
-    interactiveMessage: {
-      body: { text: body },
-      footer: { text: options.footer || '' },
-      header: { title: options.title || '', hasMediaAttachment: false },
-      nativeFlowMessage: { buttons: nativeButtons, messageParamsJson: '' },
-    },
-  }, { quoted: options.quoted });
+  return _sendInteractive(sock, jid, {
+    body: { text: body },
+    footer: { text: options.footer || '' },
+    header: { title: options.title || '', hasMediaAttachment: false },
+    nativeFlowMessage: { buttons: nativeButtons, messageParamsJson: '' },
+  }, options.quoted);
 }
 
 /**
@@ -85,20 +115,18 @@ async function sendUrlButtons(sock, jid, body, buttons, options = {}) {
  * });
  */
 async function sendCopyCode(sock, jid, body, copyCode, displayText = 'Copy Code', options = {}) {
-  return sock.sendMessage(jid, {
-    interactiveMessage: {
-      body: { text: body },
-      footer: { text: options.footer || '' },
-      header: { hasMediaAttachment: false },
-      nativeFlowMessage: {
-        buttons: [{
-          name: 'cta_copy',
-          buttonParamsJson: JSON.stringify({ display_text: displayText, copy_code: copyCode }),
-        }],
-        messageParamsJson: '',
-      },
+  return _sendInteractive(sock, jid, {
+    body: { text: body },
+    footer: { text: options.footer || '' },
+    header: { hasMediaAttachment: false },
+    nativeFlowMessage: {
+      buttons: [{
+        name: 'cta_copy',
+        buttonParamsJson: JSON.stringify({ display_text: displayText, copy_code: copyCode }),
+      }],
+      messageParamsJson: '',
     },
-  }, { quoted: options.quoted });
+  }, options.quoted);
 }
 
 /**
@@ -137,18 +165,17 @@ async function sendCombinedButtons(sock, jid, body, buttons, options = {}) {
         return { name: btn.type, buttonParamsJson: JSON.stringify({ display_text: btn.displayText }) };
     }
   });
-  return sock.sendMessage(jid, {
-    interactiveMessage: {
-      body: { text: body },
-      footer: { text: options.footer || '' },
-      header: { title: options.title || '', hasMediaAttachment: false },
-      nativeFlowMessage: { buttons: nativeButtons, messageParamsJson: '' },
-    },
-  }, { quoted: options.quoted });
+  return _sendInteractive(sock, jid, {
+    body: { text: body },
+    footer: { text: options.footer || '' },
+    header: { title: options.title || '', hasMediaAttachment: false },
+    nativeFlowMessage: { buttons: nativeButtons, messageParamsJson: '' },
+  }, options.quoted);
 }
 
 /**
  * Send a single-select list (dropdown menu).
+ * Uses listMessage which is supported directly via sock.sendMessage.
  *
  * @param {object} sock - Baileys socket instance
  * @param {string} jid - Recipient JID
@@ -205,17 +232,16 @@ async function sendNativeFlow(sock, jid, body, buttons, options = {}) {
     ...(options.header?.title ? { title: options.header.title } : {}),
     ...(options.header?.subtitle ? { subtitle: options.header.subtitle } : {}),
   };
-  return sock.sendMessage(jid, {
-    interactiveMessage: {
-      body: { text: body },
-      footer: { text: options.footer || '' },
-      header,
-      nativeFlowMessage: { buttons, messageParamsJson: '' },
-    },
-  }, { quoted: options.quoted });
+  return _sendInteractive(sock, jid, {
+    body: { text: body },
+    footer: { text: options.footer || '' },
+    header,
+    nativeFlowMessage: { buttons, messageParamsJson: '' },
+  }, options.quoted);
 }
 
 export {
+  _sendInteractive,
   sendQuickReply,
   sendUrlButtons,
   sendCopyCode,
