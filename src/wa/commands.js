@@ -57,10 +57,9 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
 
   if (text) {
     // Text broadcast: /broadcast <text>
-    const botName = sock.user?.name || sock.user?.verifiedName || 'Bot';
     for (const groupJid of groupJids) {
       try {
-        await sendRichMessage(sock, groupJid, { title: botName, text });
+        await sendRichMessage(sock, groupJid, { title: 'Broadcast 📢', text, badge: false });
         sent += 1;
       } catch (err) {
         logger.warn({ err, groupJid }, 'broadcast send failed');

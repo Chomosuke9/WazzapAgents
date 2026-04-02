@@ -22,7 +22,7 @@ import logger from '../../logger.js';
  * @param {string} jid
  * @returns {Array}
  */
-function buildInteractiveNodes(jid) {
+function buildInteractiveNodes(jid, badge = true) {
   const nodes = [
     {
       tag: 'biz',
@@ -38,7 +38,7 @@ function buildInteractiveNodes(jid) {
       ],
     },
   ];
-  if (!isJidGroup(jid)) {
+  if (badge && !isJidGroup(jid)) {
     nodes.push({ tag: 'bot', attrs: { biz_bot: '1' } });
   }
   return nodes;
@@ -54,7 +54,7 @@ function buildInteractiveNodes(jid) {
  * @param {object} [quoted] - Optional quoted message
  * @returns {Promise<object>} Generated message object
  */
-async function _sendInteractive(sock, jid, interactiveContent, quoted) {
+async function _sendInteractive(sock, jid, interactiveContent, quoted, badge = true) {
   const msg = generateWAMessageFromContent(jid, {
     viewOnceMessage: {
       message: {
@@ -69,7 +69,7 @@ async function _sendInteractive(sock, jid, interactiveContent, quoted) {
   logger.debug({ jid, messageId: msg.key.id }, 'relaying interactive message');
   await sock.relayMessage(jid, msg.message, {
     messageId: msg.key.id,
-    additionalNodes: buildInteractiveNodes(jid),
+    additionalNodes: buildInteractiveNodes(jid, badge),
   });
 
   return msg;
@@ -307,6 +307,7 @@ async function sendNativeFlow(sock, jid, body, buttons, options = {}) {
  *   video?: {url: string} | string,
  *   footer?: string,
  *   buttons?: Array<{name: string, buttonParamsJson: string}>,
+ *   badge?: boolean,
  *   quoted?: object
  * }} options
  * @returns {Promise<object>}
@@ -346,7 +347,7 @@ async function sendRichMessage(sock, jid, options = {}) {
     nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
       buttons: options.buttons || [],
     }),
-  }), options.quoted);
+  }), options.quoted, options.badge !== false);
 }
 
 export {
