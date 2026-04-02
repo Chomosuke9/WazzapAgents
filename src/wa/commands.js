@@ -2,7 +2,7 @@ import logger from '../logger.js';
 import { isOwnerJid } from '../participants.js';
 import { messageCache } from '../caches.js';
 import { getSock } from './connection.js';
-import { sendButtons, sendCarousel } from './interactive/index.js';
+import { sendNativeFlow, sendCarousel } from './interactive/index.js';
 
 // ---------------------------------------------------------------------------
 // Slash command parsing
@@ -158,151 +158,119 @@ async function handleInfoCommand({ chatId, senderId, senderDisplay, senderRole, 
 const DEBUG_TYPES = ['buttons', 'menu', 'carousel', 'carousel-img', 'all'];
 
 async function sendDebugButtons(chatId) {
+  const sock = getSock();
   // quick_reply × 3
-  await sendButtons({
-    chatId,
-    text: '[DEBUG] quick_reply buttons',
-    footer: 'Tap any button to test',
-    buttons: [
-      { name: 'quick_reply', buttonParams: { display_text: 'Option A', id: 'debug_qr_a' } },
-      { name: 'quick_reply', buttonParams: { display_text: 'Option B', id: 'debug_qr_b' } },
-      { name: 'quick_reply', buttonParams: { display_text: 'Option C', id: 'debug_qr_c' } },
-    ],
-  });
+  await sendNativeFlow(sock, chatId, '[DEBUG] quick_reply buttons', [
+    { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Option A', id: 'debug_qr_a' }) },
+    { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Option B', id: 'debug_qr_b' }) },
+    { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Option C', id: 'debug_qr_c' }) },
+  ], { footer: 'Tap any button to test' });
 
   // cta_url
-  await sendButtons({
-    chatId,
-    text: '[DEBUG] cta_url button',
-    footer: 'Opens a URL',
-    buttons: [
-      {
-        name: 'cta_url',
-        buttonParams: {
-          display_text: 'Open Link',
-          url: 'https://github.com/chomosuke9/wazzapagents',
-          merchant_url: 'https://github.com/chomosuke9/wazzapagents',
-        },
-      },
-    ],
-  });
+  await sendNativeFlow(sock, chatId, '[DEBUG] cta_url button', [
+    {
+      name: 'cta_url',
+      buttonParamsJson: JSON.stringify({
+        display_text: 'Open Link',
+        url: 'https://github.com/chomosuke9/wazzapagents',
+        merchant_url: 'https://github.com/chomosuke9/wazzapagents',
+      }),
+    },
+  ], { footer: 'Opens a URL' });
 
   // cta_copy
-  await sendButtons({
-    chatId,
-    text: '[DEBUG] cta_copy button',
-    footer: 'Tap to copy code to clipboard',
-    buttons: [
-      {
-        name: 'cta_copy',
-        buttonParams: { display_text: 'Copy Code', id: 'debug_copy', copy_code: 'DEBUG-CODE-123' },
-      },
-    ],
-  });
+  await sendNativeFlow(sock, chatId, '[DEBUG] cta_copy button', [
+    {
+      name: 'cta_copy',
+      buttonParamsJson: JSON.stringify({ display_text: 'Copy Code', id: 'debug_copy', copy_code: 'DEBUG-CODE-123' }),
+    },
+  ], { footer: 'Tap to copy code to clipboard' });
 
   // cta_call
-  await sendButtons({
-    chatId,
-    text: '[DEBUG] cta_call button',
-    footer: 'Tap to call',
-    buttons: [
-      {
-        name: 'cta_call',
-        buttonParams: { display_text: 'Call Now', id: 'debug_call', phone_number: '+621234567890' },
-      },
-    ],
-  });
+  await sendNativeFlow(sock, chatId, '[DEBUG] cta_call button', [
+    {
+      name: 'cta_call',
+      buttonParamsJson: JSON.stringify({ display_text: 'Call Now', id: 'debug_call', phone_number: '+621234567890' }),
+    },
+  ], { footer: 'Tap to call' });
 }
 
 async function sendDebugMenu(chatId) {
-  await sendButtons({
-    chatId,
-    text: '[DEBUG] single_select (menu/dropdown)',
-    footer: 'Tap to open dropdown menu',
-    buttons: [
-      {
-        name: 'single_select',
-        buttonParams: {
-          title: 'Pilih opsi',
-          sections: [
-            {
-              title: 'Kategori 1',
-              rows: [
-                { title: 'Item A', description: 'Deskripsi item A', id: 'debug_menu_a' },
-                { title: 'Item B', description: 'Deskripsi item B', id: 'debug_menu_b' },
-              ],
-            },
-            {
-              title: 'Kategori 2',
-              rows: [
-                { title: 'Item C', id: 'debug_menu_c' },
-                { title: 'Item D', id: 'debug_menu_d' },
-              ],
-            },
-          ],
-        },
-      },
-    ],
-  });
+  const sock = getSock();
+  await sendNativeFlow(sock, chatId, '[DEBUG] single_select (menu/dropdown)', [
+    {
+      name: 'single_select',
+      buttonParamsJson: JSON.stringify({
+        title: 'Pilih opsi',
+        sections: [
+          {
+            title: 'Kategori 1',
+            rows: [
+              { title: 'Item A', description: 'Deskripsi item A', id: 'debug_menu_a' },
+              { title: 'Item B', description: 'Deskripsi item B', id: 'debug_menu_b' },
+            ],
+          },
+          {
+            title: 'Kategori 2',
+            rows: [
+              { title: 'Item C', id: 'debug_menu_c' },
+              { title: 'Item D', id: 'debug_menu_d' },
+            ],
+          },
+        ],
+      }),
+    },
+  ], { footer: 'Tap to open dropdown menu' });
 }
 
 async function sendDebugCarousel(chatId) {
-  await sendCarousel({
-    chatId,
-    text: '[DEBUG] carousel message',
-    cards: [
-      {
-        body: { text: 'Kartu 1 — quick_reply buttons' },
-        footer: { text: 'Footer kartu 1' },
-        buttons: [
-          { name: 'quick_reply', buttonParams: { display_text: 'Pilih Ini', id: 'debug_c1_qr' } },
-          {
-            name: 'cta_url',
-            buttonParams: {
-              display_text: 'Buka Link',
-              url: 'https://github.com/chomosuke9/wazzapagents',
-              merchant_url: 'https://github.com/chomosuke9/wazzapagents',
-            },
-          },
-        ],
-      },
-      {
-        body: { text: 'Kartu 2 — cta_copy & cta_call' },
-        footer: { text: 'Footer kartu 2' },
-        buttons: [
-          {
-            name: 'cta_copy',
-            buttonParams: { display_text: 'Salin Kode', id: 'debug_c2_copy', copy_code: 'CAROUSEL-456' },
-          },
-          {
-            name: 'cta_call',
-            buttonParams: { display_text: 'Hubungi', id: 'debug_c2_call', phone_number: '+621234567890' },
-          },
-        ],
-      },
-      {
-        body: { text: 'Kartu 3 — single_select' },
-        footer: { text: 'Footer kartu 3' },
-        buttons: [
-          {
-            name: 'single_select',
-            buttonParams: {
-              title: 'Pilih dari menu',
-              sections: [
-                {
-                  title: 'Pilihan',
-                  rows: [
-                    { title: 'Opsi X', id: 'debug_c3_x' },
-                    { title: 'Opsi Y', id: 'debug_c3_y' },
-                  ],
-                },
-              ],
-            },
-          },
-        ],
-      },
-    ],
-  });
+  const sock = getSock();
+  await sendCarousel(sock, chatId, [
+    {
+      body: 'Kartu 1 — quick_reply buttons',
+      footer: 'Footer kartu 1',
+      buttons: [
+        { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Pilih Ini', id: 'debug_c1_qr' }) },
+        {
+          name: 'cta_url',
+          buttonParamsJson: JSON.stringify({
+            display_text: 'Buka Link',
+            url: 'https://github.com/chomosuke9/wazzapagents',
+            merchant_url: 'https://github.com/chomosuke9/wazzapagents',
+          }),
+        },
+      ],
+    },
+    {
+      body: 'Kartu 2 — cta_copy & cta_call',
+      footer: 'Footer kartu 2',
+      buttons: [
+        { name: 'cta_copy', buttonParamsJson: JSON.stringify({ display_text: 'Salin Kode', id: 'debug_c2_copy', copy_code: 'CAROUSEL-456' }) },
+        { name: 'cta_call', buttonParamsJson: JSON.stringify({ display_text: 'Hubungi', id: 'debug_c2_call', phone_number: '+621234567890' }) },
+      ],
+    },
+    {
+      body: 'Kartu 3 — single_select',
+      footer: 'Footer kartu 3',
+      buttons: [
+        {
+          name: 'single_select',
+          buttonParamsJson: JSON.stringify({
+            title: 'Pilih dari menu',
+            sections: [
+              {
+                title: 'Pilihan',
+                rows: [
+                  { title: 'Opsi X', id: 'debug_c3_x' },
+                  { title: 'Opsi Y', id: 'debug_c3_y' },
+                ],
+              },
+            ],
+          }),
+        },
+      ],
+    },
+  ], { text: '[DEBUG] carousel message' });
 }
 
 // Default fallback image — picsum.photos is a standard dev placeholder service
@@ -310,52 +278,43 @@ const DEBUG_IMG_DEFAULT = 'https://picsum.photos/seed/wazzap/600/400';
 const DEBUG_IMG_MIME = 'image/jpeg';
 
 async function sendDebugCarouselImg(chatId, imageUrl) {
+  const sock = getSock();
   const url = imageUrl || DEBUG_IMG_DEFAULT;
-  await sendCarousel({
-    chatId,
-    text: `[DEBUG] carousel + image header (${url})`,
-    cards: [
-      {
-        header: { imageMessage: { url, mimetype: DEBUG_IMG_MIME } },
-        body: { text: 'Kartu 1 — header image + quick_reply' },
-        footer: { text: 'Footer kartu 1' },
-        buttons: [
-          { name: 'quick_reply', buttonParams: { display_text: 'Pilih Ini', id: 'debug_ci1_qr' } },
-          {
-            name: 'cta_url',
-            buttonParams: {
-              display_text: 'Buka Link',
-              url: 'https://github.com/chomosuke9/wazzapagents',
-              merchant_url: 'https://github.com/chomosuke9/wazzapagents',
-            },
-          },
-        ],
-      },
-      {
-        header: { imageMessage: { url, mimetype: DEBUG_IMG_MIME } },
-        body: { text: 'Kartu 2 — header image + cta_copy & cta_call' },
-        footer: { text: 'Footer kartu 2' },
-        buttons: [
-          {
-            name: 'cta_copy',
-            buttonParams: { display_text: 'Salin Kode', id: 'debug_ci2_copy', copy_code: 'IMG-CAROUSEL-789' },
-          },
-          {
-            name: 'cta_call',
-            buttonParams: { display_text: 'Hubungi', id: 'debug_ci2_call', phone_number: '+621234567890' },
-          },
-        ],
-      },
-      {
-        // No header — compare rendering with vs without image
-        body: { text: 'Kartu 3 — tanpa header image (baseline)' },
-        footer: { text: 'Footer kartu 3' },
-        buttons: [
-          { name: 'quick_reply', buttonParams: { display_text: 'Baseline', id: 'debug_ci3_qr' } },
-        ],
-      },
-    ],
-  });
+  await sendCarousel(sock, chatId, [
+    {
+      image: { url },
+      body: 'Kartu 1 — header image + quick_reply',
+      footer: 'Footer kartu 1',
+      buttons: [
+        { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Pilih Ini', id: 'debug_ci1_qr' }) },
+        {
+          name: 'cta_url',
+          buttonParamsJson: JSON.stringify({
+            display_text: 'Buka Link',
+            url: 'https://github.com/chomosuke9/wazzapagents',
+            merchant_url: 'https://github.com/chomosuke9/wazzapagents',
+          }),
+        },
+      ],
+    },
+    {
+      image: { url },
+      body: 'Kartu 2 — header image + cta_copy & cta_call',
+      footer: 'Footer kartu 2',
+      buttons: [
+        { name: 'cta_copy', buttonParamsJson: JSON.stringify({ display_text: 'Salin Kode', id: 'debug_ci2_copy', copy_code: 'IMG-CAROUSEL-789' }) },
+        { name: 'cta_call', buttonParamsJson: JSON.stringify({ display_text: 'Hubungi', id: 'debug_ci2_call', phone_number: '+621234567890' }) },
+      ],
+    },
+    {
+      // No image — compare rendering with vs without image
+      body: 'Kartu 3 — tanpa header image (baseline)',
+      footer: 'Footer kartu 3',
+      buttons: [
+        { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Baseline', id: 'debug_ci3_qr' }) },
+      ],
+    },
+  ], { text: `[DEBUG] carousel + image header (${url})` });
 }
 
 async function handleDebugCommand({ chatId, senderId, args }) {

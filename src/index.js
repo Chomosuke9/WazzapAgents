@@ -8,9 +8,10 @@ import {
   kickMembers,
   markChatRead,
   sendPresence,
-  sendButtons,
+  sendNativeFlow,
   sendCarousel,
 } from './wa/index.js';
+import { getSock } from './wa/connection.js';
 import config from './config.js';
 
 function actionErrorCode(err) {
@@ -150,13 +151,33 @@ async function dispatchCommand(msg) {
   }
 
   if (type === 'send_buttons') {
-    const result = await sendButtons(payload);
+    const sock = getSock();
+    const nativeButtons = (payload.buttons || []).map((btn) => ({
+      name: btn.name,
+      buttonParamsJson: typeof btn.buttonParams === 'object'
+        ? JSON.stringify(btn.buttonParams)
+        : (btn.buttonParamsJson || '{}'),
+    }));
+    const result = await sendNativeFlow(sock, payload.chatId, payload.text || '', nativeButtons, { footer: payload.footer });
     emitActionAck({ requestId, action: 'send_buttons', ok: true, detail: 'sent', result });
     return;
   }
 
   if (type === 'send_carousel') {
-    const result = await sendCarousel(payload);
+    const sock = getSock();
+    const cards = (payload.cards || []).map((card) => ({
+      ...(card.image ? { image: card.image } : {}),
+      ...(card.video ? { video: card.video } : {}),
+      body: typeof card.body === 'object' ? (card.body.text || '') : (card.body || ''),
+      footer: typeof card.footer === 'object' ? (card.footer.text || '') : (card.footer || ''),
+      buttons: (card.buttons || []).map((btn) => ({
+        name: btn.name,
+        buttonParamsJson: typeof btn.buttonParams === 'object'
+          ? JSON.stringify(btn.buttonParams)
+          : (btn.buttonParamsJson || '{}'),
+      })),
+    }));
+    const result = await sendCarousel(sock, payload.chatId, cards, { text: payload.text });
     emitActionAck({ requestId, action: 'send_carousel', ok: true, detail: 'sent', result });
     return;
   }
