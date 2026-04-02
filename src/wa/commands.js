@@ -2,7 +2,7 @@ import logger from '../logger.js';
 import { isOwnerJid } from '../participants.js';
 import { messageCache } from '../caches.js';
 import { getSock } from './connection.js';
-import { sendNativeFlow, sendCarousel } from './interactive/index.js';
+import { sendNativeFlow, sendCarousel, sendRichMessage } from './interactive/index.js';
 
 // ---------------------------------------------------------------------------
 // Slash command parsing
@@ -57,9 +57,10 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
 
   if (text) {
     // Text broadcast: /broadcast <text>
+    const botName = sock.user?.name || sock.user?.verifiedName || 'Bot';
     for (const groupJid of groupJids) {
       try {
-        await sock.sendMessage(groupJid, { text });
+        await sendRichMessage(sock, groupJid, { title: botName, text });
         sent += 1;
       } catch (err) {
         logger.warn({ err, groupJid }, 'broadcast send failed');

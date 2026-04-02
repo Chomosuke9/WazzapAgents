@@ -288,6 +288,67 @@ async function sendNativeFlow(sock, jid, body, buttons, options = {}) {
   }), options.quoted);
 }
 
+/**
+ * Send a rich styled message using interactiveMessage layout with the AI badge.
+ * Works as a drop-in replacement for sock.sendMessage({ text }) whenever you want
+ * a header title, subtitle, image, footer, or optional buttons — without having to
+ * compose the proto payload manually.
+ *
+ * Buttons are optional. When omitted the message renders as a styled announcement
+ * (header + body + footer) with no interactive elements.
+ *
+ * @param {object} sock - Baileys socket instance
+ * @param {string} jid - Recipient JID
+ * @param {{
+ *   text: string,
+ *   title?: string,
+ *   subtitle?: string,
+ *   image?: {url: string} | string,
+ *   video?: {url: string} | string,
+ *   footer?: string,
+ *   buttons?: Array<{name: string, buttonParamsJson: string}>,
+ *   quoted?: object
+ * }} options
+ * @returns {Promise<object>}
+ * @example
+ * // Plain styled text with AI badge (no buttons):
+ * await sendRichMessage(sock, jid, { title: '📢 Pengumuman', text: 'Server down 23:00–01:00.' });
+ *
+ * // With quick reply buttons:
+ * await sendRichMessage(sock, jid, {
+ *   title: 'Konfirmasi',
+ *   text: 'Lanjutkan pesanan?',
+ *   footer: 'Tap tombol di bawah',
+ *   buttons: [
+ *     { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Ya', id: 'yes' }) },
+ *     { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Tidak', id: 'no' }) },
+ *   ],
+ * });
+ */
+async function sendRichMessage(sock, jid, options = {}) {
+  const headerFields = { hasMediaAttachment: false };
+  if (options.title) headerFields.title = options.title;
+  if (options.subtitle) headerFields.subtitle = options.subtitle;
+  if (options.image) {
+    headerFields.hasMediaAttachment = true;
+    const imgUrl = options.image?.url ?? options.image;
+    headerFields.imageMessage = { url: imgUrl };
+  } else if (options.video) {
+    headerFields.hasMediaAttachment = true;
+    const vidUrl = options.video?.url ?? options.video;
+    headerFields.videoMessage = { url: vidUrl };
+  }
+
+  return _sendInteractive(sock, jid, proto.Message.InteractiveMessage.create({
+    header: proto.Message.InteractiveMessage.Header.create(headerFields),
+    body: proto.Message.InteractiveMessage.Body.create({ text: options.text || '' }),
+    footer: proto.Message.InteractiveMessage.Footer.create({ text: options.footer || '' }),
+    nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+      buttons: options.buttons || [],
+    }),
+  }), options.quoted);
+}
+
 export {
   _sendInteractive,
   buildInteractiveNodes,
@@ -297,4 +358,5 @@ export {
   sendCombinedButtons,
   sendList,
   sendNativeFlow,
+  sendRichMessage,
 };
