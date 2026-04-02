@@ -2,10 +2,12 @@
  * sendCarousel.js — Carousel / swipeable Cards messages.
  *
  * Carousel is an interactiveMessage with carouselMessage inside.
- * Same binary node injection requirement as NativeFlow button messages.
+ * Requires binary XML node injection via additionalNodes on relayMessage.
+ * Unlike NativeFlow buttons (type=native_flow), carousel needs type=carousel
+ * in the interactive node.
  */
-import { proto } from 'baileys';
-import { _sendInteractive } from './sendInteractive.js';
+import { proto, generateWAMessageFromContent, isJidGroup } from 'baileys';
+import logger from '../../logger.js';
 
 /**
  * Send a carousel message with swipeable cards.
@@ -33,6 +35,26 @@ import { _sendInteractive } from './sendInteractive.js';
  *   }
  * ], { text: 'Produk Unggulan', footer: 'Swipe untuk lihat lebih' });
  */
+function buildCarouselNodes(jid) {
+  const nodes = [
+    {
+      tag: 'biz',
+      attrs: {},
+      content: [
+        {
+          tag: 'interactive',
+          attrs: { type: 'carousel', v: '1' },
+          content: [],
+        },
+      ],
+    },
+  ];
+  if (!isJidGroup(jid)) {
+    nodes.push({ tag: 'bot', attrs: { biz_bot: '1' } });
+  }
+  return nodes;
+}
+
 async function sendCarousel(sock, jid, cards, options = {}) {
   const mappedCards = cards.map((card) => {
     const headerFields = { hasMediaAttachment: false };
@@ -59,13 +81,32 @@ async function sendCarousel(sock, jid, cards, options = {}) {
     });
   });
 
-  return _sendInteractive(sock, jid, proto.Message.InteractiveMessage.create({
+  const interactiveContent = proto.Message.InteractiveMessage.create({
     body: proto.Message.InteractiveMessage.Body.create({ text: options.text || '' }),
     ...(options.footer ? {
       footer: proto.Message.InteractiveMessage.Footer.create({ text: options.footer }),
     } : {}),
     carouselMessage: proto.Message.InteractiveMessage.CarouselMessage.create({ cards: mappedCards }),
-  }), options.quoted);
+  });
+
+  const msg = generateWAMessageFromContent(jid, {
+    viewOnceMessage: {
+      message: {
+        interactiveMessage: interactiveContent,
+      },
+    },
+  }, {
+    userJid: sock.user.id,
+    ...(options.quoted ? { quoted: options.quoted } : {}),
+  });
+
+  logger.debug({ jid, messageId: msg.key.id }, 'relaying carousel message');
+  await sock.relayMessage(jid, msg.message, {
+    messageId: msg.key.id,
+    additionalNodes: buildCarouselNodes(jid),
+  });
+
+  return msg;
 }
 
 export { sendCarousel };
