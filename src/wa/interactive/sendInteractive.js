@@ -2,41 +2,76 @@
  * sendInteractive.js — NativeFlow-based interactive messages.
  * (quick reply, URL, copy, call, list, combined, raw native flow)
  *
- * interactiveMessage content must be sent via generateWAMessageFromContent +
- * sock.relayMessage — sock.sendMessage does not support interactiveMessage
- * because Baileys tries to process it through prepareWAMessageMedia and fails.
- * sendList uses listMessage which works fine with sock.sendMessage directly.
+ * interactiveMessage requires two things to render correctly in WhatsApp:
+ *   1. Proto content wrapped in viewOnceMessage.message.interactiveMessage
+ *      using proto.Message.InteractiveMessage.create() (not fromObject — removed in v7)
+ *   2. Binary XML nodes injected into the relay stanza via additionalNodes:
+ *      { biz > interactive(type=native_flow) > native_flow(name=mixed,v=9) }
+ *      plus a { bot(biz_bot=1) } node for private (non-group) chats
+ *
+ * sock.sendMessage is NOT used here — it routes through prepareWAMessageMedia
+ * which throws "Invalid media type" for interactiveMessage content.
  */
-import { proto, generateWAMessageFromContent } from 'baileys';
+import { proto, generateWAMessageFromContent, isJidGroup } from 'baileys';
 import logger from '../../logger.js';
 
 /**
- * Internal helper: wrap an interactiveMessage payload and relay it.
+ * Build the additionalNodes array required for interactive messages to render.
+ * Groups only need the biz node; private chats also need the bot node.
+ *
+ * @param {string} jid
+ * @returns {Array}
+ */
+function buildInteractiveNodes(jid) {
+  const nodes = [
+    {
+      tag: 'biz',
+      attrs: {},
+      content: [
+        {
+          tag: 'interactive',
+          attrs: { type: 'native_flow', v: '1' },
+          content: [
+            { tag: 'native_flow', attrs: { v: '9', name: 'mixed' } },
+          ],
+        },
+      ],
+    },
+  ];
+  if (!isJidGroup(jid)) {
+    nodes.push({ tag: 'bot', attrs: { biz_bot: '1' } });
+  }
+  return nodes;
+}
+
+/**
+ * Internal helper: wrap an interactiveMessage payload and relay it with
+ * the required binary XML nodes.
  *
  * @param {object} sock - Baileys socket instance
  * @param {string} jid - Recipient JID
- * @param {object} interactiveContent - Plain JS interactiveMessage object
+ * @param {object} interactiveContent - proto.Message.InteractiveMessage.create({...}) result
  * @param {object} [quoted] - Optional quoted message
  * @returns {Promise<object>} Generated message object
  */
 async function _sendInteractive(sock, jid, interactiveContent, quoted) {
-  const msg = generateWAMessageFromContent(jid, proto.Message.fromObject({
-    messageContextInfo: {
-      deviceListMetadata: {},
-      deviceListMetadataVersion: 2,
-      forwardedNewsletterMessageInfo: {
-        newsletterJid: '0@newsletter',
-        serverMessageId: -1,
-        newsletterName: 'WazzapAgents',
+  const msg = generateWAMessageFromContent(jid, {
+    viewOnceMessage: {
+      message: {
+        interactiveMessage: interactiveContent,
       },
     },
-    interactiveMessage: interactiveContent,
-  }), {
+  }, {
     userJid: sock.user.id,
     ...(quoted ? { quoted } : {}),
   });
+
   logger.debug({ jid, messageId: msg.key.id }, 'relaying interactive message');
-  await sock.relayMessage(jid, msg.message, { messageId: msg.key.id });
+  await sock.relayMessage(jid, msg.message, {
+    messageId: msg.key.id,
+    additionalNodes: buildInteractiveNodes(jid),
+  });
+
   return msg;
 }
 
@@ -60,12 +95,17 @@ async function sendQuickReply(sock, jid, body, buttons, options = {}) {
     name: 'quick_reply',
     buttonParamsJson: JSON.stringify({ display_text: btn.displayText, id: btn.id }),
   }));
-  return _sendInteractive(sock, jid, {
-    body: { text: body },
-    footer: { text: options.footer || '' },
-    header: { title: options.title || '', hasMediaAttachment: false },
-    nativeFlowMessage: { buttons: nativeButtons, messageParamsJson: '' },
-  }, options.quoted);
+  return _sendInteractive(sock, jid, proto.Message.InteractiveMessage.create({
+    header: proto.Message.InteractiveMessage.Header.create({
+      title: options.title || '',
+      hasMediaAttachment: false,
+    }),
+    body: proto.Message.InteractiveMessage.Body.create({ text: body }),
+    footer: proto.Message.InteractiveMessage.Footer.create({ text: options.footer || '' }),
+    nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+      buttons: nativeButtons,
+    }),
+  }), options.quoted);
 }
 
 /**
@@ -91,12 +131,17 @@ async function sendUrlButtons(sock, jid, body, buttons, options = {}) {
       ...(btn.merchantUrl ? { merchant_url: btn.merchantUrl } : {}),
     }),
   }));
-  return _sendInteractive(sock, jid, {
-    body: { text: body },
-    footer: { text: options.footer || '' },
-    header: { title: options.title || '', hasMediaAttachment: false },
-    nativeFlowMessage: { buttons: nativeButtons, messageParamsJson: '' },
-  }, options.quoted);
+  return _sendInteractive(sock, jid, proto.Message.InteractiveMessage.create({
+    header: proto.Message.InteractiveMessage.Header.create({
+      title: options.title || '',
+      hasMediaAttachment: false,
+    }),
+    body: proto.Message.InteractiveMessage.Body.create({ text: body }),
+    footer: proto.Message.InteractiveMessage.Footer.create({ text: options.footer || '' }),
+    nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+      buttons: nativeButtons,
+    }),
+  }), options.quoted);
 }
 
 /**
@@ -115,18 +160,17 @@ async function sendUrlButtons(sock, jid, body, buttons, options = {}) {
  * });
  */
 async function sendCopyCode(sock, jid, body, copyCode, displayText = 'Copy Code', options = {}) {
-  return _sendInteractive(sock, jid, {
-    body: { text: body },
-    footer: { text: options.footer || '' },
-    header: { hasMediaAttachment: false },
-    nativeFlowMessage: {
+  return _sendInteractive(sock, jid, proto.Message.InteractiveMessage.create({
+    header: proto.Message.InteractiveMessage.Header.create({ hasMediaAttachment: false }),
+    body: proto.Message.InteractiveMessage.Body.create({ text: body }),
+    footer: proto.Message.InteractiveMessage.Footer.create({ text: options.footer || '' }),
+    nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
       buttons: [{
         name: 'cta_copy',
         buttonParamsJson: JSON.stringify({ display_text: displayText, copy_code: copyCode }),
       }],
-      messageParamsJson: '',
-    },
-  }, options.quoted);
+    }),
+  }), options.quoted);
 }
 
 /**
@@ -165,12 +209,17 @@ async function sendCombinedButtons(sock, jid, body, buttons, options = {}) {
         return { name: btn.type, buttonParamsJson: JSON.stringify({ display_text: btn.displayText }) };
     }
   });
-  return _sendInteractive(sock, jid, {
-    body: { text: body },
-    footer: { text: options.footer || '' },
-    header: { title: options.title || '', hasMediaAttachment: false },
-    nativeFlowMessage: { buttons: nativeButtons, messageParamsJson: '' },
-  }, options.quoted);
+  return _sendInteractive(sock, jid, proto.Message.InteractiveMessage.create({
+    header: proto.Message.InteractiveMessage.Header.create({
+      title: options.title || '',
+      hasMediaAttachment: false,
+    }),
+    body: proto.Message.InteractiveMessage.Body.create({ text: body }),
+    footer: proto.Message.InteractiveMessage.Footer.create({ text: options.footer || '' }),
+    nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+      buttons: nativeButtons,
+    }),
+  }), options.quoted);
 }
 
 /**
@@ -227,21 +276,21 @@ async function sendList(sock, jid, content, options = {}) {
  * ], { footer: 'Tap to select' });
  */
 async function sendNativeFlow(sock, jid, body, buttons, options = {}) {
-  const header = {
-    hasMediaAttachment: false,
-    ...(options.header?.title ? { title: options.header.title } : {}),
-    ...(options.header?.subtitle ? { subtitle: options.header.subtitle } : {}),
-  };
-  return _sendInteractive(sock, jid, {
-    body: { text: body },
-    footer: { text: options.footer || '' },
-    header,
-    nativeFlowMessage: { buttons, messageParamsJson: '' },
-  }, options.quoted);
+  return _sendInteractive(sock, jid, proto.Message.InteractiveMessage.create({
+    header: proto.Message.InteractiveMessage.Header.create({
+      title: options.header?.title || '',
+      subtitle: options.header?.subtitle || '',
+      hasMediaAttachment: false,
+    }),
+    body: proto.Message.InteractiveMessage.Body.create({ text: body }),
+    footer: proto.Message.InteractiveMessage.Footer.create({ text: options.footer || '' }),
+    nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({ buttons }),
+  }), options.quoted);
 }
 
 export {
   _sendInteractive,
+  buildInteractiveNodes,
   sendQuickReply,
   sendUrlButtons,
   sendCopyCode,

@@ -2,9 +2,9 @@
  * sendCarousel.js — Carousel / swipeable Cards messages.
  *
  * Carousel is an interactiveMessage with carouselMessage inside.
- * Must be sent via generateWAMessageFromContent + sock.relayMessage —
- * sock.sendMessage does not support this content shape.
+ * Same binary node injection requirement as NativeFlow button messages.
  */
+import { proto } from 'baileys';
 import { _sendInteractive } from './sendInteractive.js';
 
 /**
@@ -35,29 +35,37 @@ import { _sendInteractive } from './sendInteractive.js';
  */
 async function sendCarousel(sock, jid, cards, options = {}) {
   const mappedCards = cards.map((card) => {
-    const header = {};
-    if (card.image) header.imageMessage = { url: card.image.url ?? card.image };
-    if (card.video) header.videoMessage = { url: card.video.url ?? card.video };
-    if (card.title) header.title = card.title;
+    const headerFields = { hasMediaAttachment: false };
+    if (card.image) {
+      headerFields.hasMediaAttachment = true;
+      headerFields.imageMessage = { url: card.image.url ?? card.image };
+    } else if (card.video) {
+      headerFields.hasMediaAttachment = true;
+      headerFields.videoMessage = { url: card.video.url ?? card.video };
+    }
+    if (card.title) headerFields.title = card.title;
 
-    return {
-      header,
-      body: { text: typeof card.body === 'string' ? card.body : (card.body?.text || '') },
-      footer: { text: typeof card.footer === 'string' ? card.footer : (card.footer?.text || '') },
-      nativeFlowMessage: {
-        buttons: (card.buttons || []).map((btn) => ({
-          name: btn.name,
-          buttonParamsJson: btn.buttonParamsJson,
-        })),
-      },
-    };
+    return proto.Message.InteractiveMessage.create({
+      header: proto.Message.InteractiveMessage.Header.create(headerFields),
+      body: proto.Message.InteractiveMessage.Body.create({
+        text: typeof card.body === 'string' ? card.body : (card.body?.text || ''),
+      }),
+      footer: proto.Message.InteractiveMessage.Footer.create({
+        text: typeof card.footer === 'string' ? card.footer : (card.footer?.text || ''),
+      }),
+      nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
+        buttons: card.buttons || [],
+      }),
+    });
   });
 
-  return _sendInteractive(sock, jid, {
-    body: { text: options.text || '' },
-    ...(options.footer ? { footer: { text: options.footer } } : {}),
-    carouselMessage: { cards: mappedCards },
-  }, options.quoted);
+  return _sendInteractive(sock, jid, proto.Message.InteractiveMessage.create({
+    body: proto.Message.InteractiveMessage.Body.create({ text: options.text || '' }),
+    ...(options.footer ? {
+      footer: proto.Message.InteractiveMessage.Footer.create({ text: options.footer }),
+    } : {}),
+    carouselMessage: proto.Message.InteractiveMessage.CarouselMessage.create({ cards: mappedCards }),
+  }), options.quoted);
 }
 
 export { sendCarousel };
