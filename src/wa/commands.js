@@ -2,7 +2,7 @@ import logger from '../logger.js';
 import { isOwnerJid } from '../participants.js';
 import { messageCache } from '../caches.js';
 import { getSock } from './connection.js';
-import { sendNativeFlow, sendCarousel, sendRichMessage } from './interactive/index.js';
+import { sendNativeFlow, sendCarousel, sendRichMessage, sendList, sendCombinedButtons } from './interactive/index.js';
 
 // ---------------------------------------------------------------------------
 // Slash command parsing
@@ -155,7 +155,7 @@ async function handleInfoCommand({ chatId, senderId, senderDisplay, senderRole, 
 // /debug command
 // ---------------------------------------------------------------------------
 
-const DEBUG_TYPES = ['buttons', 'menu', 'carousel', 'carousel-img', 'all'];
+const DEBUG_TYPES = ['buttons', 'menu', 'list', 'rich', 'combined', 'carousel', 'carousel-img', 'all'];
 
 async function sendDebugButtons(chatId) {
   const sock = getSock();
@@ -221,6 +221,63 @@ async function sendDebugMenu(chatId) {
       }),
     },
   ], { footer: 'Tap to open dropdown menu' });
+}
+
+async function sendDebugList(chatId) {
+  const sock = getSock();
+  await sendList(sock, chatId, {
+    title: '[DEBUG] List Message',
+    description: 'Tap tombol untuk membuka daftar pilihan',
+    buttonText: 'Buka Daftar',
+    footer: 'Pilih salah satu item',
+    sections: [
+      {
+        title: 'Kategori A',
+        rows: [
+          { rowId: 'debug_list_a1', title: 'Item A1', description: 'Deskripsi item A1' },
+          { rowId: 'debug_list_a2', title: 'Item A2', description: 'Deskripsi item A2' },
+        ],
+      },
+      {
+        title: 'Kategori B',
+        rows: [
+          { rowId: 'debug_list_b1', title: 'Item B1' },
+          { rowId: 'debug_list_b2', title: 'Item B2' },
+        ],
+      },
+    ],
+  });
+}
+
+async function sendDebugRichMessage(chatId) {
+  const sock = getSock();
+  // Styled text tanpa tombol
+  await sendRichMessage(sock, chatId, {
+    title: '[DEBUG] Rich Message',
+    subtitle: 'Subtitle teks',
+    text: 'Pesan styled tanpa tombol. Header + body + footer dengan badge AI (private) atau tanpa badge (group).',
+    footer: 'Footer teks',
+  });
+  // Styled text dengan tombol
+  await sendRichMessage(sock, chatId, {
+    title: '[DEBUG] Rich Message + Buttons',
+    text: 'Pesan styled dengan tombol quick_reply.',
+    footer: 'Tap tombol di bawah',
+    buttons: [
+      { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Pilihan A', id: 'debug_rich_a' }) },
+      { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Pilihan B', id: 'debug_rich_b' }) },
+    ],
+  });
+}
+
+async function sendDebugCombined(chatId) {
+  const sock = getSock();
+  await sendCombinedButtons(sock, chatId, '[DEBUG] semua tipe tombol dalam satu pesan', [
+    { type: 'reply', displayText: 'Quick Reply', id: 'debug_comb_reply' },
+    { type: 'url', displayText: 'Buka URL', url: 'https://github.com/chomosuke9/wazzapagents' },
+    { type: 'copy', displayText: 'Salin Kode', copyCode: 'COMBINED-123' },
+    { type: 'call', displayText: 'Telepon', phoneNumber: '+621234567890' },
+  ], { title: '[DEBUG] Combined Buttons', footer: 'url + reply + copy + call' });
 }
 
 async function sendDebugCarousel(chatId) {
@@ -343,10 +400,13 @@ async function handleDebugCommand({ chatId, senderId, args }) {
           '',
           '- buttons      → quick_reply, cta_url, cta_copy, cta_call',
           '- menu         → single_select dropdown',
+          '- list         → listMessage (sendList)',
+          '- rich         → sendRichMessage tanpa & dengan tombol',
+          '- combined     → semua tipe tombol dalam satu pesan',
           '- carousel     → swipeable cards (tanpa header image)',
           '- carousel-img → swipeable cards dengan header image',
           '                 Opsional: /debug carousel-img <url>',
-          '- all          → buttons + menu + carousel + carousel-img',
+          '- all          → semua tipe di atas',
         ].join('\n'),
       });
     } catch (err) {
@@ -369,6 +429,9 @@ async function handleDebugCommand({ chatId, senderId, args }) {
 
   if (subType === 'buttons' || subType === 'all') await send(sendDebugButtons, 'buttons');
   if (subType === 'menu' || subType === 'all') await send(sendDebugMenu, 'menu');
+  if (subType === 'list' || subType === 'all') await send(sendDebugList, 'list');
+  if (subType === 'rich' || subType === 'all') await send(sendDebugRichMessage, 'rich');
+  if (subType === 'combined' || subType === 'all') await send(sendDebugCombined, 'combined');
   if (subType === 'carousel' || subType === 'all') await send(sendDebugCarousel, 'carousel');
   if (subType === 'carousel-img' || subType === 'all') await send(sendDebugCarouselImg, 'carousel-img', extraArg || null);
 }

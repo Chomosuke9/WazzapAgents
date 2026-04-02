@@ -2,12 +2,11 @@
  * sendCarousel.js — Carousel / swipeable Cards messages.
  *
  * Carousel is an interactiveMessage with carouselMessage inside.
- * Requires binary XML node injection via additionalNodes on relayMessage.
- * Unlike NativeFlow buttons (type=native_flow), carousel needs type=carousel
- * in the interactive node.
+ * Despite being a distinct proto oneOf variant, the binary stanza still uses
+ * the same type=native_flow additionalNodes as all other interactive messages.
  */
-import { proto, generateWAMessageFromContent, isJidGroup } from 'baileys';
-import logger from '../../logger.js';
+import { proto } from 'baileys';
+import { _sendInteractive } from './sendInteractive.js';
 
 /**
  * Send a carousel message with swipeable cards.
@@ -22,7 +21,7 @@ import logger from '../../logger.js';
  *   footer?: string,
  *   buttons?: Array<{name: string, buttonParamsJson: string}>
  * }>} cards - Carousel card definitions
- * @param {{text?: string, title?: string, subtitle?: string, footer?: string, quoted?: object}} [options]
+ * @param {{text?: string, title?: string, footer?: string, quoted?: object}} [options]
  * @returns {Promise<object>}
  * @example
  * await sendCarousel(sock, jid, [
@@ -33,28 +32,8 @@ import logger from '../../logger.js';
  *     footer: 'Rp 100.000',
  *     buttons: [{ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Beli', id: 'buy_a' }) }]
  *   }
- * ], { text: 'Produk Unggulan', footer: 'Swipe untuk lihat lebih' });
+ * ], { title: 'Produk Unggulan', footer: 'Swipe untuk lihat lebih' });
  */
-function buildCarouselNodes(jid) {
-  const nodes = [
-    {
-      tag: 'biz',
-      attrs: {},
-      content: [
-        {
-          tag: 'interactive',
-          attrs: { type: 'carousel', v: '1' },
-          content: [],
-        },
-      ],
-    },
-  ];
-  if (!isJidGroup(jid)) {
-    nodes.push({ tag: 'bot', attrs: { biz_bot: '1' } });
-  }
-  return nodes;
-}
-
 async function sendCarousel(sock, jid, cards, options = {}) {
   const mappedCards = cards.map((card) => {
     const headerFields = { hasMediaAttachment: false };
@@ -81,32 +60,20 @@ async function sendCarousel(sock, jid, cards, options = {}) {
     });
   });
 
-  const interactiveContent = proto.Message.InteractiveMessage.create({
+  return _sendInteractive(sock, jid, proto.Message.InteractiveMessage.create({
+    header: proto.Message.InteractiveMessage.Header.create({
+      title: options.title || '',
+      hasMediaAttachment: false,
+    }),
     body: proto.Message.InteractiveMessage.Body.create({ text: options.text || '' }),
     ...(options.footer ? {
       footer: proto.Message.InteractiveMessage.Footer.create({ text: options.footer }),
     } : {}),
-    carouselMessage: proto.Message.InteractiveMessage.CarouselMessage.create({ cards: mappedCards }),
-  });
-
-  const msg = generateWAMessageFromContent(jid, {
-    viewOnceMessage: {
-      message: {
-        interactiveMessage: interactiveContent,
-      },
-    },
-  }, {
-    userJid: sock.user.id,
-    ...(options.quoted ? { quoted: options.quoted } : {}),
-  });
-
-  logger.debug({ jid, messageId: msg.key.id }, 'relaying carousel message');
-  await sock.relayMessage(jid, msg.message, {
-    messageId: msg.key.id,
-    additionalNodes: buildCarouselNodes(jid),
-  });
-
-  return msg;
+    carouselMessage: proto.Message.InteractiveMessage.CarouselMessage.create({
+      cards: mappedCards,
+      messageVersion: 1,
+    }),
+  }), options.quoted, options.badge !== false);
 }
 
 export { sendCarousel };
