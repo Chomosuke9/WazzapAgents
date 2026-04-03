@@ -257,14 +257,11 @@ async function sendCombinedButtons(sock, jid, body, buttons, options = {}) {
  */
 async function sendList(sock, jid, content, options = {}) {
   return sock.sendMessage(jid, {
-    listMessage: {
-      title: content.title,
-      description: content.description || '',
-      buttonText: content.buttonText,
-      footerText: content.footer || '',
-      listType: 1,
-      sections: content.sections,
-    },
+    text: content.description || content.title || '',
+    footer: content.footer || '',
+    buttonText: content.buttonText,
+    sections: content.sections,
+    listType: 1,
   }, { quoted: options.quoted });
 }
 
