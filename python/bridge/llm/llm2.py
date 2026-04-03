@@ -15,7 +15,8 @@ try:
   from ..log import setup_logging, trunc, dump_json, env_flag
   from ..media import build_visual_parts, llm2_media_enabled, redact_multimodal_content
   from ..db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete
-  from ..config import _parse_positive_float, _parse_non_negative_int
+  from ..config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int
+  from .prompt import _truncate_message
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
@@ -24,7 +25,8 @@ except ImportError:  # allow running as script
   from bridge.log import setup_logging, trunc, dump_json, env_flag  # type: ignore
   from bridge.media import build_visual_parts, llm2_media_enabled, redact_multimodal_content  # type: ignore
   from bridge.db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete  # type: ignore
-  from bridge.config import _parse_positive_float, _parse_non_negative_int  # type: ignore
+  from bridge.config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int  # type: ignore
+  from bridge.llm.prompt import _truncate_message  # type: ignore
 
 logger = setup_logging()
 SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "systemprompt.txt"
@@ -37,6 +39,10 @@ class LLM2Target:
   model: str
   base_url: str | None
   api_key: str
+
+
+def _llm2_message_max_chars() -> int:
+  return _parse_positive_int(os.getenv("LLM2_MESSAGE_MAX_CHARS"), 0)
 
 
 def _llm2_timeout() -> float:
@@ -443,6 +449,10 @@ async def generate_reply(
     prompt_override=prompt_override,
   )
   history_list = list(history)
+  message_max_chars = _llm2_message_max_chars()
+  if message_max_chars > 0:
+    history_list = [_truncate_message(msg, message_max_chars) for msg in history_list]
+    current = _truncate_message(current, message_max_chars)
   hist_text = format_history(history_list) or "(no older messages)"
   current_line = _format_current_window(current) or "(no current messages)"
   group_text = _group_description_block(group_description)
