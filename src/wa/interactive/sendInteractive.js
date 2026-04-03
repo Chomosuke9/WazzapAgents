@@ -336,12 +336,10 @@ async function sendRichMessage(sock, jid, options = {}) {
   if (options.subtitle) headerFields.subtitle = options.subtitle;
   if (options.image) {
     headerFields.hasMediaAttachment = true;
-    const imgUrl = options.image?.url ?? options.image;
-    headerFields.imageMessage = { url: imgUrl };
+    headerFields.imageMessage = { url: options.image?.url ?? options.image };
   } else if (options.video) {
     headerFields.hasMediaAttachment = true;
-    const vidUrl = options.video?.url ?? options.video;
-    headerFields.videoMessage = { url: vidUrl };
+    headerFields.videoMessage = { url: options.video?.url ?? options.video };
   }
 
   return _sendInteractive(sock, jid, proto.Message.InteractiveMessage.create({
