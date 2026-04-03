@@ -16,8 +16,8 @@ import { resolveAllowedAttachmentPath } from '../mediaHandler.js';
 import { getSock } from './connection.js';
 import { escapeRegex } from './utils.js';
 import { actionError } from './actions.js';
-
-const AI_FOOTER = '\n\n_Pesan ini dibuat oleh AI_';
+import { sendRichMessage } from './interactive/index.js';
+import config from '../config.js';
 
 async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   if (typeof rawText !== 'string') {
@@ -164,12 +164,32 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
   if (normalizedText) {
     const renderedText = await renderOutboundMentions(chatId, normalizedText, group);
     group = renderedText.groupContext || group;
-    // Use sock.sendMessage for compatibility with WhatsApp Web (multi-device).
-    // Interactive messages (sendRichMessage) are not rendered by WA Web due to
-    // the viewOnceMessage wrapper. AI footer is appended as plain text instead.
-    const textPayload = { text: renderedText.text + AI_FOOTER };
-    if (renderedText.mentions.length > 0) textPayload.mentions = renderedText.mentions;
-    const sentMsg = await sock.sendMessage(chatId, textPayload, quoted ? { quoted } : {});
+    let sentMsg;
+    if (config.llmReplyInteractive) {
+      // Interactive mode: sendRichMessage with optional footer.
+      // Note: not compatible with WhatsApp Web (viewOnceMessage wrapper).
+      try {
+        sentMsg = await sendRichMessage(sock, chatId, {
+          text: renderedText.text,
+          footer: config.llmReplyFooter || undefined,
+          quoted: quoted || undefined,
+          mentions: renderedText.mentions,
+        });
+      } catch (err) {
+        logger.warn({ err, chatId }, 'sendRichMessage failed, falling back to sendMessage');
+        const textPayload = { text: renderedText.text };
+        if (renderedText.mentions.length > 0) textPayload.mentions = renderedText.mentions;
+        sentMsg = await sock.sendMessage(chatId, textPayload, quoted ? { quoted } : {});
+      }
+    } else {
+      // Default: plain sendMessage. Works on all clients including WhatsApp Web.
+      const bodyText = config.llmReplyFooter
+        ? `${renderedText.text}\n\n${config.llmReplyFooter}`
+        : renderedText.text;
+      const textPayload = { text: bodyText };
+      if (renderedText.mentions.length > 0) textPayload.mentions = renderedText.mentions;
+      sentMsg = await sock.sendMessage(chatId, textPayload, quoted ? { quoted } : {});
+    }
 
     const contextMsgId = nextContextMsgId(chatId);
     rememberMessage(sentMsg, {
