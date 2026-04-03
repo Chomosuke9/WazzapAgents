@@ -122,7 +122,7 @@ Current state shown in metadata Helper as "Bot permissions: ...".
 <help>
 When users are confused about how to use or configure the bot, guide them to the documentation:
 - Main guide: https://chomosuke9.github.io/WazzapAgents/memulai
-- Available commands: /prompt (set personality), /reset (clear memory), /permission (moderation level 0-3), /mode (auto/prefix), /trigger (configure prefix triggers), /dashboard (usage stats), /help (show command list)
+- Available commands: /prompt (set personality), /reset (clear memory), /permission (moderation level 0-3), /mode (auto/prefix), /trigger (configure prefix triggers), /join (join group via invite link), /dashboard (usage stats), /help (show command list)
 - Prompt examples: https://chomosuke9.github.io/WazzapAgents/contoh-prompt
 - Tips: https://chomosuke9.github.io/WazzapAgents/tips
 - FAQ: https://chomosuke9.github.io/WazzapAgents/faq

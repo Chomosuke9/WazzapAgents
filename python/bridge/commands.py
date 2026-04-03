@@ -448,7 +448,6 @@ _HELP_TEXT = """\
   all/none = aktifkan/nonaktifkan semua
 
 */join* <link> — masuk ke grup lewat link undangan
-  _Wajib owner._
 
 */dashboard* — lihat statistik penggunaan bot
 
