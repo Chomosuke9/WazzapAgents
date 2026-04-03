@@ -59,7 +59,7 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
     // Text broadcast: /broadcast <text>
     for (const groupJid of groupJids) {
       try {
-        await sendRichMessage(sock, groupJid, { title: 'Broadcast 📢', text, badge: false });
+        await sendRichMessage(sock, groupJid, { text, footer: 'Broadcast 📢', badge: false });
         sent += 1;
       } catch (err) {
         logger.warn({ err, groupJid }, 'broadcast send failed');
@@ -283,8 +283,8 @@ async function sendDebugCombined(chatId) {
 async function sendDebugBroadcast(chatId) {
   const sock = getSock();
   await sendRichMessage(sock, chatId, {
-    title: 'Broadcast 📢',
     text: 'Ini adalah contoh pesan broadcast.\n\nPesan ini biasanya dikirim ke semua group yang diikuti bot.',
+    footer: 'Broadcast 📢',
     badge: false,
   });
 }
