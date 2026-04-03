@@ -59,7 +59,7 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
     // Text broadcast: /broadcast <text>
     for (const groupJid of groupJids) {
       try {
-        await sendRichMessage(sock, groupJid, { title: 'Broadcast 📢', text, badge: false });
+        await sendRichMessage(sock, groupJid, { text, footer: 'Broadcast 📢', badge: false });
         sent += 1;
       } catch (err) {
         logger.warn({ err, groupJid }, 'broadcast send failed');
@@ -155,7 +155,7 @@ async function handleInfoCommand({ chatId, senderId, senderDisplay, senderRole, 
 // /debug command
 // ---------------------------------------------------------------------------
 
-const DEBUG_TYPES = ['buttons', 'menu', 'list', 'rich', 'combined', 'carousel', 'carousel-img', 'all'];
+const DEBUG_TYPES = ['buttons', 'menu', 'list', 'rich', 'combined', 'broadcast', 'carousel', 'carousel-img', 'all'];
 
 async function sendDebugButtons(chatId) {
   const sock = getSock();
@@ -278,6 +278,15 @@ async function sendDebugCombined(chatId) {
     { type: 'copy', displayText: 'Salin Kode', copyCode: 'COMBINED-123' },
     { type: 'call', displayText: 'Telepon', phoneNumber: '+621234567890' },
   ], { title: '[DEBUG] Combined Buttons', footer: 'url + reply + copy + call' });
+}
+
+async function sendDebugBroadcast(chatId) {
+  const sock = getSock();
+  await sendRichMessage(sock, chatId, {
+    text: 'Ini adalah contoh pesan broadcast.\n\nPesan ini biasanya dikirim ke semua group yang diikuti bot.',
+    footer: 'Broadcast 📢',
+    badge: false,
+  });
 }
 
 async function sendDebugCarousel(chatId) {
@@ -403,10 +412,11 @@ async function handleDebugCommand({ chatId, senderId, args }) {
           '- list         → listMessage (sendList)',
           '- rich         → sendRichMessage tanpa & dengan tombol',
           '- combined     → semua tipe tombol dalam satu pesan',
-          '- carousel     → swipeable cards (tanpa header image)',
-          '- carousel-img → swipeable cards dengan header image',
+          '- broadcast    → preview format pesan broadcast',
+          '- carousel     → swipeable cards (tanpa header image, eksperimental)',
+          '- carousel-img → swipeable cards dengan header image (eksperimental)',
           '                 Opsional: /debug carousel-img <url>',
-          '- all          → semua tipe di atas',
+          '- all          → buttons + menu + list + rich + combined + broadcast',
         ].join('\n'),
       });
     } catch (err) {
@@ -432,8 +442,9 @@ async function handleDebugCommand({ chatId, senderId, args }) {
   if (subType === 'list' || subType === 'all') await send(sendDebugList, 'list');
   if (subType === 'rich' || subType === 'all') await send(sendDebugRichMessage, 'rich');
   if (subType === 'combined' || subType === 'all') await send(sendDebugCombined, 'combined');
-  if (subType === 'carousel' || subType === 'all') await send(sendDebugCarousel, 'carousel');
-  if (subType === 'carousel-img' || subType === 'all') await send(sendDebugCarouselImg, 'carousel-img', extraArg || null);
+  if (subType === 'broadcast' || subType === 'all') await send(sendDebugBroadcast, 'broadcast');
+  if (subType === 'carousel') await send(sendDebugCarousel, 'carousel');
+  if (subType === 'carousel-img') await send(sendDebugCarouselImg, 'carousel-img', extraArg || null);
 }
 
 export {

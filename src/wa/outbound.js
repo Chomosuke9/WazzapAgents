@@ -16,6 +16,9 @@ import { resolveAllowedAttachmentPath } from '../mediaHandler.js';
 import { getSock } from './connection.js';
 import { escapeRegex } from './utils.js';
 import { actionError } from './actions.js';
+import { sendRichMessage } from './interactive/index.js';
+
+const AI_FOOTER = 'Pesan ini dibuat oleh AI';
 
 async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   if (typeof rawText !== 'string') {
@@ -162,11 +165,28 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
   if (normalizedText) {
     const renderedText = await renderOutboundMentions(chatId, normalizedText, group);
     group = renderedText.groupContext || group;
-    const textPayload = { text: renderedText.text };
-    if (renderedText.mentions.length > 0) {
-      textPayload.mentions = renderedText.mentions;
+    const hasMentions = renderedText.mentions.length > 0;
+
+    let sentMsg;
+    if (hasMentions) {
+      // Mentions require regular sendMessage so @mention notifications are delivered.
+      const textPayload = { text: renderedText.text, mentions: renderedText.mentions };
+      sentMsg = await sock.sendMessage(chatId, textPayload, quoted ? { quoted } : {});
+    } else {
+      // No mentions — use sendRichMessage to show AI footer.
+      // Falls back to plain sendMessage if interactive delivery fails.
+      try {
+        sentMsg = await sendRichMessage(sock, chatId, {
+          text: renderedText.text,
+          footer: AI_FOOTER,
+          quoted: quoted || undefined,
+        });
+      } catch (err) {
+        logger.warn({ err, chatId }, 'sendRichMessage failed, falling back to sendMessage');
+        sentMsg = await sock.sendMessage(chatId, { text: renderedText.text }, quoted ? { quoted } : {});
+      }
     }
-    const sentMsg = await sock.sendMessage(chatId, textPayload, quoted ? { quoted } : {});
+
     const contextMsgId = nextContextMsgId(chatId);
     rememberMessage(sentMsg, {
       chatId,
