@@ -40,13 +40,27 @@ Additional directories and files:
 | `index.js` | Barrel re-export for all WhatsApp functionality |
 | `connection.js` | WhatsApp connection via Baileys v7, socket lifecycle |
 | `inbound.js` | Incoming message handling, mention resolution |
-| `outbound.js` | Outgoing message sending, mention rendering |
+| `outbound.js` | Outgoing message sending, mention rendering. LLM text replies use `sendRichMessage` with AI footer; fallback to `sock.sendMessage` on failure |
 | `actions.js` | Reaction and delete actions |
 | `moderation.js` | Kick members, moderation workflows |
-| `commands.js` | Slash command parsing, `/broadcast`, `/info` |
+| `commands.js` | Slash command parsing, `/broadcast`, `/info`, `/debug` |
 | `events.js` | Synthetic event emission (group join, bot action context) |
 | `presence.js` | Mark read and typing presence |
 | `utils.js` | Concurrency, timeout, and regex utilities |
+
+#### Interactive messages (`src/wa/interactive/`)
+
+> **⚠️ Read `src/wa/interactive/README.md` before editing any file in this folder.**
+> Interactive messages in Baileys v7 require specific binary node injection and proto
+> wrapping — many things silently break without it.
+
+| File | Purpose |
+|------|---------|
+| `README.md` | Full implementation notes — required reading |
+| `sendInteractive.js` | Core `_sendInteractive` helper + NativeFlow functions: `sendRichMessage`, `sendQuickReply`, `sendUrlButtons`, `sendCopyCode`, `sendCombinedButtons`, `sendNativeFlow`, `sendList` |
+| `sendCarousel.js` | Carousel / swipeable cards (⚠️ error 479, experimental) |
+| `sendButtons.js` | Legacy button formats (`sendLegacyButtons`, `sendTemplate`) |
+| `index.js` | Barrel re-export |
 
 ### Python Bridge (`python/bridge/`)
 | File | Purpose |
@@ -165,6 +179,51 @@ Two response modes per chat, controlled via `/mode` (owner only):
 Default: `tag`, `reply`, `name` enabled (`join` disabled). Private chats always auto-respond regardless of mode.
 
 **Dashboard** (`/dashboard`): Shows per-chat usage stats (daily/weekly/monthly) including messages processed, bot tags, name mentions, LLM1/LLM2 calls and token usage, responses sent, stickers sent, errors, and top users. Stats are buffered in RAM and periodically flushed to SQLite.
+
+## Interactive Messages
+
+Interactive messages (buttons, menus, carousels) require special handling in Baileys v7.
+**Always read `src/wa/interactive/README.md` before working on this area.**
+
+Key points:
+- `sock.sendMessage` cannot be used for `interactiveMessage` — use `generateWAMessageFromContent` + `sock.relayMessage`.
+- `additionalNodes` with `{ biz > interactive(type=native_flow) > native_flow(v=9,name=mixed) }` must be passed to every `relayMessage` call, or WhatsApp shows a "version not supported" error.
+- Use `proto.Message.InteractiveMessage.create()` — `.fromObject()` was removed in Baileys v7.
+- Wrap content in `viewOnceMessage.message.messageContextInfo.interactiveMessage`.
+
+### `sendRichMessage` — Universal Styled Message
+
+The primary function for sending styled messages from the bot:
+
+```js
+import { sendRichMessage } from './wa/interactive/index.js';
+
+await sendRichMessage(sock, jid, {
+  title: 'Judul',        // optional — rendered in header (requires media to show visually)
+  text: 'Isi pesan',     // body text
+  footer: 'Footer',      // optional footer bar
+  image: { url: '...' }, // optional header media
+  buttons: [...],        // optional NativeFlow buttons
+  mentions: [jid1],      // optional @mentions via contextInfo.mentionedJid
+  badge: true,           // AI badge (default true; only visible in private chats)
+  quoted: msg,           // optional quoted message
+});
+```
+
+All LLM text replies pass through `sendRichMessage` with `footer: 'Pesan ini dibuat oleh AI'`.
+
+### `/debug` Command (owner only)
+
+```
+/debug buttons      → quick_reply, cta_url, cta_copy, cta_call
+/debug menu         → single_select dropdown
+/debug list         → listMessage
+/debug rich         → sendRichMessage (tanpa & dengan tombol)
+/debug combined     → semua tipe tombol
+/debug broadcast    → preview format pesan broadcast
+/debug all          → semua 6 tipe di atas
+/debug carousel     → carousel (eksperimental, error 479)
+```
 
 ## Sticker Action
 

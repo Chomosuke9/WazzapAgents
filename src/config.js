@@ -61,6 +61,8 @@ const config = {
   perfLogEnabled: process.env.PERF_LOG_ENABLED !== '0',
   perfLogThresholdMs: nonNegativeInt(process.env.PERF_LOG_THRESHOLD_MS, 400),
   botOwnerJids: parseJidList(process.env.BOT_OWNER_JIDS),
+  llmReplyInteractive: process.env.LLM_REPLY_INTERACTIVE === 'true',
+  llmReplyFooter: process.env.LLM_REPLY_FOOTER || '',
 };
 
 export default config;
