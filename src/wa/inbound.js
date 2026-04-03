@@ -41,7 +41,7 @@ import {
   resolveParticipantLabel,
   emitGroupJoinContextEvent,
 } from './events.js';
-import { parseSlashCommand, handleBroadcastCommand, handleInfoCommand, handleDebugCommand } from './commands.js';
+import { parseSlashCommand, handleBroadcastCommand, handleInfoCommand, handleDebugCommand, handleJoinCommand } from './commands.js';
 
 async function buildMentionedParticipants(chatId, mentionedJids, botAliasSet = null) {
   if (!Array.isArray(mentionedJids) || mentionedJids.length === 0) return null;
@@ -237,6 +237,11 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
 
   if (slashCommand && slashCommand.command === 'debug') {
     await handleDebugCommand({ chatId, senderId, args: slashCommand.args });
+    return;
+  }
+
+  if (slashCommand && slashCommand.command === 'join') {
+    await handleJoinCommand({ chatId, senderId, args: slashCommand.args });
     return;
   }
 

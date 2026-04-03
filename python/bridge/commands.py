@@ -40,7 +40,7 @@ _PROMPT_MAX_CHARS = 4000
 
 # Match "/command" at start of text, optionally followed by arguments.
 _CMD_RE = re.compile(
-  r"^/(prompt|reset|permission|broadcast|mode|trigger|dashboard|help)\b\s*(.*)",
+  r"^/(prompt|reset|permission|broadcast|mode|trigger|dashboard|help|join)\b\s*(.*)",
   re.IGNORECASE | re.DOTALL,
 )
 
@@ -93,6 +93,10 @@ def handle_command(
   """
   if command == "broadcast":
     # Handled by Node.js gateway; Python only records history.
+    return None
+
+  if command == "join":
+    # Handled by Node.js gateway.
     return None
 
   if command == "prompt":
@@ -442,6 +446,9 @@ _HELP_TEXT = """\
   name = nama bot disebut dalam teks
   join = member baru masuk grup
   all/none = aktifkan/nonaktifkan semua
+
+*/join* <link> — masuk ke grup lewat link undangan
+  _Wajib owner._
 
 */dashboard* — lihat statistik penggunaan bot
 

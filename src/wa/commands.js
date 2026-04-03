@@ -8,7 +8,7 @@ import { sendNativeFlow, sendCarousel, sendRichMessage, sendList, sendCombinedBu
 // Slash command parsing
 // ---------------------------------------------------------------------------
 
-const SLASH_CMD_RE = /^\/(broadcast|prompt|reset|permission|info|mode|trigger|dashboard|help|debug)\b\s*([\s\S]*)/i;
+const SLASH_CMD_RE = /^\/(broadcast|prompt|reset|permission|info|mode|trigger|dashboard|help|debug|join)\b\s*([\s\S]*)/i;
 
 function parseSlashCommand(text) {
   if (!text || typeof text !== 'string') return null;
@@ -447,10 +447,56 @@ async function handleDebugCommand({ chatId, senderId, args }) {
   if (subType === 'carousel-img') await send(sendDebugCarouselImg, 'carousel-img', extraArg || null);
 }
 
+// ---------------------------------------------------------------------------
+// /join command — join a group via invite link (owner only)
+// ---------------------------------------------------------------------------
+
+const INVITE_LINK_RE = /chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/;
+
+async function handleJoinCommand({ chatId, senderId, args }) {
+  const sock = getSock();
+  if (!isOwnerJid(senderId)) {
+    logger.info({ senderId, chatId }, '/join rejected: not owner');
+    try {
+      await sock.sendMessage(chatId, { text: 'Only bot owners can use /join.' });
+    } catch (err) {
+      logger.warn({ err }, 'failed sending join rejection');
+    }
+    return;
+  }
+
+  const input = (args || '').trim();
+  if (!input) {
+    try {
+      await sock.sendMessage(chatId, { text: 'Usage: /join <invite link or code>\nExample: /join https://chat.whatsapp.com/ABC123' });
+    } catch (e) { /* ignore */ }
+    return;
+  }
+
+  // Extract invite code from link or use raw code
+  const linkMatch = input.match(INVITE_LINK_RE);
+  const inviteCode = linkMatch ? linkMatch[1] : input;
+
+  try {
+    const groupId = await sock.groupAcceptInvite(inviteCode);
+    const reply = groupId
+      ? `Joined group successfully. Group ID: ${groupId}`
+      : 'Joined group successfully.';
+    await sock.sendMessage(chatId, { text: reply });
+    logger.info({ chatId, senderId, inviteCode, groupId }, '/join success');
+  } catch (err) {
+    logger.error({ err, inviteCode, chatId }, '/join failed');
+    try {
+      await sock.sendMessage(chatId, { text: `Failed to join group: ${err?.message || err}` });
+    } catch (e) { /* ignore */ }
+  }
+}
+
 export {
   parseSlashCommand,
   handleBroadcastCommand,
   truncateText,
   handleInfoCommand,
   handleDebugCommand,
+  handleJoinCommand,
 };
