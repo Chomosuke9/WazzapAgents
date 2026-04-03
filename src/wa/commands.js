@@ -455,16 +455,6 @@ const INVITE_LINK_RE = /chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/;
 
 async function handleJoinCommand({ chatId, senderId, args }) {
   const sock = getSock();
-  if (!isOwnerJid(senderId)) {
-    logger.info({ senderId, chatId }, '/join rejected: not owner');
-    try {
-      await sock.sendMessage(chatId, { text: 'Only bot owners can use /join.' });
-    } catch (err) {
-      logger.warn({ err }, 'failed sending join rejection');
-    }
-    return;
-  }
-
   const input = (args || '').trim();
   if (!input) {
     try {
