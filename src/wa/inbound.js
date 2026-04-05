@@ -40,6 +40,7 @@ import { withTimeout, escapeRegex } from './utils.js';
 import {
   resolveParticipantLabel,
   emitGroupJoinContextEvent,
+  emitBotRoleChangeEvent,
 } from './events.js';
 import { parseSlashCommand, handleBroadcastCommand, handleInfoCommand, handleDebugCommand, handleJoinCommand } from './commands.js';
 
@@ -79,13 +80,31 @@ async function handleGroupParticipantsUpdate(update) {
   if (!chatId || !chatId.endsWith('@g.us')) return;
   invalidateGroupMetadata(chatId);
 
-  const action = normalizeGroupJoinAction(update?.action);
-  const joinActions = new Set(['add', 'invite', 'join', 'approve']);
-  if (!joinActions.has(action)) return;
-
+  const rawAction = typeof update?.action === 'string' ? update.action.toLowerCase() : '';
   const participants = compactParticipantJids(Array.isArray(update?.participants) ? update.participants : []);
   if (participants.length === 0) return;
   const actorId = compactParticipantJids([update?.authorPn, update?.author])[0] || null;
+
+  // Handle promote/demote: check if bot is among affected participants
+  const roleActions = new Set(['promote', 'demote']);
+  if (roleActions.has(rawAction)) {
+    const botAliases = new Set(currentBotAliases());
+    const botAffected = participants.some((p) => botAliases.has(normalizeJid(p) || p));
+    if (botAffected) {
+      emitBotRoleChangeEvent({
+        chatId,
+        action: rawAction,
+        actorId,
+      });
+    }
+    return;
+  }
+
+  // Handle join events
+  const action = normalizeGroupJoinAction(rawAction);
+  const joinActions = new Set(['add', 'invite', 'join', 'approve']);
+  if (!joinActions.has(action)) return;
+
   await emitGroupJoinContextEvent({
     chatId,
     action,

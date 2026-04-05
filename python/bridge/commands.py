@@ -85,6 +85,7 @@ def handle_command(
   chat_type: str,
   sender_is_admin: bool,
   sender_jid: str | None = None,
+  bot_is_admin: bool = False,
 ) -> Optional[CommandResult]:
   """
   Execute a slash command and return a ``CommandResult``.
@@ -106,7 +107,7 @@ def handle_command(
     return _handle_reset(chat_id=chat_id, chat_type=chat_type, sender_is_admin=sender_is_admin)
 
   if command == "permission":
-    return _handle_permission(args, chat_id=chat_id, chat_type=chat_type, sender_is_admin=sender_is_admin)
+    return _handle_permission(args, chat_id=chat_id, chat_type=chat_type, sender_is_admin=sender_is_admin, bot_is_admin=bot_is_admin)
 
   if command == "mode":
     return _handle_mode(args, chat_id=chat_id, chat_type=chat_type, sender_is_admin=sender_is_admin, sender_jid=sender_jid)
@@ -215,10 +216,10 @@ def _handle_reset(
 # ---------------------------------------------------------------------------
 
 _PERMISSION_LABELS = {
-  0: "0 (kick & delete forbidden)",
-  1: "1 (delete allowed, kick forbidden)",
-  2: "2 (kick allowed, delete forbidden)",
-  3: "3 (kick & delete allowed)",
+  0: "0 (all moderation forbidden)",
+  1: "1 (delete allowed)",
+  2: "2 (delete & mute allowed)",
+  3: "3 (delete, mute & kick allowed)",
 }
 
 
@@ -228,6 +229,7 @@ def _handle_permission(
   chat_id: str,
   chat_type: str,
   sender_is_admin: bool,
+  bot_is_admin: bool = False,
 ) -> CommandResult:
   if chat_type == "private":
     return CommandResult(
@@ -265,7 +267,14 @@ def _handle_permission(
     return CommandResult(
       command="permission",
       success=False,
-      reply="Level must be 0-3.\n0: no kick/delete\n1: delete allowed\n2: kick allowed\n3: kick & delete allowed",
+      reply="Level must be 0-3.\n0: all forbidden\n1: delete\n2: delete & mute\n3: delete, mute & kick",
+    )
+
+  if level > 0 and not bot_is_admin:
+    return CommandResult(
+      command="permission",
+      success=False,
+      reply="Bot must be an admin to enable moderation (permission 1-3). Promote the bot first, then try again.",
     )
 
   set_permission(chat_id, level)

@@ -200,9 +200,59 @@ function emitBotActionContextEvent({
   wsClient.send({ type: 'incoming_message', payload });
 }
 
+function emitBotRoleChangeEvent({
+  chatId,
+  action,
+  actorId = null,
+}) {
+  const sock = getSock();
+  if (!sock || !chatId) return;
+
+  const group = getCachedGroupMetadata(chatId) || defaultGroupContext(chatId);
+  const senderId = 'group-system@wazzap.local';
+  const senderRef = rememberSenderRef(chatId, senderId, senderId) || 'unknown';
+  const normalizedActorId = normalizeJid(actorId) || null;
+
+  const payload = {
+    messageId: makeEventMessageId('bot_role_change'),
+    instanceId: config.instanceId,
+    chatId,
+    chatName: group?.name || chatId,
+    chatType: 'group',
+    senderId,
+    senderRef,
+    senderName: 'Group System',
+    senderIsAdmin: false,
+    isGroup: true,
+    botIsAdmin: action === 'promote',
+    botIsSuperAdmin: false,
+    fromMe: false,
+    contextOnly: true,
+    triggerLlm1: false,
+    timestampMs: Date.now(),
+    messageType: 'botRoleChange',
+    text: `Bot role changed: ${action}`,
+    quoted: null,
+    attachments: [],
+    mentionedJids: null,
+    mentionedParticipants: null,
+    location: null,
+    groupDescription: group?.description || null,
+    groupEvent: {
+      action,
+      actorId: normalizedActorId,
+      source: 'group-participants.update',
+    },
+  };
+
+  wsClient.send({ type: 'incoming_message', payload });
+  logger.info({ chatId, action }, 'emitted bot role change event');
+}
+
 export {
   makeEventMessageId,
   resolveParticipantLabel,
   emitGroupJoinContextEvent,
   emitBotActionContextEvent,
+  emitBotRoleChangeEvent,
 };

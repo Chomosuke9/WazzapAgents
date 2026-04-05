@@ -4,6 +4,7 @@ import re
 
 try:
   from ..log import setup_logging
+  from ..llm.tool_utils import extract_tool_args, get_tool_call_name
   from .processing import (
     _normalize_context_msg_id,
     _normalize_preview_text,
@@ -15,6 +16,7 @@ except ImportError:
   from pathlib import Path
   sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.log import setup_logging  # type: ignore
+  from bridge.llm.tool_utils import extract_tool_args, get_tool_call_name  # type: ignore
   from bridge.messaging.processing import (  # type: ignore
     _normalize_context_msg_id,
     _normalize_preview_text,
@@ -350,5 +352,145 @@ def _extract_actions(
         "fallback_reply_to": fallback_reply_to,
       },
     )
+
+  return actions
+
+
+# ---------------------------------------------------------------------------
+# Tool-call-based action extraction (replaces _extract_actions for LLM2)
+# ---------------------------------------------------------------------------
+
+def _extract_actions_from_tool_calls(
+  tool_calls: list,
+  *,
+  fallback_reply_to: str | None,
+  allowed_context_ids: set[str],
+) -> list[dict]:
+  """Convert LLM2 tool calls into the same action dicts that the dispatch loop expects."""
+  if not tool_calls:
+    return []
+
+  actions: list[dict] = []
+
+  for tc in tool_calls:
+    name = get_tool_call_name(tc)
+    if not name:
+      continue
+    args = extract_tool_args(tc)
+
+    if name == "reply_message":
+      text = str(args.get("text") or "").strip()
+      if not text:
+        continue
+      reply_to = _resolve_reply_target(
+        args.get("context_msg_id"),
+        fallback_reply_to=fallback_reply_to,
+        allowed_context_ids=allowed_context_ids,
+      )
+      actions.append({
+        "type": "send_message",
+        "text": text,
+        "replyTo": reply_to,
+      })
+
+    elif name == "react_to_message":
+      emoji = str(args.get("emoji") or "").strip()
+      ctx_id = _normalize_context_msg_id(args.get("context_msg_id"))
+      if not emoji or not ctx_id:
+        continue
+      if allowed_context_ids and ctx_id not in allowed_context_ids:
+        logger.warning("react target ignored: context id %s not in allowed set", ctx_id)
+        continue
+      actions.append({
+        "type": "react_message",
+        "contextMsgId": ctx_id,
+        "emoji": emoji,
+      })
+
+    elif name == "send_sticker":
+      sticker_name = str(args.get("sticker_name") or "").strip()
+      if not sticker_name:
+        continue
+      reply_to = _resolve_reply_target(
+        args.get("context_msg_id"),
+        fallback_reply_to=fallback_reply_to,
+        allowed_context_ids=allowed_context_ids,
+      )
+      actions.append({
+        "type": "send_sticker",
+        "stickerName": sticker_name,
+        "replyTo": reply_to,
+      })
+
+    elif name == "delete_messages":
+      raw_ids = args.get("context_msg_ids") or []
+      if isinstance(raw_ids, str):
+        raw_ids = [raw_ids]
+      seen: set[str] = set()
+      for raw_id in raw_ids:
+        ctx_id = _normalize_context_msg_id(raw_id)
+        if not ctx_id or ctx_id in seen:
+          continue
+        if allowed_context_ids and ctx_id not in allowed_context_ids:
+          continue
+        seen.add(ctx_id)
+        actions.append({"type": "delete_message", "contextMsgId": ctx_id})
+
+    elif name == "kick_members":
+      raw_targets = args.get("targets") or []
+      kick_targets: list[dict[str, str]] = []
+      dedup: set[tuple[str, str]] = set()
+      for target in raw_targets:
+        if not isinstance(target, dict):
+          continue
+        sender_ref = str(target.get("sender_ref") or "").strip().lower()
+        anchor = _normalize_context_msg_id(target.get("anchor_context_msg_id"))
+        if not sender_ref or not SENDER_REF_RE.match(sender_ref) or not anchor:
+          continue
+        if allowed_context_ids and anchor not in allowed_context_ids:
+          continue
+        key = (sender_ref, anchor)
+        if key in dedup:
+          continue
+        dedup.add(key)
+        kick_targets.append({
+          "senderRef": sender_ref,
+          "anchorContextMsgId": anchor,
+        })
+      if kick_targets:
+        actions.append({
+          "type": "kick_member",
+          "targets": kick_targets,
+          "mode": "partial_success",
+          "autoReplyAnchor": True,
+        })
+
+    elif name == "mute_member":
+      sender_ref = str(args.get("sender_ref") or "").strip().lower()
+      anchor = _normalize_context_msg_id(args.get("anchor_context_msg_id"))
+      duration = args.get("duration_minutes")
+      if not sender_ref or not SENDER_REF_RE.match(sender_ref):
+        logger.warning("mute ignored: invalid sender_ref %r", sender_ref)
+        continue
+      if not anchor:
+        logger.warning("mute ignored: invalid anchor_context_msg_id")
+        continue
+      if allowed_context_ids and anchor not in allowed_context_ids:
+        logger.warning("mute ignored: anchor %s not in allowed set", anchor)
+        continue
+      try:
+        duration = int(duration)
+      except (TypeError, ValueError):
+        duration = 30
+      duration = max(1, min(1440, duration))
+      actions.append({
+        "type": "mute_member",
+        "senderRef": sender_ref,
+        "anchorContextMsgId": anchor,
+        "durationMinutes": duration,
+      })
+
+    else:
+      logger.warning("unknown LLM2 tool call: %s", name)
 
   return actions

@@ -26,6 +26,13 @@ try:
   from .db import (
     get_mode as db_get_mode,
     get_triggers as db_get_triggers,
+    is_muted as db_is_muted,
+    is_mute_notified as db_is_mute_notified,
+    mark_mute_notified as db_mark_mute_notified,
+    add_mute as db_add_mute,
+    clear_mutes as db_clear_mutes,
+    get_mute_remaining_minutes as db_get_mute_remaining,
+    set_permission as db_set_permission,
   )
   from .dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop
   from .stickers import resolve_sticker
@@ -63,6 +70,7 @@ try:
   )
   from .messaging.actions import (
     _extract_actions,
+    _extract_actions_from_tool_calls,
     _extract_reply_text,
   )
   from .messaging.gateway import (
@@ -92,6 +100,13 @@ except ImportError:  # allow running as `python python/bridge/main.py`
   from bridge.db import (  # type: ignore
     get_mode as db_get_mode,
     get_triggers as db_get_triggers,
+    is_muted as db_is_muted,
+    is_mute_notified as db_is_mute_notified,
+    mark_mute_notified as db_mark_mute_notified,
+    add_mute as db_add_mute,
+    clear_mutes as db_clear_mutes,
+    get_mute_remaining_minutes as db_get_mute_remaining,
+    set_permission as db_set_permission,
   )
   from bridge.dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop  # type: ignore
   from bridge.stickers import resolve_sticker  # type: ignore
@@ -129,6 +144,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
   )
   from bridge.messaging.actions import (  # type: ignore
     _extract_actions,
+    _extract_actions_from_tool_calls,
     _extract_reply_text,
   )
   from bridge.messaging.gateway import (  # type: ignore
@@ -251,7 +267,7 @@ async def handle_socket(ws):
       cmd_name = slash_cmd.get("command") or ""
       cmd_args = slash_cmd.get("args") or ""
       p_chat_id = payload.get("chatId") or "unknown"
-      p_chat_type, _, _ = _chat_state_from_payload(payload)
+      p_chat_type, p_bot_is_admin, _ = _chat_state_from_payload(payload)
       p_sender_is_admin = bool(payload.get("senderIsAdmin")) or bool(payload.get("senderIsOwner"))
       p_sender_jid = payload.get("senderId")
 
@@ -267,6 +283,7 @@ async def handle_socket(ws):
           chat_type=p_chat_type,
           sender_is_admin=p_sender_is_admin,
           sender_jid=p_sender_jid,
+          bot_is_admin=p_bot_is_admin,
         )
         if result and result.success:
           per_chat[p_chat_id].clear()
@@ -283,6 +300,7 @@ async def handle_socket(ws):
         chat_type=p_chat_type,
         sender_is_admin=p_sender_is_admin,
         sender_jid=p_sender_jid,
+        bot_is_admin=p_bot_is_admin,
       )
       if result is not None and result.reply:
         reply_to = _normalize_context_msg_id(payload.get("contextMsgId"))
@@ -692,6 +710,15 @@ async def handle_socket(ws):
         async with typing_indicator(ws, chat_id):
           def _validate_llm2_result(result) -> bool:
             """Return True if the LLM2 output contains at least one usable action."""
+            tool_calls = getattr(result, 'tool_calls', None) or []
+            if tool_calls:
+              test_actions = _extract_actions_from_tool_calls(
+                tool_calls,
+                fallback_reply_to=fallback_reply_to,
+                allowed_context_ids=allowed_context_ids,
+              )
+              return len(test_actions) > 0
+            # Fallback: parse text content (legacy)
             test_actions = _extract_actions(
               result,
               fallback_reply_to=fallback_reply_to,
@@ -728,26 +755,19 @@ async def handle_socket(ws):
           logger.warning("llm2 failed to produce reply", extra={"chat_id": chat_id})
           _log_slow_batch("llm2_none")
           return
-        actions = _extract_actions(
-          reply_msg,
-          fallback_reply_to=fallback_reply_to,
-          allowed_context_ids=allowed_context_ids,
-        )
-        permissions = _moderation_permissions(
-          bot_is_admin=bot_is_admin,
-          bot_is_super_admin=bot_is_super_admin,
-          chat_id=chat_id,
-        )
-        actions, blocked_actions = _enforce_moderation_permissions(actions, permissions)
-        blocked_total = blocked_actions["kick_member"] + blocked_actions["delete_message"]
-        if blocked_total > 0:
-          logger.warning(
-            "blocked moderation actions by backend policy",
-            extra={
-              "chat_id": chat_id,
-              "blocked_actions": blocked_actions,
-              "admin_ok": permissions.get("adminOk"),
-            },
+        tool_calls = getattr(reply_msg, 'tool_calls', None) or []
+        if tool_calls:
+          actions = _extract_actions_from_tool_calls(
+            tool_calls,
+            fallback_reply_to=fallback_reply_to,
+            allowed_context_ids=allowed_context_ids,
+          )
+        else:
+          # Fallback: parse text content (legacy)
+          actions = _extract_actions(
+            reply_msg,
+            fallback_reply_to=fallback_reply_to,
+            allowed_context_ids=allowed_context_ids,
           )
         if not actions:
           logger.warning(
@@ -756,7 +776,7 @@ async def handle_socket(ws):
               "chat_id": chat_id,
               "reply_preview": _extract_reply_text(reply_msg),
               "fallback_reply_to": fallback_reply_to,
-              "blocked_actions": blocked_actions,
+              "tool_calls": len(tool_calls),
             },
           )
           _log_slow_batch("no_action")
@@ -860,6 +880,21 @@ async def handle_socket(ws):
                 sticker_name,
                 extra={"chat_id": chat_id},
               )
+            continue
+          if action_type == "mute_member":
+            sender_ref = action.get("senderRef", "")
+            anchor_id = action.get("anchorContextMsgId")
+            duration = action.get("durationMinutes", 30)
+            db_add_mute(chat_id, sender_ref, duration)
+            # Delete the anchor message immediately
+            if anchor_id:
+              await send_delete_message(
+                ws,
+                chat_id,
+                anchor_id,
+                request_id=_make_request_id("mute_del"),
+              )
+            action_counts[action_type] += 1
             continue
           logger.warning(
             "unknown action type from parser: %s",
@@ -1008,6 +1043,67 @@ async def handle_socket(ws):
       chat_id = payload.get("chatId")
       if not chat_id:
         logger.warning("Dropping incoming_message without chatId")
+        continue
+
+      # --- Mute enforcement (before debounce, instant) ---
+      _mute_sender_ref = (payload.get("senderRef") or "").strip().lower()
+      _mute_context_only = bool(payload.get("contextOnly"))
+      _mute_msg_type = str(payload.get("messageType") or "").strip().lower()
+      if (
+        _mute_sender_ref
+        and not _mute_context_only
+        and _mute_msg_type not in ("groupparticipantsupdate", "actionlog", "botrolechange")
+        and db_is_muted(chat_id, _mute_sender_ref)
+      ):
+        _mute_ctx_id = payload.get("contextMsgId")
+        if _mute_ctx_id:
+          await send_delete_message(
+            ws,
+            chat_id,
+            _mute_ctx_id,
+            request_id=_make_request_id("mute_enforce"),
+          )
+        # First-delete notification
+        if not db_is_mute_notified(chat_id, _mute_sender_ref):
+          db_mark_mute_notified(chat_id, _mute_sender_ref)
+          _remaining = db_get_mute_remaining(chat_id, _mute_sender_ref)
+          _mute_name = payload.get("senderName") or _mute_sender_ref
+          await send_message(
+            ws,
+            chat_id,
+            f"Pesan dari {_mute_name} dihapus (muted, {_remaining}m tersisa).",
+            None,
+            request_id=_make_request_id("mute_notify"),
+          )
+        logger.debug(
+          "mute enforcement: deleted message from muted user",
+          extra={"chat_id": chat_id, "sender_ref": _mute_sender_ref},
+        )
+        continue  # skip all further processing
+
+      # --- Bot role change (promote/demote) handling ---
+      if _mute_msg_type == "botrolechange":
+        _role_action = (payload.get("groupEvent") or {}).get("action", "")
+        if _role_action == "promote":
+          await send_message(
+            ws,
+            chat_id,
+            "Bot is now an admin! Moderation features (/permission) can now be enabled by group admins.",
+            None,
+            request_id=_make_request_id("role_notify"),
+          )
+          logger.info("bot promoted in chat_id=%s", chat_id)
+        elif _role_action == "demote":
+          db_set_permission(chat_id, 0)
+          db_clear_mutes(chat_id)
+          await send_message(
+            ws,
+            chat_id,
+            "Bot is no longer an admin. Moderation permissions have been reset to 0 (disabled).",
+            None,
+            request_id=_make_request_id("role_notify"),
+          )
+          logger.info("bot demoted in chat_id=%s; permission reset to 0", chat_id)
         continue
 
       pending = pending_by_chat[chat_id]
