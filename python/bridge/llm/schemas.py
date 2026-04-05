@@ -303,8 +303,49 @@ LLM2_KICK_TOOL = {
   },
 }
 
+LLM2_CREATE_STICKER_TOOL = {
+  "type": "function",
+  "function": {
+    "name": "create_sticker",
+    "description": (
+      "Create a custom sticker from an image or video message with optional text overlay. "
+      "NOT for daily usage — only use when the user explicitly asks to create a sticker from an image/video. "
+      "The source image must be referenced by its contextMsgId from the conversation history."
+    ),
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "context_msg_id": {
+          "type": "string",
+          "description": "The 6-digit contextMsgId of the image or video message to convert into a sticker.",
+          "minLength": 6,
+          "maxLength": 6,
+        },
+        "upper_text": {
+          "type": "string",
+          "description": "Text to display at the top of the sticker (optional, will be uppercased).",
+        },
+        "lower_text": {
+          "type": "string",
+          "description": "Text to display at the bottom of the sticker (optional, will be uppercased).",
+        },
+        "font_size": {
+          "type": "integer",
+          "description": "Font size for text overlays (default: 50, range: 10-200).",
+          "default": 50,
+          "minimum": 10,
+          "maximum": 200,
+        },
+      },
+      "required": ["context_msg_id"],
+      "additionalProperties": False,
+    },
+    "strict": False,
+  },
+}
+
 # Base tools always available to LLM2.
-LLM2_BASE_TOOLS = [LLM2_REPLY_TOOL, LLM2_REACT_TOOL, LLM2_STICKER_TOOL]
+LLM2_BASE_TOOLS = [LLM2_REPLY_TOOL, LLM2_REACT_TOOL, LLM2_STICKER_TOOL, LLM2_CREATE_STICKER_TOOL]
 
 
 def build_llm2_tools(

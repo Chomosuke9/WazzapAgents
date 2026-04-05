@@ -422,6 +422,27 @@ def _extract_actions_from_tool_calls(
         "replyTo": reply_to,
       })
 
+    elif name == "create_sticker":
+      ctx_id = _normalize_context_msg_id(args.get("context_msg_id", ""))
+      if not ctx_id:
+        logger.warning("create_sticker ignored: missing or invalid context_msg_id")
+        continue
+      upper = str(args.get("upper_text") or "").strip() or None
+      lower = str(args.get("lower_text") or "").strip() or None
+      try:
+        fsize = int(args.get("font_size") or 50)
+        fsize = max(10, min(200, fsize))
+      except (TypeError, ValueError):
+        fsize = 50
+      actions.append({
+        "type": "create_sticker",
+        "contextMsgId": ctx_id,
+        "upperText": upper,
+        "lowerText": lower,
+        "fontSize": fsize,
+        "replyTo": ctx_id,
+      })
+
     elif name == "delete_messages":
       raw_ids = args.get("context_msg_ids") or []
       if isinstance(raw_ids, str):

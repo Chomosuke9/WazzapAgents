@@ -186,6 +186,67 @@ logger = setup_logging()
 # are imported above and are available as module-level names.
 
 
+# ---------------------------------------------------------------------------
+# Sticker command helpers
+# ---------------------------------------------------------------------------
+
+def _parse_sticker_args(args: str) -> tuple[str | None, str | None]:
+  """Parse '/sticker upper#lower' args → (upper_text, lower_text). Either may be None."""
+  if "#" in args:
+    upper, _, lower = args.partition("#")
+    return upper.strip() or None, lower.strip() or None
+  return args.strip() or None, None
+
+
+def _store_media_path(media_paths_by_chat: dict, payload: dict) -> None:
+  """Record attachment file path keyed by (chat_id, context_msg_id) for later lookup."""
+  ctx_id = payload.get("contextMsgId")
+  chat_id = payload.get("chatId")
+  atts = payload.get("attachments") or []
+  if ctx_id and chat_id and atts and isinstance(atts[0], dict):
+    path = atts[0].get("path")
+    if path:
+      media_paths_by_chat.setdefault(chat_id, {})[ctx_id] = path
+
+
+def _resolve_sticker_media(
+  media_paths_by_chat: dict,
+  payload: dict,
+  chat_id: str,
+) -> str | None:
+  """
+  Find the media file path to use for sticker creation.
+  First checks the current payload's attachments; falls back to the
+  quoted message's tracked path (populated when the original image arrived).
+  """
+  atts = payload.get("attachments") or []
+  if atts and isinstance(atts[0], dict):
+    path = atts[0].get("path")
+    if path and os.path.isfile(path):
+      return path
+  # Fall back to quoted message's previously tracked path
+  quoted = payload.get("quoted") or {}
+  quoted_ctx_id = quoted.get("contextMsgId")
+  if quoted_ctx_id:
+    path = media_paths_by_chat.get(chat_id, {}).get(quoted_ctx_id)
+    if path and os.path.isfile(path):
+      return path
+  return None
+
+
+def _append_sticker_log_to_history(
+  history: deque,
+  log_text: str,
+) -> None:
+  """Append a synthetic assistant entry to the conversation history for sticker creation."""
+  history.append(WhatsAppMessage(
+    timestamp_ms=int(time.time() * 1000),
+    sender="bot",
+    text=log_text,
+    role="assistant",
+  ))
+
+
 @dataclass
 class PendingChat:
   payloads: list[dict] = field(default_factory=list)
@@ -203,6 +264,7 @@ async def handle_socket(ws):
   pending_by_chat: Dict[str, PendingChat] = defaultdict(PendingChat)
   pending_send_request_chat: Dict[str, str] = {}
   recent_reply_signatures_by_chat: Dict[str, Deque[tuple[int, str]]] = defaultdict(deque)
+  media_paths_by_chat: Dict[str, Dict[str, str]] = defaultdict(dict)
   tasks: Set[asyncio.Task] = set()
   logger.info("Gateway connected")
 
@@ -257,6 +319,9 @@ async def handle_socket(ws):
     # Check each payload for slash commands. Process them, add to history, skip LLM.
     remaining_payloads: list[dict] = []
     for payload in non_empty_payloads:
+      # Track media attachment paths so /sticker and create_sticker LLM2 tool can find them later.
+      _store_media_path(media_paths_by_chat, payload)
+
       slash_cmd = payload.get("slashCommand")
       if not slash_cmd or not isinstance(slash_cmd, dict):
         remaining_payloads.append(payload)
@@ -291,7 +356,40 @@ async def handle_socket(ws):
           await send_message(ws, p_chat_id, result.reply, reply_to, request_id=_make_request_id("cmd"))
         continue
 
-      # Handle /prompt, /permission
+      # Handle /sticker: create meme-style sticker from attached or replied-to image/video
+      if cmd_name == "sticker":
+        upper_text, lower_text = _parse_sticker_args(cmd_args)
+        media_path = _resolve_sticker_media(media_paths_by_chat, payload, p_chat_id)
+        reply_to = _normalize_context_msg_id(payload.get("contextMsgId"))
+        if not media_path:
+          await send_message(
+            ws, p_chat_id,
+            "Send an image with the /sticker caption or reply to an image.",
+            reply_to, request_id=_make_request_id("cmd"),
+          )
+        else:
+          try:
+            from .tools.sticker import create_sticker_file
+            sticker_path = create_sticker_file(media_path, upper_text, lower_text)
+            await send_sticker(ws, p_chat_id, sticker_path, reply_to, request_id=_make_request_id("sticker"))
+            record_stat(p_chat_id, "stickers_sent")
+            log_parts = ["Successfully created sticker"]
+            if upper_text:
+              log_parts.append(f"upper_text: {upper_text}")
+            if lower_text:
+              log_parts.append(f"lower_text: {lower_text}")
+            if upper_text or lower_text:
+              log_parts.append("font_size: 50")
+            _append_sticker_log_to_history(history, ", ".join(log_parts))
+          except Exception as err:
+            logger.exception("sticker creation failed: %s", err, extra={"chat_id": p_chat_id})
+            await send_message(
+              ws, p_chat_id, f"Failed to create sticker: {err}",
+              reply_to, request_id=_make_request_id("cmd"),
+            )
+        continue
+
+      # Handle /prompt, /permission, etc.
       result = handle_command(
         cmd_name, cmd_args,
         chat_id=p_chat_id,
@@ -876,6 +974,45 @@ async def handle_socket(ws):
               logger.warning(
                 "sticker not found: %s",
                 sticker_name,
+                extra={"chat_id": chat_id},
+              )
+            continue
+          if action_type == "create_sticker":
+            ctx_id = action.get("contextMsgId")
+            media_path = media_paths_by_chat.get(chat_id, {}).get(ctx_id) if ctx_id else None
+            if not media_path:
+              logger.warning(
+                "create_sticker: no media for context_msg_id=%s",
+                ctx_id,
+                extra={"chat_id": chat_id},
+              )
+              continue
+            try:
+              from .tools.sticker import create_sticker_file
+              upper = action.get("upperText") or None
+              lower = action.get("lowerText") or None
+              fsize = int(action.get("fontSize") or 50)
+              sticker_path = create_sticker_file(media_path, upper, lower, fsize)
+              await send_sticker(
+                ws,
+                chat_id,
+                sticker_path,
+                action.get("replyTo"),
+                request_id=_make_request_id("sticker"),
+              )
+              record_stat(chat_id, "stickers_sent")
+              action_counts[action_type] += 1
+              log_parts = ["Successfully created sticker"]
+              if upper:
+                log_parts.append(f"upper_text: {upper}")
+              if lower:
+                log_parts.append(f"lower_text: {lower}")
+              if upper or lower:
+                log_parts.append(f"font_size: {fsize}")
+              _append_sticker_log_to_history(history, ", ".join(log_parts))
+            except Exception as err:
+              logger.exception(
+                "create_sticker action failed: %s", err,
                 extra={"chat_id": chat_id},
               )
             continue
