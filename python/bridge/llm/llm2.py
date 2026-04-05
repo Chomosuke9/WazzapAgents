@@ -14,7 +14,8 @@ try:
   from ..history import WhatsAppMessage, assistant_name, format_history
   from ..log import setup_logging, trunc, dump_json, env_flag
   from ..media import build_visual_parts, llm2_media_enabled, redact_multimodal_content
-  from ..db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete
+  from ..db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute
+  from .schemas import build_llm2_tools
   from ..config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int
   from .prompt import _truncate_message
 except ImportError:  # allow running as script
@@ -24,7 +25,8 @@ except ImportError:  # allow running as script
   from bridge.history import WhatsAppMessage, assistant_name, format_history  # type: ignore
   from bridge.log import setup_logging, trunc, dump_json, env_flag  # type: ignore
   from bridge.media import build_visual_parts, llm2_media_enabled, redact_multimodal_content  # type: ignore
-  from bridge.db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete  # type: ignore
+  from bridge.db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute  # type: ignore
+  from bridge.llm.schemas import build_llm2_tools  # type: ignore
   from bridge.config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int  # type: ignore
   from bridge.llm.prompt import _truncate_message  # type: ignore
 
@@ -149,10 +151,29 @@ def _load_system_prompt() -> str:
   return _SYSTEM_PROMPT_CACHE
 
 
+_DELETE_RULES = """<delete>
+DELETE is ALLOWED for this chat. Use the delete_messages tool to remove rule-violating messages.
+Only delete messages with clear justification.
+</delete>"""
+
+_MUTE_RULES = """<mute>
+MUTE is ALLOWED for this chat. Use the mute_member tool to auto-delete all messages from a user for a specified duration.
+Use for persistent rule violators. Muted user's messages are auto-deleted for the specified duration.
+</mute>"""
+
+_KICK_RULES = """<kick>
+KICK is ALLOWED for this chat. Use the kick_members tool to remove disruptive members.
+Only kick with clear justification. Cannot kick admins.
+</kick>"""
+
+
 def _render_system_prompt(
   base_system: str,
   *,
   prompt_override: str | None = None,
+  allow_delete: bool = False,
+  allow_mute: bool = False,
+  allow_kick: bool = False,
 ) -> str:
   overide_text = (prompt_override or "").strip()
   configured_assistant_name = assistant_name()
@@ -169,6 +190,12 @@ def _render_system_prompt(
     .replace("{{ assistant_name }}", configured_assistant_name)
     .replace("{{sticker_catalog}}", catalog)
     .replace("{{ sticker_catalog }}", catalog)
+    .replace("{{delete_rules}}", _DELETE_RULES if allow_delete else "")
+    .replace("{{ delete_rules }}", _DELETE_RULES if allow_delete else "")
+    .replace("{{mute_rules}}", _MUTE_RULES if allow_mute else "")
+    .replace("{{ mute_rules }}", _MUTE_RULES if allow_mute else "")
+    .replace("{{kick_rules}}", _KICK_RULES if allow_kick else "")
+    .replace("{{ kick_rules }}", _KICK_RULES if allow_kick else "")
   )
 
 
@@ -349,24 +376,6 @@ def _context_injection_block(
   assistant_reply_block = "\n".join(assistant_reply_lines)
   chat_state_text = _chat_state_header(chat_type, bot_is_admin, bot_is_super_admin)
 
-  # Permission info from DB
-  permission_line = ""
-  if chat_id:
-    perm_level = db_get_permission(chat_id)
-    admin_ok = bool(bot_is_admin or bot_is_super_admin)
-    can_kick = admin_ok and permission_allows_kick(perm_level)
-    can_delete = admin_ok and permission_allows_delete(perm_level)
-    perm_parts: list[str] = []
-    if can_delete:
-      perm_parts.append("can delete messages")
-    else:
-      perm_parts.append("cannot delete messages")
-    if can_kick:
-      perm_parts.append("can kick members")
-    else:
-      perm_parts.append("cannot kick members")
-    permission_line = f"\nBot permissions: {', '.join(perm_parts)}."
-
   return (
     "Current message metadata:\n"
     "Helper:\n"
@@ -381,7 +390,6 @@ def _context_injection_block(
     f"{llm1_reason_line}"
     "Chat state:\n"
     f"{chat_state_text}"
-    f"{permission_line}"
   )
 
 
@@ -443,10 +451,24 @@ async def generate_reply(
   retry_backoff_s = _llm2_retry_backoff_seconds()
   sdk_max_retries = _llm2_sdk_max_retries()
   reasoning_effort = _llm2_reasoning_effort()
+  # Compute moderation permissions for dynamic tool/prompt injection
+  admin_ok = bool(bot_is_admin or bot_is_super_admin)
+  perm_level = db_get_permission(log_chat_id) if log_chat_id else 0
+  can_delete = admin_ok and permission_allows_delete(perm_level)
+  can_mute = admin_ok and permission_allows_mute(perm_level)
+  can_kick = admin_ok and permission_allows_kick(perm_level)
+
+  # Build tools dynamically: base tools always, moderation tools only when permitted
+  if tools is None:
+    tools = build_llm2_tools(allow_delete=can_delete, allow_mute=can_mute, allow_kick=can_kick)
+
   base_system = (system or _load_system_prompt()).strip()
   rendered_system = _render_system_prompt(
     base_system,
     prompt_override=prompt_override,
+    allow_delete=can_delete,
+    allow_mute=can_mute,
+    allow_kick=can_kick,
   )
   history_list = list(history)
   message_max_chars = _llm2_message_max_chars()
@@ -531,7 +553,10 @@ async def generate_reply(
       include_reasoning=bool(reasoning_effort),
     )
     if tools:
-      llm = llm.bind_tools(tools)
+      try:
+        llm = llm.bind_tools(tools, tool_choice="required")
+      except Exception:
+        llm = llm.bind_tools(tools)
 
     logger.debug(
       "LLM2 invoke",
@@ -683,6 +708,7 @@ async def generate_reply(
           "model": target.model,
           "endpoint": target.base_url,
           "reply_preview": trunc(getattr(result, 'content', ''), 800),
+          "tool_calls": len(getattr(result, 'tool_calls', None) or []),
           "raw": dump_json(getattr(result, "model_dump", lambda: str(result))()),
         },
       )
