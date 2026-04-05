@@ -30,6 +30,7 @@ try:
     is_mute_notified as db_is_mute_notified,
     mark_mute_notified as db_mark_mute_notified,
     add_mute as db_add_mute,
+    remove_mute as db_remove_mute,
     clear_mutes as db_clear_mutes,
     get_mute_remaining_minutes as db_get_mute_remaining,
     set_permission as db_set_permission,
@@ -64,9 +65,7 @@ try:
     _resolve_group_prompt_context,
   )
   from .messaging.moderation import (
-    _enforce_moderation_permissions,
     _merge_payload_attachments,
-    _moderation_permissions,
   )
   from .messaging.actions import (
     _extract_actions,
@@ -104,6 +103,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     is_mute_notified as db_is_mute_notified,
     mark_mute_notified as db_mark_mute_notified,
     add_mute as db_add_mute,
+    remove_mute as db_remove_mute,
     clear_mutes as db_clear_mutes,
     get_mute_remaining_minutes as db_get_mute_remaining,
     set_permission as db_set_permission,
@@ -138,9 +138,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     _resolve_group_prompt_context,
   )
   from bridge.messaging.moderation import (  # type: ignore
-    _enforce_moderation_permissions,
     _merge_payload_attachments,
-    _moderation_permissions,
   )
   from bridge.messaging.actions import (  # type: ignore
     _extract_actions,
@@ -885,15 +883,18 @@ async def handle_socket(ws):
             sender_ref = action.get("senderRef", "")
             anchor_id = action.get("anchorContextMsgId")
             duration = action.get("durationMinutes", 30)
-            db_add_mute(chat_id, sender_ref, duration)
-            # Delete the anchor message immediately
-            if anchor_id:
-              await send_delete_message(
-                ws,
-                chat_id,
-                anchor_id,
-                request_id=_make_request_id("mute_del"),
-              )
+            if duration == 0:
+              db_remove_mute(chat_id, sender_ref)
+            else:
+              db_add_mute(chat_id, sender_ref, duration)
+              # Delete the anchor message immediately
+              if anchor_id:
+                await send_delete_message(
+                  ws,
+                  chat_id,
+                  anchor_id,
+                  request_id=_make_request_id("mute_del"),
+                )
             action_counts[action_type] += 1
             continue
           logger.warning(

@@ -239,7 +239,7 @@ def permission_allows_kick(level: int) -> bool:
 # ---------------------------------------------------------------------------
 
 def get_mode(chat_id: str) -> str:
-  """Return the chat mode ('auto' or 'prefix'). Default 'auto'."""
+  """Return the chat mode ('auto', 'prefix', or 'hybrid'). Default 'prefix'."""
   with _cache_lock:
     cached = _mode_cache.get(chat_id, _MISSING)
   if cached is not _MISSING:

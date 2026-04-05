@@ -90,9 +90,9 @@ Additional directories and files:
 |------|---------|
 | `processing.py` | Message normalization, history append, burst building, context ID management |
 | `filtering.py` | Payload filtering: prefix matching, content checks, LLM1 trigger logic |
-| `actions.py` | LLM2 output parsing: REPLY_TO, DELETE, KICK, REACT_TO, STICKER control lines |
+| `actions.py` | LLM2 tool-call parsing: `_extract_actions_from_tool_calls` (primary) + legacy control-line fallback `_extract_actions` |
 | `gateway.py` | Outbound WebSocket actions: send, delete, kick, react, sticker, typing |
-| `moderation.py` | Permission checks, action enforcement, attachment merging |
+| `moderation.py` | Attachment merging (`_merge_payload_attachments`) |
 
 ## Development Commands
 
@@ -165,10 +165,11 @@ See `.env.example` for the full list with descriptions.
 
 ## Bot Modes
 
-Two response modes per chat, controlled via `/mode` (owner only):
+Three response modes per chat, controlled via `/mode` (owner only):
 
-- **`auto`** (default) — LLM1 decides whether to respond based on context analysis. Full debounce/burst batching applies.
-- **`prefix`** — Bot only responds when explicitly invoked: @tagged, replied to, or name mentioned in text. LLM1 is skipped entirely (straight to LLM2). Debounce is bypassed for immediate response. Saves tokens and reduces latency.
+- **`prefix`** (default) — Bot only responds when explicitly invoked: @tagged, replied to, or name mentioned in text. LLM1 is skipped entirely (straight to LLM2). Debounce is bypassed for immediate response. Saves tokens and reduces latency.
+- **`auto`** — LLM1 decides whether to respond based on context analysis. Full debounce/burst batching applies.
+- **`hybrid`** — Checks prefix triggers first; if matched, responds immediately (skipping LLM1). If no prefix trigger, falls back to LLM1 gating (auto behavior).
 
 **Triggers** (`/trigger`, owner only): Configures what activates the bot in prefix mode.
 - `tag` — bot @mentioned
@@ -229,14 +230,14 @@ All LLM text replies pass through `sendRichMessage` with `footer: 'Pesan ini dib
 
 Place sticker images (`.webp`, `.png`, `.jpg`, `.gif`) in `data/stickers/`. Filenames (without extension) become the sticker catalog, injected into the LLM2 system prompt under `<sticker>`.
 
-LLM2 can send stickers via the `STICKER:NNNNNN|none` control line followed by the sticker name. Stickers are sent as standalone messages through the existing `send_message` WebSocket action with a sticker attachment. No Node.js changes required.
+LLM2 sends stickers via the `send_sticker` tool call (with `sticker_name` and optional `context_msg_id`). Stickers are sent as standalone messages through the existing `send_message` WebSocket action with a sticker attachment. No Node.js changes required.
 
 ## Security Rules
 
 - **Never commit** `data/auth/`, `.env`, or any API keys.
 - Treat `LLM_WS_TOKEN`, LLM API keys, and Baileys auth as secrets.
 - Media size limits should be respected to avoid OOM.
-- Moderation actions (DELETE/KICK) are gated by `/permission` command (DB-backed per-chat levels).
+- Moderation actions (delete/mute/kick) are gated by `/permission` command (DB-backed levels 0–3) and require the bot to be admin.
 
 ## WebSocket Protocol
 
@@ -251,11 +252,12 @@ The gateway and LLM bridge communicate via JSON messages over WebSocket. Key mes
   - `mentionedParticipants` — Resolved mentions: `[{ jid, senderRef, name, isBot }]`.
 - `incoming_message` with `messageType: "groupParticipantsUpdate"` — Synthetic event when members join/leave/are added. Includes `groupEvent: { action, participants, actorId, actorName, source }`.
 - `incoming_message` with `messageType: "actionLog"` — Synthetic bot context event after successful moderation actions.
+- `incoming_message` with `messageType: "botRoleChange"` — Emitted when the bot is promoted or demoted in a group. Python bridge sends a notification and resets permissions to 0 on demotion.
 - `action_ack` — Success/failure acknowledgement for actions.
 
 **LLM → Gateway:** `send_message`, `react_message`, `delete_message`, `kick_member`, `mark_read`, `send_presence`
 
-**LLM2 Control Lines:** LLM2 output is parsed for control lines: `REPLY_TO:NNNNNN`, `DELETE:NNNNNN`, `KICK:senderRef`, `REACT_TO:emoji@NNNNNN`, `STICKER:NNNNNN|none` (followed by sticker name).
+**LLM2 Output:** LLM2 uses tool calls for all actions: `reply_message`, `react_to_message`, `send_sticker`, `delete_messages`, `kick_members`, `mute_member`. Moderation tools are injected dynamically based on permission level and bot admin status. A legacy text control-line parser (`_extract_actions`) is kept as a fallback.
 
 See `README.md` for full protocol schema and payload examples.
 
