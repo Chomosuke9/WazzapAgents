@@ -482,7 +482,7 @@ def _extract_actions_from_tool_calls(
         duration = int(duration)
       except (TypeError, ValueError):
         duration = 30
-      duration = max(1, min(1440, duration))
+      duration = max(0, min(1440, duration))
       actions.append({
         "type": "mute_member",
         "senderRef": sender_ref,

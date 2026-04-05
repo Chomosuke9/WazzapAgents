@@ -231,15 +231,17 @@ LLM2_MUTE_TOOL = {
   "function": {
     "name": "mute_member",
     "description": (
-      "Mute a member: auto-delete all their messages for a duration. "
-      "Use for persistent rule violators."
+      "Mute or unmute a member. "
+      "Set duration_minutes > 0 to mute (auto-delete all their messages for that duration). "
+      "Set duration_minutes = 0 to unmute (cancel an active mute). "
+      "Use mute for persistent rule violators."
     ),
     "parameters": {
       "type": "object",
       "properties": {
         "sender_ref": {
           "type": "string",
-          "description": "The senderRef of the member to mute.",
+          "description": "The senderRef of the member to mute or unmute.",
           "minLength": 1,
         },
         "anchor_context_msg_id": {
@@ -250,8 +252,8 @@ LLM2_MUTE_TOOL = {
         },
         "duration_minutes": {
           "type": "integer",
-          "description": "How long to mute in minutes (1-1440).",
-          "minimum": 1,
+          "description": "How long to mute in minutes (1-1440). Use 0 to unmute.",
+          "minimum": 0,
           "maximum": 1440,
         },
       },

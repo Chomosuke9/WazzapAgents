@@ -159,6 +159,7 @@ Only delete messages with clear justification.
 _MUTE_RULES = """<mute>
 MUTE is ALLOWED for this chat. Use the mute_member tool to auto-delete all messages from a user for a specified duration.
 Use for persistent rule violators. Muted user's messages are auto-deleted for the specified duration.
+To unmute a currently muted user, call mute_member with duration_minutes=0.
 </mute>"""
 
 _KICK_RULES = """<kick>
