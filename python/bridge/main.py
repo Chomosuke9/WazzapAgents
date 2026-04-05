@@ -64,9 +64,7 @@ try:
     _resolve_group_prompt_context,
   )
   from .messaging.moderation import (
-    _enforce_moderation_permissions,
     _merge_payload_attachments,
-    _moderation_permissions,
   )
   from .messaging.actions import (
     _extract_actions,
@@ -138,9 +136,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     _resolve_group_prompt_context,
   )
   from bridge.messaging.moderation import (  # type: ignore
-    _enforce_moderation_permissions,
     _merge_payload_attachments,
-    _moderation_permissions,
   )
   from bridge.messaging.actions import (  # type: ignore
     _extract_actions,
