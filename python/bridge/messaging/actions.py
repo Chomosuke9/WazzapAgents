@@ -430,8 +430,8 @@ def _extract_actions_from_tool_calls(
       upper = str(args.get("upper_text") or "").strip() or None
       lower = str(args.get("lower_text") or "").strip() or None
       try:
-        fsize = int(args.get("font_size") or 50)
-        fsize = max(10, min(200, fsize))
+        fsize = int(args.get("font_size") or 150)
+        fsize = max(50, min(500, fsize))
       except (TypeError, ValueError):
         fsize = 50
       actions.append({

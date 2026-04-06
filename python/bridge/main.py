@@ -380,7 +380,7 @@ async def handle_socket(ws):
             if lower_text:
               log_parts.append(f"lower_text: {lower_text}")
             if upper_text or lower_text:
-              log_parts.append("font_size: 50")
+              log_parts.append("font_size: 150")
             _append_sticker_log_to_history(history, ", ".join(log_parts))
           except Exception as err:
             logger.exception("sticker creation failed: %s", err, extra={"chat_id": p_chat_id})
@@ -991,7 +991,7 @@ async def handle_socket(ws):
             try:
               upper = action.get("upperText") or None
               lower = action.get("lowerText") or None
-              fsize = int(action.get("fontSize") or 50)
+              fsize = int(action.get("fontSize") or 150)
               sticker_path = create_sticker_file(media_path, upper, lower, fsize)
               await send_sticker(
                 ws,
