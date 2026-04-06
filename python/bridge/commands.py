@@ -40,7 +40,7 @@ _PROMPT_MAX_CHARS = 4000
 
 # Match "/command" at start of text, optionally followed by arguments.
 _CMD_RE = re.compile(
-  r"^/(prompt|reset|permission|broadcast|mode|trigger|dashboard|help|join)\b\s*(.*)",
+  r"^/(prompt|reset|permission|broadcast|mode|trigger|dashboard|help|join|sticker)\b\s*(.*)",
   re.IGNORECASE | re.DOTALL,
 )
 
@@ -98,6 +98,10 @@ def handle_command(
 
   if command == "join":
     # Handled by Node.js gateway.
+    return None
+
+  if command == "sticker":
+    # Handled in main.py (requires WebSocket access and PIL processing).
     return None
 
   if command == "prompt":
