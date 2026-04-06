@@ -37,6 +37,7 @@ try:
   )
   from .dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop
   from .stickers import resolve_sticker
+  from .tools.sticker import create_sticker_file
   from .messaging.processing import (
     _append_history,
     _append_or_merge_history_payload,
@@ -110,6 +111,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
   )
   from bridge.dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop  # type: ignore
   from bridge.stickers import resolve_sticker  # type: ignore
+  from bridge.tools.sticker import create_sticker_file  # type: ignore
   from bridge.messaging.processing import (  # type: ignore
     _append_history,
     _append_or_merge_history_payload,
@@ -369,7 +371,6 @@ async def handle_socket(ws):
           )
         else:
           try:
-            from .tools.sticker import create_sticker_file
             sticker_path = create_sticker_file(media_path, upper_text, lower_text)
             await send_sticker(ws, p_chat_id, sticker_path, reply_to, request_id=_make_request_id("sticker"))
             record_stat(p_chat_id, "stickers_sent")
@@ -988,7 +989,6 @@ async def handle_socket(ws):
               )
               continue
             try:
-              from .tools.sticker import create_sticker_file
               upper = action.get("upperText") or None
               lower = action.get("lowerText") or None
               fsize = int(action.get("fontSize") or 50)
