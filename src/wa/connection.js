@@ -116,14 +116,16 @@ async function startWhatsApp() {
       try {
         const msg = update?.message;
         if (!msg) continue;
+
         const buttonsResponse = msg?.buttonsResponseMessage;
-        if (!buttonsResponse) continue;
+        const listResponse = msg?.listResponseMessage;
+        if (!buttonsResponse && !listResponse) continue;
 
         const chatId = update?.key?.remoteJid;
         const senderId = normalizeJid(update?.key?.participant) || update?.key?.remoteJid || null;
         if (!chatId || !senderId) continue;
 
-        const selectedId = buttonsResponse?.selectedButtonId;
+        const selectedId = (buttonsResponse?.selectedButtonId) || (listResponse?.singleSelectReply?.selectedRowId);
         if (!selectedId) continue;
 
         const isGroup = chatId.endsWith('@g.us');
