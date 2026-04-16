@@ -817,7 +817,8 @@ async function handleCommandListener(msg, context) {
       return true;
 
     case 'sticker':
-      return false;
+      await handleSticker({ chatId, chatType, senderIsAdmin, senderIsOwner, args, msg });
+      return true;
 
     case 'model':
       await handleModel({ chatId, chatType, senderIsAdmin, senderIsOwner, args });
