@@ -2,7 +2,6 @@ import logger from '../logger.js';
 import { isOwnerJid, roleFlagsForJid } from '../participants.js';
 import { getSock } from './connection.js';
 import { sendRichMessage, sendNativeFlow } from './interactive/index.js';
-import { streamToFile, withTimeout } from '../utils.js';
 import {
   getPrompt,
   setPrompt,
@@ -38,6 +37,7 @@ import { sendOutgoing } from './outbound.js';
 import { createStickerFile } from './stickerTool.js';
 import { unwrapMessage } from '../messageParser.js';
 import { downloadMediaToFile, mapMediaKind } from '../mediaHandler.js';
+import { withTimeout } from './utils.js';
 
 const PROMPT_MAX_CHARS = 4000;
 
