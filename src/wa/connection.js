@@ -279,17 +279,10 @@ async function startWhatsApp() {
         if (msg?.key?.fromMe) continue;
 
         const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || null;
-        if (!text || typeof text !== 'string') {
-          logger.debug({ chatId, hasMessage: !!msg?.message }, 'command listener: no text');
-          continue;
-        }
+        if (!text || typeof text !== 'string') continue;
 
         const slashCommand = parseSlashCommand(text);
-        if (!slashCommand) {
-          logger.debug({ chatId, text }, 'command listener: no slash command match');
-          continue;
-        }
-        logger.info({ chatId, command: slashCommand.command }, 'command listener: matched');
+        if (!slashCommand) continue;
 
         const isGroup = chatId.endsWith('@g.us');
         const chatType = isGroup ? 'group' : 'private';
@@ -327,7 +320,6 @@ async function startWhatsApp() {
         };
 
         await handleCommandListener(msg, context);
-        logger.info({ chatId, command: slashCommand.command }, 'command listener: handled');
       } catch (err) {
         logger.error({ err }, 'command listener error');
       }

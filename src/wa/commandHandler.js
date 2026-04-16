@@ -2,6 +2,8 @@ import logger from '../logger.js';
 import { isOwnerJid, roleFlagsForJid } from '../participants.js';
 import { getSock } from './connection.js';
 import { sendRichMessage, sendNativeFlow } from './interactive/index.js';
+import { downloadContentFromMessage } from 'baileys';
+import { streamToFile } from '../utils.js';
 import {
   getPrompt,
   setPrompt,
@@ -25,6 +27,7 @@ import {
   VALID_MODES,
   VALID_TRIGGERS,
 } from '../db.js';
+import config from '../config.js';
 import wsClient from '../wsClient.js';
 import {
   handleBroadcastCommand,
@@ -32,6 +35,9 @@ import {
   handleDebugCommand,
   handleJoinCommand,
 } from './commands.js';
+import { sendOutgoing } from './outbound.js';
+import { createStickerFile } from './stickerTool.js';
+import { unwrapMessage } from '../messageParser.js';
 
 const PROMPT_MAX_CHARS = 4000;
 
@@ -160,6 +166,88 @@ async function handleReset({ chatId, chatType, senderIsAdmin, contextMsgId }) {
   } catch (err) { /* ignore */ }
 
   logger.info({ chatId }, 'Memory cleared via /reset');
+}
+
+async function handleSticker({ chatId, chatType, senderIsAdmin, senderIsOwner, args, msg }) {
+  const isPrivate = chatType === 'private';
+  const canUse = isPrivate ? senderIsOwner : senderIsAdmin;
+  if (!canUse) {
+    try {
+      await getSock().sendMessage(chatId, { text: 'Only group admins or bot owner can use /sticker.' });
+    } catch (err) { /* ignore */ }
+    return;
+  }
+
+  const [upperText, lowerText] = parseStickerArgs(args);
+
+  const { contentType, message: innerMessage } = unwrapMessage(msg.message) || {};
+  let content = contentType ? innerMessage[contentType] : null;
+  let mediaPath = null;
+
+  if (contentType === 'imageMessage' || contentType === 'videoMessage') {
+    mediaPath = await downloadMediaContent(msg.message, contentType, msg.key.id);
+  }
+
+  if (!mediaPath && innerMessage?.extendedTextMessage?.contextInfo) {
+    const ctx = innerMessage.extendedTextMessage.contextInfo;
+    if (ctx.quotedMessage) {
+      const { contentType: qType, message: qMsg } = unwrapMessage(ctx.quotedMessage) || {};
+      const qContent = qType ? qMsg?.[qType] : null;
+      if (qType === 'imageMessage' || qType === 'videoMessage') {
+        mediaPath = await downloadMediaContent(ctx.quotedMessage, qType, ctx.stanzaId);
+      }
+    }
+  }
+
+  if (!mediaPath) {
+    try {
+      await getSock().sendMessage(chatId, { text: 'Send an image or video with /sticker caption, or reply to an image/video.' });
+    } catch (err) { /* ignore */ }
+    return;
+  }
+
+  try {
+    const stickerPath = await createStickerFile(mediaPath, upperText, lowerText);
+    await sendOutgoing({
+      chatId,
+      attachments: [{ kind: 'sticker', path: stickerPath }],
+      replyTo: msg.key.id,
+    });
+    logger.info({ chatId }, 'Sticker created and sent');
+  } catch (err) {
+    logger.error({ err, chatId }, 'failed to create sticker');
+    try {
+      await getSock().sendMessage(chatId, { text: `Failed to create sticker: ${err.message}` });
+    } catch (e) { /* ignore */ }
+  }
+}
+
+function parseStickerArgs(args) {
+  if (!args || !args.trim()) return [null, null];
+  if (args.includes('#')) {
+    const [upper, lower] = args.split('#');
+    return [upper.trim() || null, lower.trim() || null];
+  }
+  return [args.trim() || null, null];
+}
+
+async function downloadMediaContent(message, contentType, messageId) {
+  const mediaKind = contentType === 'imageMessage' ? 'image'
+    : contentType === 'videoMessage' ? 'video'
+    : null;
+  if (!mediaKind) return null;
+
+  try {
+    const stream = await downloadContentFromMessage(message[contentType], mediaKind);
+    const ext = mediaKind === 'video' ? 'mp4' : 'jpg';
+    const filename = `${messageId}_${mediaKind}.${ext}`;
+    const filepath = `${config.mediaDir}/${filename}`;
+    await streamToFile(stream, filepath);
+    return filepath;
+  } catch (err) {
+    logger.warn({ err, messageId, contentType }, 'failed to download media for sticker');
+    return null;
+  }
 }
 
 async function handlePermission({ chatId, chatType, senderIsAdmin, botIsAdmin, args }) {
@@ -590,7 +678,7 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
   }
 }
 
-async function handleSettings({ chatId, chatType, senderIsAdmin, senderIsOwner, args }) {
+async function handleSettings({ chatId, chatType, senderId, senderIsAdmin, senderIsOwner, args }) {
   const sock = getSock();
   const isPrivate = chatType === 'private';
   const canUse = isPrivate ? senderIsOwner : senderIsAdmin;
@@ -729,7 +817,8 @@ async function handleCommandListener(msg, context) {
       return true;
 
     case 'sticker':
-      return false;
+      await handleSticker({ chatId, chatType, senderIsAdmin, senderIsOwner, args, msg });
+      return true;
 
     case 'model':
       await handleModel({ chatId, chatType, senderIsAdmin, senderIsOwner, args });
@@ -740,7 +829,7 @@ async function handleCommandListener(msg, context) {
       return true;
 
     case 'settings':
-      await handleSettings({ chatId, chatType, senderIsAdmin, senderIsOwner, args });
+      await handleSettings({ chatId, chatType, senderId, senderIsAdmin, senderIsOwner, args });
       return true;
 
     default:
