@@ -22,7 +22,7 @@ import {
   getDefaultLlm2Model,
   deleteModel,
 } from '../db.js';
-import { sendRichMessage } from './interactive/index.js';
+import { sendRichMessage, sendNativeFlow } from './interactive/index.js';
 
 let sock;
 
@@ -111,164 +111,147 @@ async function startWhatsApp() {
     }
   });
 
-  sock.ev.on('messages.update', async (updates) => {
-    for (const update of updates) {
-      try {
-        const msg = update?.message;
-        if (!msg) continue;
+  async function handleButtonResponse(msg, chatId, senderId) {
+    const buttonsResponse = msg?.message?.buttonsResponseMessage;
+    const listResponse = msg?.message?.listResponseMessage;
+    if (!buttonsResponse && !listResponse) return false;
 
-        const buttonsResponse = msg?.buttonsResponseMessage;
-        const listResponse = msg?.listResponseMessage;
-        if (!buttonsResponse && !listResponse) continue;
+    const selectedId = (buttonsResponse?.selectedButtonId) || (listResponse?.singleSelectReply?.selectedRowId);
+    if (!selectedId) return false;
 
-        const chatId = update?.key?.remoteJid;
-        const senderId = normalizeJid(update?.key?.participant) || update?.key?.remoteJid || null;
-        if (!chatId || !senderId) continue;
+    const isGroup = chatId.endsWith('@g.us');
+    const group = isGroup ? (getCachedGroupMetadata(chatId) || defaultGroupContext(chatId)) : null;
+    const senderRole = isGroup ? roleFlagsForJid(group?.participantRoles, senderId) : { isAdmin: false, isSuperAdmin: false };
+    const senderIsAdmin = senderRole.isAdmin || senderRole.isSuperAdmin;
+    const senderIsOwner = isOwnerJid(senderId);
 
-        const selectedId = (buttonsResponse?.selectedButtonId) || (listResponse?.singleSelectReply?.selectedRowId);
-        if (!selectedId) continue;
+    try {
+      if (selectedId.startsWith('model_select:')) {
+        const modelId = selectedId.replace('model_select:', '');
+        const canUse = isGroup ? senderIsAdmin : senderIsOwner;
+        if (!canUse) {
+          await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can change the model.' });
+          return true;
+        }
+        setLlm2Model(chatId, modelId);
+        const models = getAllActiveModels();
+        const model = models.find((m) => m.modelId === modelId);
+        const displayName = model?.displayName || modelId;
+        await sock.sendMessage(chatId, { text: `Model diubah ke: ${displayName}` });
+        return true;
+      }
 
-        const isGroup = chatId.endsWith('@g.us');
-        const group = isGroup ? (getCachedGroupMetadata(chatId) || defaultGroupContext(chatId)) : null;
-        const senderRole = isGroup ? roleFlagsForJid(group?.participantRoles, senderId) : { isAdmin: false, isSuperAdmin: false };
-        const senderIsAdmin = senderRole.isAdmin || senderRole.isSuperAdmin;
-        const senderIsOwner = isOwnerJid(senderId);
-
-        if (selectedId.startsWith('model_select:')) {
-          const modelId = selectedId.replace('model_select:', '');
-          const canUse = isGroup ? senderIsAdmin : senderIsOwner;
-          if (!canUse) {
-            await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can change the model.' });
-            return;
-          }
-          setLlm2Model(chatId, modelId);
+      if (selectedId.startsWith('settings:')) {
+        const action = selectedId.replace('settings:', '');
+        const canUse = isGroup ? senderIsAdmin : senderIsOwner;
+        if (!canUse) {
+          await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can access settings.' });
+          return true;
+        }
+        if (action === 'model') {
           const models = getAllActiveModels();
-          const model = models.find((m) => m.modelId === modelId);
-          const displayName = model?.displayName || modelId;
-          await sock.sendMessage(chatId, { text: `Model diubah ke: ${displayName}` });
-          return;
-        }
-
-        if (selectedId.startsWith('settings:')) {
-          const action = selectedId.replace('settings:', '');
-          const canUse = isGroup ? senderIsAdmin : senderIsOwner;
-          if (!canUse) {
-            await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can access settings.' });
-            return;
+          if (models.length === 0) {
+            await sock.sendMessage(chatId, { text: 'No models available.' });
+            return true;
           }
-          if (action === 'model') {
-            const models = getAllActiveModels();
-            if (models.length === 0) {
-              await sock.sendMessage(chatId, { text: 'No models available.' });
-              return;
-            }
-            const currentModelId = getLlm2Model(chatId);
-            const defaultModel = getDefaultLlm2Model();
-            const activeModelId = currentModelId || defaultModel?.modelId || null;
-            const sections = models.map((m) => ({
-              title: m.displayName,
-              rows: [{
-                title: m.displayName + (m.modelId === activeModelId ? ' ✓' : ''),
-                description: m.description || '',
-                id: `model_select:${m.modelId}`,
-              }],
-            }));
-            const { sendNativeFlow } = await import('./interactive/index.js');
-            await sendNativeFlow(sock, chatId, 'Pilih Model LLM', [
-              {
-                name: 'single_select',
-                buttonParamsJson: JSON.stringify({ title: 'Pilih Model', sections }),
-              },
-            ], { footer: 'Model saat ini: ' + (activeModelId || 'default') });
-            return;
-          }
-          if (action === 'prompt') {
-            await sock.sendMessage(chatId, { text: 'Gunakan /prompt <teks> untuk mengubah prompt.\n/hapus untuk清除.' });
-            return;
-          }
-          if (action === 'permission') {
-            await sock.sendMessage(chatId, { text: 'Gunakan /permission <0-3> untuk mengubah level.\n0: no moderation\n1: delete\n2: delete & mute\n3: delete, mute & kick' });
-            return;
-          }
-          return;
-        }
-
-        if (selectedId.startsWith('modelcfg:')) {
-          if (!isOwnerJid(senderId)) {
-            await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
-            return;
-          }
-          const subcommand = selectedId.replace('modelcfg:', '');
-          if (subcommand === 'list') {
-            const models = getAllActiveModels();
-            if (models.length === 0) {
-              await sock.sendMessage(chatId, { text: 'No models configured.' });
-              return;
-            }
-            const lines = ['*Daftar Model:*'];
-            const defaultModel = getDefaultLlm2Model();
-            for (const m of models) {
-              const isDefault = defaultModel?.modelId === m.modelId;
-              lines.push(`${isDefault ? '✓' : '○'} ${m.displayName} (${m.modelId})`);
-            }
-            await sock.sendMessage(chatId, { text: lines.join('\n') });
-            return;
-          }
-          if (['add', 'edit'].includes(subcommand)) {
-            await sock.sendMessage(chatId, { text: `Usage: /modelcfg ${subcommand} ...` });
-            return;
-          }
-          return;
-        }
-
-        if (selectedId.startsWith('modelcfg_remove:')) {
-          if (!isOwnerJid(senderId)) {
-            await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
-            return;
-          }
-          const modelId = selectedId.replace('modelcfg_remove:', '');
-          const sections = [
-            {
-              title: 'Konfirmasi Hapus',
-              rows: [
-                { title: 'Ya, Hapus', description: `Hapus model ${modelId}`, id: `modelcfg_confirm_remove:${modelId}` },
-                { title: 'Batal', description: 'Batalkan operasi', id: 'modelcfg_cancel_remove' },
-              ],
-            },
-          ];
-          const { sendNativeFlow } = await import('./interactive/index.js');
-          await sendNativeFlow(sock, chatId, `⚠️ Hapus "${modelId}"?`, [
+          const currentModelId = getLlm2Model(chatId);
+          const defaultModel = getDefaultLlm2Model();
+          const activeModelId = currentModelId || defaultModel?.modelId || null;
+          const sections = models.map((m) => ({
+            title: m.displayName,
+            rows: [{
+              title: m.displayName + (m.modelId === activeModelId ? ' ✓' : ''),
+              description: m.description || '',
+              id: `model_select:${m.modelId}`,
+            }],
+          }));
+          await sendNativeFlow(sock, chatId, 'Pilih Model LLM', [
             {
               name: 'single_select',
-              buttonParamsJson: JSON.stringify({
-                title: 'Konfirmasi',
-                sections,
-              }),
+              buttonParamsJson: JSON.stringify({ title: 'Pilih Model', sections }),
             },
-          ], { footer: 'Tindakan ini tidak dapat dibatalkan' });
-          return;
+          ], { footer: 'Model saat ini: ' + (activeModelId || 'default') });
+          return true;
         }
-
-        if (selectedId === 'modelcfg_cancel_remove') {
-          await sock.sendMessage(chatId, { text: 'Operasi dibatalkan.' });
-          return;
+        if (action === 'prompt') {
+          await sock.sendMessage(chatId, { text: 'Gunakan /prompt <teks> untuk mengubah prompt.' });
+          return true;
         }
-
-        if (selectedId.startsWith('modelcfg_confirm_remove:')) {
-          if (!isOwnerJid(senderId)) {
-            await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
-            return;
-          }
-          const modelId = selectedId.replace('modelcfg_confirm_remove:', '');
-          const success = deleteModel(modelId);
-          await sock.sendMessage(chatId, { text: success ? `Model "${modelId}" dihapus.` : `Model "${modelId}" tidak ditemukan.` });
-          return;
+        if (action === 'permission') {
+          await sock.sendMessage(chatId, { text: 'Gunakan /permission <0-3> untuk mengubah level.' });
+          return true;
         }
-      } catch (err) {
-        logger.error({ err }, 'button response handler error');
+        return true;
       }
+
+      if (selectedId.startsWith('modelcfg:')) {
+        if (!isOwnerJid(senderId)) {
+          await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
+          return true;
+        }
+        const subcommand = selectedId.replace('modelcfg:', '');
+        if (subcommand === 'list') {
+          const models = getAllActiveModels();
+          if (models.length === 0) {
+            await sock.sendMessage(chatId, { text: 'No models configured.' });
+            return true;
+          }
+          const lines = ['*Daftar Model:*'];
+          const defaultModel = getDefaultLlm2Model();
+          for (const m of models) {
+            const isDefault = defaultModel?.modelId === m.modelId;
+            lines.push(`${isDefault ? '✓' : '○'} ${m.displayName} (${m.modelId})`);
+          }
+          await sock.sendMessage(chatId, { text: lines.join('\n') });
+          return true;
+        }
+        return true;
+      }
+
+      if (selectedId.startsWith('modelcfg_remove:')) {
+        if (!isOwnerJid(senderId)) {
+          await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
+          return true;
+        }
+        const modelId = selectedId.replace('modelcfg_remove:', '');
+        const sections = [
+          {
+            title: 'Konfirmasi Hapus',
+            rows: [
+              { title: 'Ya, Hapus', description: `Hapus model ${modelId}`, id: `modelcfg_confirm_remove:${modelId}` },
+              { title: 'Batal', description: 'Batalkan operasi', id: 'modelcfg_cancel_remove' },
+            ],
+          },
+        ];
+        await sendNativeFlow(sock, chatId, `⚠️ Hapus "${modelId}"?`, [
+          {
+            name: 'single_select',
+            buttonParamsJson: JSON.stringify({ title: 'Konfirmasi', sections }),
+          },
+        ], { footer: 'Tindakan ini tidak dapat dibatalkan' });
+        return true;
+      }
+
+      if (selectedId === 'modelcfg_cancel_remove') {
+        await sock.sendMessage(chatId, { text: 'Operasi dibatalkan.' });
+        return true;
+      }
+
+      if (selectedId.startsWith('modelcfg_confirm_remove:')) {
+        if (!isOwnerJid(senderId)) {
+          await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
+          return true;
+        }
+        const modelId = selectedId.replace('modelcfg_confirm_remove:', '');
+        const success = deleteModel(modelId);
+        await sock.sendMessage(chatId, { text: success ? `Model "${modelId}" dihapus.` : `Model "${modelId}" tidak ditemukan.` });
+        return true;
+      }
+    } catch (err) {
+      logger.error({ err }, 'button response handler error');
     }
-  });
+    return false;
+  }
 
   // Listener 1: Command handler (non-blocking, instant response)
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
@@ -280,6 +263,13 @@ async function startWhatsApp() {
         if (!msg?.message) continue;
         if (msg?.key?.fromMe) continue;
 
+        const fromId = msg.key.participant || msg.key.remoteJid;
+        const senderId = normalizeJid(fromId) || fromId;
+
+        if (await handleButtonResponse(msg, chatId, senderId)) {
+          continue;
+        }
+
         const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || null;
         if (!text || typeof text !== 'string') continue;
 
@@ -288,8 +278,6 @@ async function startWhatsApp() {
 
         const isGroup = chatId.endsWith('@g.us');
         const chatType = isGroup ? 'group' : 'private';
-        const fromId = msg.key.participant || msg.key.remoteJid;
-        const senderId = normalizeJid(fromId) || fromId;
 
         let senderIsAdmin = false;
         let botIsAdmin = false;
