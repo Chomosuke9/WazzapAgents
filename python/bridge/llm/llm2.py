@@ -14,7 +14,7 @@ try:
   from ..history import WhatsAppMessage, assistant_name, format_history
   from ..log import setup_logging, trunc, dump_json, env_flag
   from ..media import build_visual_parts, llm2_media_enabled, redact_multimodal_content
-  from ..db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute
+  from ..db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute, get_llm2_model as db_get_llm2_model, get_default_llm2_model
   from .schemas import build_llm2_tools
   from ..config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int
   from .prompt import _truncate_message
@@ -71,6 +71,15 @@ def _llm2_reasoning_effort() -> str | None:
   if not cleaned:
     return None
   return cleaned
+
+
+def get_llm2_model_for_chat(chat_id: str) -> str:
+  """Get model_id for chat, or default if not set."""
+  model_id = db_get_llm2_model(chat_id)
+  if model_id:
+    return model_id
+  default_model = get_default_llm2_model()
+  return default_model["model_id"] if default_model else "gpt-4.1"
 
 
 def _clean_env(raw: str | None) -> str | None:
@@ -440,6 +449,7 @@ async def generate_reply(
   targets = _llm2_targets()
   payload = current_payload if isinstance(current_payload, dict) else {}
   log_chat_id = payload.get("chatId") or payload.get("chat_id") or current.sender
+  chat_model_id = get_llm2_model_for_chat(log_chat_id) if log_chat_id else None
   payload_chat_type = _normalize_chat_type(
     chat_type
     or payload.get("chatType")
@@ -547,8 +557,9 @@ async def generate_reply(
   total_targets = len(targets)
   for idx, target in enumerate(targets):
     has_next_target = idx < (total_targets - 1)
+    resolved_model = chat_model_id if chat_model_id else target.model
     llm = get_llm2(
-      model=target.model,
+      model=resolved_model,
       base_url=target.base_url,
       api_key=target.api_key,
       include_reasoning=bool(reasoning_effort),
@@ -568,7 +579,8 @@ async def generate_reply(
         "history_len": len(history_list),
         "system_chars": len(rendered_system),
         "prompt_preview": prompt_preview,
-        "model": target.model,
+        "model": resolved_model,
+        "chat_model": chat_model_id,
         "endpoint": target.base_url,
         "timeout_s": timeout_s,
         "retry_max": retry_max,
@@ -589,12 +601,12 @@ async def generate_reply(
           mode,
           attempt,
           attempts_total,
-          target.model,
+          resolved_model,
           extra={
             "chat_id": log_chat_id,
             "chat_name": log_chat_name,
             "provider": target.name,
-            "model": target.model,
+            "model": resolved_model,
             "endpoint": target.base_url,
             "mode": mode,
             "attempt": attempt,
@@ -617,7 +629,7 @@ async def generate_reply(
               "chat_id": log_chat_id,
               "chat_name": log_chat_name,
               "provider": target.name,
-              "model": target.model,
+              "model": resolved_model,
               "endpoint": target.base_url,
               "mode": mode,
               "attempt": attempt,
@@ -640,7 +652,7 @@ async def generate_reply(
               "chat_id": log_chat_id,
               "chat_name": log_chat_name,
               "provider": target.name,
-              "model": target.model,
+              "model": resolved_model,
               "endpoint": target.base_url,
               "mode": mode,
               "attempt": attempt,
@@ -668,7 +680,7 @@ async def generate_reply(
             "chat_id": log_chat_id,
             "chat_name": log_chat_name,
             "provider": target.name,
-            "model": target.model,
+            "model": resolved_model,
             "endpoint": target.base_url,
             "media_parts": len(media_parts),
             "timeout_s": timeout_s,
@@ -684,7 +696,7 @@ async def generate_reply(
             "chat_id": log_chat_id,
             "chat_name": log_chat_name,
             "provider": target.name,
-            "model": target.model,
+            "model": resolved_model,
             "endpoint": target.base_url,
             "media_parts": len(media_parts),
           },
@@ -706,7 +718,7 @@ async def generate_reply(
           "chat_id": log_chat_id,
           "chat_name": log_chat_name,
           "provider": target.name,
-          "model": target.model,
+          "model": resolved_model,
           "endpoint": target.base_url,
           "reply_preview": trunc(getattr(result, 'content', ''), 800),
           "tool_calls": len(getattr(result, 'tool_calls', None) or []),
@@ -723,7 +735,7 @@ async def generate_reply(
             "chat_id": log_chat_id,
             "chat_name": log_chat_name,
             "provider": target.name,
-            "model": target.model,
+            "model": resolved_model,
             "endpoint": target.base_url,
             "will_try_fallback_target": has_next_target,
           },
@@ -742,7 +754,7 @@ async def generate_reply(
           "chat_id": log_chat_id,
           "chat_name": log_chat_name,
           "provider": target.name,
-          "model": target.model,
+          "model": resolved_model,
           "endpoint": target.base_url,
           "next_provider": targets[idx + 1].name,
           "next_model": targets[idx + 1].model,

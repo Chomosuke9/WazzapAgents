@@ -15,6 +15,14 @@ import { isOwnerJid } from '../participants.js';
 import { roleFlagsForJid } from '../participants.js';
 import { getCachedGroupMetadata, defaultGroupContext, getGroupContext, currentBotAliases } from '../groupContext.js';
 import { normalizeJid } from '../identifiers.js';
+import {
+  getLlm2Model,
+  setLlm2Model,
+  getAllActiveModels,
+  getDefaultLlm2Model,
+  deleteModel,
+} from '../db.js';
+import { sendRichMessage } from './interactive/index.js';
 
 let sock;
 
@@ -103,6 +111,163 @@ async function startWhatsApp() {
     }
   });
 
+  sock.ev.on('messages.update', async (updates) => {
+    for (const update of updates) {
+      try {
+        const msg = update?.message;
+        if (!msg) continue;
+        const buttonsResponse = msg?.buttonsResponseMessage;
+        if (!buttonsResponse) continue;
+
+        const chatId = update?.key?.remoteJid;
+        const senderId = normalizeJid(update?.key?.participant) || update?.key?.remoteJid || null;
+        if (!chatId || !senderId) continue;
+
+        const selectedId = buttonsResponse?.selectedButtonId;
+        if (!selectedId) continue;
+
+        const isGroup = chatId.endsWith('@g.us');
+        const group = isGroup ? (getCachedGroupMetadata(chatId) || defaultGroupContext(chatId)) : null;
+        const senderRole = isGroup ? roleFlagsForJid(group?.participantRoles, senderId) : { isAdmin: false, isSuperAdmin: false };
+        const senderIsAdmin = senderRole.isAdmin || senderRole.isSuperAdmin;
+        const senderIsOwner = isOwnerJid(senderId);
+
+        if (selectedId.startsWith('model_select:')) {
+          const modelId = selectedId.replace('model_select:', '');
+          const canUse = isGroup ? senderIsAdmin : senderIsOwner;
+          if (!canUse) {
+            await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can change the model.' });
+            return;
+          }
+          setLlm2Model(chatId, modelId);
+          const models = getAllActiveModels();
+          const model = models.find((m) => m.modelId === modelId);
+          const displayName = model?.displayName || modelId;
+          await sock.sendMessage(chatId, { text: `Model diubah ke: ${displayName}` });
+          return;
+        }
+
+        if (selectedId.startsWith('settings:')) {
+          const action = selectedId.replace('settings:', '');
+          const canUse = isGroup ? senderIsAdmin : senderIsOwner;
+          if (!canUse) {
+            await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can access settings.' });
+            return;
+          }
+          if (action === 'model') {
+            const models = getAllActiveModels();
+            if (models.length === 0) {
+              await sock.sendMessage(chatId, { text: 'No models available.' });
+              return;
+            }
+            const currentModelId = getLlm2Model(chatId);
+            const defaultModel = getDefaultLlm2Model();
+            const activeModelId = currentModelId || defaultModel?.modelId || null;
+            const sections = models.map((m) => ({
+              title: m.displayName,
+              rows: [{
+                title: m.displayName + (m.modelId === activeModelId ? ' ✓' : ''),
+                description: m.description || '',
+                id: `model_select:${m.modelId}`,
+              }],
+            }));
+            const { sendNativeFlow } = await import('./interactive/index.js');
+            await sendNativeFlow(sock, chatId, 'Pilih Model LLM', [
+              {
+                name: 'single_select',
+                buttonParamsJson: JSON.stringify({ title: 'Pilih Model', sections }),
+              },
+            ], { footer: 'Model saat ini: ' + (activeModelId || 'default') });
+            return;
+          }
+          if (action === 'prompt') {
+            await sock.sendMessage(chatId, { text: 'Gunakan /prompt <teks> untuk mengubah prompt.\n/hapus untuk清除.' });
+            return;
+          }
+          if (action === 'permission') {
+            await sock.sendMessage(chatId, { text: 'Gunakan /permission <0-3> untuk mengubah level.\n0: no moderation\n1: delete\n2: delete & mute\n3: delete, mute & kick' });
+            return;
+          }
+          return;
+        }
+
+        if (selectedId.startsWith('modelcfg:')) {
+          if (!isOwnerJid(senderId)) {
+            await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
+            return;
+          }
+          const subcommand = selectedId.replace('modelcfg:', '');
+          if (subcommand === 'list') {
+            const models = getAllActiveModels();
+            if (models.length === 0) {
+              await sock.sendMessage(chatId, { text: 'No models configured.' });
+              return;
+            }
+            const lines = ['*Daftar Model:*'];
+            const defaultModel = getDefaultLlm2Model();
+            for (const m of models) {
+              const isDefault = defaultModel?.modelId === m.modelId;
+              lines.push(`${isDefault ? '✓' : '○'} ${m.displayName} (${m.modelId})`);
+            }
+            await sock.sendMessage(chatId, { text: lines.join('\n') });
+            return;
+          }
+          if (['add', 'edit'].includes(subcommand)) {
+            await sock.sendMessage(chatId, { text: `Usage: /modelcfg ${subcommand} ...` });
+            return;
+          }
+          return;
+        }
+
+        if (selectedId.startsWith('modelcfg_remove:')) {
+          if (!isOwnerJid(senderId)) {
+            await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
+            return;
+          }
+          const modelId = selectedId.replace('modelcfg_remove:', '');
+          const sections = [
+            {
+              title: 'Konfirmasi Hapus',
+              rows: [
+                { title: 'Ya, Hapus', description: `Hapus model ${modelId}`, id: `modelcfg_confirm_remove:${modelId}` },
+                { title: 'Batal', description: 'Batalkan operasi', id: 'modelcfg_cancel_remove' },
+              ],
+            },
+          ];
+          const { sendNativeFlow } = await import('./interactive/index.js');
+          await sendNativeFlow(sock, chatId, `⚠️ Hapus "${modelId}"?`, [
+            {
+              name: 'single_select',
+              buttonParamsJson: JSON.stringify({
+                title: 'Konfirmasi',
+                sections,
+              }),
+            },
+          ], { footer: 'Tindakan ini tidak dapat dibatalkan' });
+          return;
+        }
+
+        if (selectedId === 'modelcfg_cancel_remove') {
+          await sock.sendMessage(chatId, { text: 'Operasi dibatalkan.' });
+          return;
+        }
+
+        if (selectedId.startsWith('modelcfg_confirm_remove:')) {
+          if (!isOwnerJid(senderId)) {
+            await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
+            return;
+          }
+          const modelId = selectedId.replace('modelcfg_confirm_remove:', '');
+          const success = deleteModel(modelId);
+          await sock.sendMessage(chatId, { text: success ? `Model "${modelId}" dihapus.` : `Model "${modelId}" tidak ditemukan.` });
+          return;
+        }
+      } catch (err) {
+        logger.error({ err }, 'button response handler error');
+      }
+    }
+  });
+
   // Listener 1: Command handler (non-blocking, instant response)
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify' || !Array.isArray(messages) || messages.length === 0) return;
@@ -114,10 +279,17 @@ async function startWhatsApp() {
         if (msg?.key?.fromMe) continue;
 
         const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || null;
-        if (!text || typeof text !== 'string') continue;
+        if (!text || typeof text !== 'string') {
+          logger.debug({ chatId, hasMessage: !!msg?.message }, 'command listener: no text');
+          continue;
+        }
 
         const slashCommand = parseSlashCommand(text);
-        if (!slashCommand) continue;
+        if (!slashCommand) {
+          logger.debug({ chatId, text }, 'command listener: no slash command match');
+          continue;
+        }
+        logger.info({ chatId, command: slashCommand.command }, 'command listener: matched');
 
         const isGroup = chatId.endsWith('@g.us');
         const chatType = isGroup ? 'group' : 'private';
@@ -155,6 +327,7 @@ async function startWhatsApp() {
         };
 
         await handleCommandListener(msg, context);
+        logger.info({ chatId, command: slashCommand.command }, 'command listener: handled');
       } catch (err) {
         logger.error({ err }, 'command listener error');
       }

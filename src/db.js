@@ -44,6 +44,7 @@ function initTables() {
       permission INTEGER NOT NULL DEFAULT 0,
       mode       TEXT NOT NULL DEFAULT '${DEFAULT_MODE}',
       triggers   TEXT NOT NULL DEFAULT '${DEFAULT_TRIGGERS}',
+      llm2_model TEXT,
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -64,6 +65,14 @@ function initTables() {
       sender_name  TEXT NOT NULL DEFAULT '',
       invoke_count INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (chat_id, period_type, period_key, sender_ref)
+    );
+
+    CREATE TABLE IF NOT EXISTS llm_models (
+      model_id     TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      description  TEXT,
+      is_active    INTEGER NOT NULL DEFAULT 1,
+      sort_order   INTEGER NOT NULL DEFAULT 0
     );
   `);
 }
@@ -202,6 +211,129 @@ function getTopUsers(chatId, periodType, periodKey, limit = 5) {
   return rows.map((row) => ({ senderRef: row.sender_ref, senderName: row.sender_name, invokeCount: row.invoke_count }));
 }
 
+const _llm2ModelCache = new Map();
+const _defaultModelCache = null;
+
+function getDefaultLlm2Model() {
+  const db = getDb();
+  const row = db.prepare(
+    'SELECT model_id, display_name, description FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC LIMIT 1'
+  ).get();
+  if (row) {
+    return { modelId: row.model_id, displayName: row.display_name, description: row.description };
+  }
+  return null;
+}
+
+function getLlm2Model(chatId) {
+  if (_llm2ModelCache.has(chatId)) {
+    return _llm2ModelCache.get(chatId);
+  }
+  const db = getDb();
+  const row = db.prepare('SELECT llm2_model FROM chat_settings WHERE chat_id = ?').get(chatId);
+  const value = row?.llm2_model ?? null;
+  _llm2ModelCache.set(chatId, value);
+  return value;
+}
+
+function setLlm2Model(chatId, modelId) {
+  const db = getDb();
+  db.prepare(`
+    INSERT INTO chat_settings (chat_id, llm2_model, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(chat_id) DO UPDATE SET
+      llm2_model = excluded.llm2_model,
+      updated_at = excluded.updated_at
+  `).run(chatId, modelId);
+  _llm2ModelCache.set(chatId, modelId);
+  logger.info({ chatId, modelId }, 'DB set_llm2_model');
+}
+
+function getAllActiveModels() {
+  const db = getDb();
+  const rows = db.prepare(
+    'SELECT model_id, display_name, description, sort_order FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC'
+  ).all();
+  return rows.map((row) => ({
+    modelId: row.model_id,
+    displayName: row.display_name,
+    description: row.description,
+    sortOrder: row.sort_order,
+  }));
+}
+
+function getAllModels() {
+  const db = getDb();
+  const rows = db.prepare(
+    'SELECT model_id, display_name, description, is_active, sort_order FROM llm_models ORDER BY sort_order ASC'
+  ).all();
+  return rows.map((row) => ({
+    modelId: row.model_id,
+    displayName: row.display_name,
+    description: row.description,
+    isActive: Boolean(row.is_active),
+    sortOrder: row.sort_order,
+  }));
+}
+
+function addModel(modelId, displayName, description = '', sortOrder = null) {
+  const db = getDb();
+  if (sortOrder === null) {
+    const maxOrder = db.prepare('SELECT MAX(sort_order) as max_order FROM llm_models').get();
+    sortOrder = (maxOrder?.max_order ?? -1) + 1;
+  }
+  try {
+    db.prepare(
+      'INSERT INTO llm_models (model_id, display_name, description, sort_order) VALUES (?, ?, ?, ?)'
+    ).run(modelId, displayName, description, sortOrder);
+    logger.info({ modelId, displayName }, 'DB add_model');
+    return true;
+  } catch (err) {
+    if (err.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+      return false;
+    }
+    throw err;
+  }
+}
+
+function updateModel(modelId, { displayName, description, isActive, sortOrder } = {}) {
+  const db = getDb();
+  const existing = db.prepare('SELECT model_id FROM llm_models WHERE model_id = ?').get(modelId);
+  if (!existing) return false;
+  const updates = [];
+  const values = [];
+  if (displayName !== undefined) {
+    updates.push('display_name = ?');
+    values.push(displayName);
+  }
+  if (description !== undefined) {
+    updates.push('description = ?');
+    values.push(description);
+  }
+  if (isActive !== undefined) {
+    updates.push('is_active = ?');
+    values.push(isActive ? 1 : 0);
+  }
+  if (sortOrder !== undefined) {
+    updates.push('sort_order = ?');
+    values.push(sortOrder);
+  }
+  if (updates.length === 0) return true;
+  values.push(modelId);
+  db.prepare(`UPDATE llm_models SET ${updates.join(', ')} WHERE model_id = ?`).run(...values);
+  logger.info({ modelId }, 'DB update_model');
+  return true;
+}
+
+function deleteModel(modelId) {
+  const db = getDb();
+  const existing = db.prepare('SELECT model_id FROM llm_models WHERE model_id = ?').get(modelId);
+  if (!existing) return false;
+  db.prepare('DELETE FROM llm_models WHERE model_id = ?').run(modelId);
+  logger.info({ modelId }, 'DB delete_model');
+  return true;
+}
+
 export {
   getDb,
   getPrompt,
@@ -215,6 +347,14 @@ export {
   clearSettings,
   getStats,
   getTopUsers,
+  getLlm2Model,
+  setLlm2Model,
+  getAllActiveModels,
+  getAllModels,
+  getDefaultLlm2Model,
+  addModel,
+  updateModel,
+  deleteModel,
   VALID_MODES,
   DEFAULT_MODE,
   VALID_TRIGGERS,

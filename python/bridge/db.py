@@ -113,14 +113,23 @@ def _ensure_tables(conn: sqlite3.Connection) -> None:
       duration_m  INTEGER NOT NULL,
       PRIMARY KEY (chat_id, sender_ref)
     );
+
+    CREATE TABLE IF NOT EXISTS llm_models (
+      model_id     TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      description  TEXT,
+      is_active    INTEGER NOT NULL DEFAULT 1,
+      sort_order   INTEGER NOT NULL DEFAULT 0
+    );
   """)
-  # Add mode and triggers columns (may already exist)
+  # Add mode, triggers, and llm2_model columns (may already exist)
   for col, col_type, default in [
     ("mode", "TEXT", f"'{DEFAULT_MODE}'"),
     ("triggers", "TEXT", f"'{DEFAULT_TRIGGERS}'"),
+    ("llm2_model", "TEXT", "NULL"),
   ]:
     try:
-      conn.execute(f"ALTER TABLE chat_settings ADD COLUMN {col} {col_type} NOT NULL DEFAULT {default}")
+      conn.execute(f"ALTER TABLE chat_settings ADD COLUMN {col} {col_type} DEFAULT {default}")
       conn.commit()
     except sqlite3.OperationalError:
       pass  # column already exists
@@ -232,6 +241,170 @@ def permission_allows_mute(level: int) -> bool:
 
 def permission_allows_kick(level: int) -> bool:
   return level >= 3
+
+
+# ---------------------------------------------------------------------------
+# LLM2 Model Management
+# ---------------------------------------------------------------------------
+
+_llm2_model_cache: dict[str, Optional[str]] = {}
+_default_llm2_model_cache: Optional[dict] = None
+
+
+def get_default_llm2_model() -> Optional[dict]:
+  """Return the default model (lowest sort_order, is_active=1)."""
+  global _default_llm2_model_cache
+  if _default_llm2_model_cache is not None:
+    return _default_llm2_model_cache
+  conn = _get_conn()
+  row = conn.execute(
+    "SELECT model_id, display_name, description FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC LIMIT 1"
+  ).fetchone()
+  if row:
+    _default_llm2_model_cache = {
+      "model_id": row["model_id"],
+      "display_name": row["display_name"],
+      "description": row["description"],
+    }
+  return _default_llm2_model_cache
+
+
+def get_llm2_model(chat_id: str) -> Optional[str]:
+  """Return the model_id for chat_id, or None if not set."""
+  with _cache_lock:
+    cached = _llm2_model_cache.get(chat_id, _MISSING)
+  if cached is not _MISSING:
+    return cached if cached is not None else None
+
+  conn = _get_conn()
+  row = conn.execute(
+    "SELECT llm2_model FROM chat_settings WHERE chat_id = ?", (chat_id,)
+  ).fetchone()
+  value = row["llm2_model"] if row is not None else None
+  with _cache_lock:
+    _llm2_model_cache[chat_id] = value
+  return value
+
+
+def set_llm2_model(chat_id: str, model_id: Optional[str]) -> None:
+  conn = _get_conn()
+  conn.execute(
+    """
+    INSERT INTO chat_settings (chat_id, llm2_model, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(chat_id) DO UPDATE SET
+      llm2_model = excluded.llm2_model,
+      updated_at = excluded.updated_at
+    """,
+    (chat_id, model_id),
+  )
+  conn.commit()
+  with _cache_lock:
+    _llm2_model_cache[chat_id] = model_id
+  logger.info("DB set_llm2_model chat_id=%s model_id=%s", chat_id, model_id)
+
+
+def get_all_active_models() -> list[dict]:
+  """Return all active models ordered by sort_order."""
+  conn = _get_conn()
+  rows = conn.execute(
+    "SELECT model_id, display_name, description, sort_order FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC"
+  ).fetchall()
+  return [
+    {
+      "model_id": row["model_id"],
+      "display_name": row["display_name"],
+      "description": row["description"],
+      "sort_order": row["sort_order"],
+    }
+    for row in rows
+  ]
+
+
+def get_all_models() -> list[dict]:
+  """Return all models (active and inactive) ordered by sort_order."""
+  conn = _get_conn()
+  rows = conn.execute(
+    "SELECT model_id, display_name, description, is_active, sort_order FROM llm_models ORDER BY sort_order ASC"
+  ).fetchall()
+  return [
+    {
+      "model_id": row["model_id"],
+      "display_name": row["display_name"],
+      "description": row["description"],
+      "is_active": bool(row["is_active"]),
+      "sort_order": row["sort_order"],
+    }
+    for row in rows
+  ]
+
+
+def add_model(model_id: str, display_name: str, description: str = "", sort_order: Optional[int] = None) -> bool:
+  """Add a new model. Returns False if model_id already exists."""
+  global _default_llm2_model_cache
+  _default_llm2_model_cache = None
+  conn = _get_conn()
+  if sort_order is None:
+    max_order_row = conn.execute("SELECT MAX(sort_order) as max_order FROM llm_models").fetchone()
+    sort_order = (max_order_row["max_order"] or -1) + 1
+  try:
+    conn.execute(
+      """
+      INSERT INTO llm_models (model_id, display_name, description, sort_order)
+      VALUES (?, ?, ?, ?)
+      """,
+      (model_id, display_name, description, sort_order),
+    )
+    conn.commit()
+    logger.info("DB add_model model_id=%s display_name=%s", model_id, display_name)
+    return True
+  except sqlite3.IntegrityError:
+    return False
+
+
+def update_model(model_id: str, display_name: Optional[str] = None, description: Optional[str] = None, is_active: Optional[bool] = None, sort_order: Optional[int] = None) -> bool:
+  """Update a model. Returns False if model_id not found."""
+  global _default_llm2_model_cache
+  _default_llm2_model_cache = None
+  conn = _get_conn()
+  existing = conn.execute("SELECT * FROM llm_models WHERE model_id = ?", (model_id,)).fetchone()
+  if not existing:
+    return False
+  updates = []
+  values = []
+  if display_name is not None:
+    updates.append("display_name = ?")
+    values.append(display_name)
+  if description is not None:
+    updates.append("description = ?")
+    values.append(description)
+  if is_active is not None:
+    updates.append("is_active = ?")
+    values.append(1 if is_active else 0)
+  if sort_order is not None:
+    updates.append("sort_order = ?")
+    values.append(sort_order)
+  if not updates:
+    return True
+  values.append(model_id)
+  conn.execute(f"UPDATE llm_models SET {', '.join(updates)} WHERE model_id = ?", values)
+  conn.commit()
+  logger.info("DB update_model model_id=%s", model_id)
+  return True
+
+
+def delete_model(model_id: str) -> bool:
+  """Delete a model. Returns False if model_id not found."""
+  global _default_llm2_model_cache
+  _default_llm2_model_cache = None
+  conn = _get_conn()
+  existing = conn.execute("SELECT model_id FROM llm_models WHERE model_id = ?", (model_id,)).fetchone()
+  if not existing:
+    return False
+  conn.execute("DELETE FROM llm_models WHERE model_id = ?", (model_id,))
+  conn.commit()
+  logger.info("DB delete_model model_id=%s", model_id)
+  return True
 
 
 # ---------------------------------------------------------------------------

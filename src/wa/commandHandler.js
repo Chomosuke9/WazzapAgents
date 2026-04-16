@@ -1,7 +1,7 @@
 import logger from '../logger.js';
 import { isOwnerJid, roleFlagsForJid } from '../participants.js';
 import { getSock } from './connection.js';
-import { sendRichMessage } from './interactive/index.js';
+import { sendRichMessage, sendNativeFlow } from './interactive/index.js';
 import {
   getPrompt,
   setPrompt,
@@ -14,6 +14,14 @@ import {
   clearSettings,
   getStats,
   getTopUsers,
+  getLlm2Model,
+  setLlm2Model,
+  getAllActiveModels,
+  getAllModels,
+  getDefaultLlm2Model,
+  addModel,
+  updateModel,
+  deleteModel,
   VALID_MODES,
   VALID_TRIGGERS,
 } from '../db.js';
@@ -362,6 +370,291 @@ async function handleDashboard({ chatId }) {
   }
 }
 
+async function handleModel({ chatId, chatType, senderIsAdmin, senderIsOwner, args }) {
+  const sock = getSock();
+  const isPrivate = chatType === 'private';
+  const canUse = isPrivate ? senderIsOwner : senderIsAdmin;
+
+  if (!canUse) {
+    try {
+      await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can change the model.' });
+    } catch (err) { /* ignore */ }
+    return;
+  }
+
+  const models = getAllActiveModels();
+  if (models.length === 0) {
+    try {
+      await sock.sendMessage(chatId, { text: 'No models available. Ask the bot owner to add models using /modelcfg.' });
+    } catch (err) { /* ignore */ }
+    return;
+  }
+
+  const currentModelId = getLlm2Model(chatId);
+  const defaultModel = getDefaultLlm2Model();
+  const activeModelId = currentModelId || defaultModel?.modelId || null;
+
+  const sections = models.map((m) => ({
+    title: m.displayName,
+    rows: [{
+      title: m.displayName + (m.modelId === activeModelId ? ' ✓' : ''),
+      description: m.description || '',
+      id: `model_select:${m.modelId}`,
+    }],
+  }));
+
+  try {
+    await sendNativeFlow(sock, chatId, 'Pilih Model LLM', [
+      {
+        name: 'single_select',
+        buttonParamsJson: JSON.stringify({
+          title: 'Pilih Model',
+          sections,
+        }),
+      },
+    ], { footer: 'Model saat ini: ' + (activeModelId || 'default') });
+  } catch (err) {
+    logger.warn({ err, chatId }, 'failed sending /model interactive');
+    try {
+      await sock.sendMessage(chatId, { text: 'Failed to show model list. Please try again.' });
+    } catch (e) { /* ignore */ }
+  }
+}
+
+async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
+  const sock = getSock();
+  if (!senderIsOwner) {
+    try {
+      await sock.sendMessage(chatId, { text: 'Only bot owner can use /modelcfg.' });
+    } catch (err) { /* ignore */ }
+    return;
+  }
+
+  const parts = (args || '').trim().split(/\s+/);
+  const subcommand = parts[0]?.toLowerCase() || '';
+  const subArgs = parts.slice(1);
+
+  if (!subcommand) {
+    const sections = [
+      {
+        title: 'Manajemen Model',
+        rows: [
+          { title: 'List Models', description: 'Lihat semua model', id: 'modelcfg:list' },
+          { title: 'Add Model', description: 'Tambah model baru', id: 'modelcfg:add' },
+          { title: 'Edit Model', description: 'Edit model yang ada', id: 'modelcfg:edit' },
+          { title: 'Remove Model', description: 'Hapus model', id: 'modelcfg:remove_menu' },
+        ],
+      },
+    ];
+    try {
+      await sendNativeFlow(sock, chatId, 'Model Configuration', [
+        {
+          name: 'single_select',
+          buttonParamsJson: JSON.stringify({
+            title: 'Pengaturan Model',
+            sections,
+          }),
+        },
+      ], { footer: 'Bot Owner Only' });
+    } catch (err) {
+      logger.warn({ err, chatId }, 'failed sending /modelcfg menu');
+      try {
+        await sock.sendMessage(chatId, { text: 'Failed to show modelcfg menu.' });
+      } catch (e) { /* ignore */ }
+    }
+    return;
+  }
+
+  if (subcommand === 'remove_menu') {
+    const models = getAllModels();
+    if (models.length === 0) {
+      try {
+        await sock.sendMessage(chatId, { text: 'No models to remove.' });
+      } catch (err) { /* ignore */ }
+      return;
+    }
+    const sections = [
+      {
+        title: 'Select Model to Remove',
+        rows: models.map((m) => ({
+          title: m.displayName + (m.isActive ? '' : ' (inactive)'),
+          description: m.description || `ID: ${m.modelId}`,
+          id: `modelcfg_remove:${m.modelId}`,
+        })),
+      },
+    ];
+    try {
+      await sendNativeFlow(sock, chatId, '⚠️ Remove Model', [
+        {
+          name: 'single_select',
+          buttonParamsJson: JSON.stringify({
+            title: 'Hapus Model',
+            sections,
+          }),
+        },
+      ], { footer: 'Pilih model untuk dihapus' });
+    } catch (err) {
+      logger.warn({ err, chatId }, 'failed sending /modelcfg remove menu');
+      try {
+        await sock.sendMessage(chatId, { text: 'Failed to show remove menu.' });
+      } catch (e) { /* ignore */ }
+    }
+    return;
+  }
+
+  switch (subcommand) {
+    case 'list': {
+      const models = getAllModels();
+      if (models.length === 0) {
+        try {
+          await sock.sendMessage(chatId, { text: 'No models configured. Use /modelcfg add <model_id> <display_name> [description]' });
+        } catch (err) { /* ignore */ }
+        return;
+      }
+      const lines = ['*Daftar Model:*'];
+      const defaultModel = getDefaultLlm2Model();
+      for (const m of models) {
+        const isDefault = defaultModel?.modelId === m.modelId;
+        const status = m.isActive ? '✓' : '✗';
+        lines.push(`${status} ${m.displayName} (${m.modelId})${isDefault ? ' [DEFAULT]' : ''}`);
+        if (m.description) lines.push(`   ${m.description}`);
+      }
+      try {
+        await sock.sendMessage(chatId, { text: lines.join('\n') });
+      } catch (err) { /* ignore */ }
+      break;
+    }
+
+    case 'add': {
+      if (subArgs.length < 2) {
+        try {
+          await sock.sendMessage(chatId, { text: 'Usage: /modelcfg add <model_id> <display_name> [description]' });
+        } catch (err) { /* ignore */ }
+        return;
+      }
+      const [modelId, displayName, ...descParts] = subArgs;
+      const description = descParts.join(' ');
+      const success = addModel(modelId, displayName, description);
+      try {
+        await sock.sendMessage(chatId, { text: success ? `Model "${displayName}" added.` : `Model "${modelId}" already exists.` });
+      } catch (err) { /* ignore */ }
+      break;
+    }
+
+    case 'edit': {
+      if (subArgs.length < 1) {
+        try {
+          await sock.sendMessage(chatId, { text: 'Usage: /modelcfg edit <model_id> [name=<name>] [desc=<desc>] [active=0|1] [order=<n>]' });
+        } catch (err) { /* ignore */ }
+        return;
+      }
+      const [modelId, ...editParts] = subArgs;
+      const updates = {};
+      for (const part of editParts) {
+        const match = part.match(/^(name|desc|active|order)=(.+)$/);
+        if (match) {
+          const [, key, value] = match;
+          if (key === 'name') updates.displayName = value;
+          else if (key === 'desc') updates.description = value;
+          else if (key === 'active') updates.isActive = value === '1' || value === 'true';
+          else if (key === 'order') updates.sortOrder = parseInt(value, 10);
+        }
+      }
+      const success = updateModel(modelId, updates);
+      try {
+        await sock.sendMessage(chatId, { text: success ? `Model "${modelId}" updated.` : `Model "${modelId}" not found.` });
+      } catch (err) { /* ignore */ }
+      break;
+    }
+
+    case 'remove':
+    case 'delete': {
+      if (subArgs.length < 1) {
+        try {
+          await sock.sendMessage(chatId, { text: 'Usage: /modelcfg remove <model_id>' });
+        } catch (err) { /* ignore */ }
+        return;
+      }
+      const [modelId] = subArgs;
+      const success = deleteModel(modelId);
+      try {
+        await sock.sendMessage(chatId, { text: success ? `Model "${modelId}" deleted.` : `Model "${modelId}" not found.` });
+      } catch (err) { /* ignore */ }
+      break;
+    }
+
+    default:
+      try {
+        await sock.sendMessage(chatId, { text: 'Unknown subcommand. Use: list, add, edit, remove' });
+      } catch (err) { /* ignore */ }
+  }
+}
+
+async function handleSettings({ chatId, chatType, senderIsAdmin, senderIsOwner, args }) {
+  const sock = getSock();
+  const isPrivate = chatType === 'private';
+  const canUse = isPrivate ? senderIsOwner : senderIsAdmin;
+
+  if (!canUse) {
+    try {
+      await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can access settings.' });
+    } catch (err) { /* ignore */ }
+    return;
+  }
+
+  const currentModelId = getLlm2Model(chatId);
+  const defaultModel = getDefaultLlm2Model();
+  const activeModelId = currentModelId || defaultModel?.modelId;
+  const activeModelName = (activeModelId ? getAllModels().find((m) => m.modelId === activeModelId)?.displayName : null) || defaultModel?.displayName || 'default';
+
+  const currentPrompt = getPrompt(chatId);
+  const currentPermission = getPermission(chatId);
+  const currentMode = getMode(chatId);
+
+  const permissionLabels = ['0 (forbidden)', '1 (delete)', '2 (delete & mute)', '3 (delete, mute & kick)'];
+  const permissionLabel = permissionLabels[currentPermission] || String(currentPermission);
+
+  const sections = [
+    {
+      title: 'Pengaturan Chat',
+      rows: [
+        {
+          title: '📋 Edit Prompt',
+          description: currentPrompt ? (currentPrompt.slice(0, 50) + '...') : '(default)',
+          id: 'settings:prompt',
+        },
+        {
+          title: '🤖 Ganti Model',
+          description: `Model saat ini: ${activeModelName}`,
+          id: 'settings:model',
+        },
+        {
+          title: '🔐 Atur Permission',
+          description: `Level ${currentPermission}: ${permissionLabel}`,
+          id: 'settings:permission',
+        },
+      ],
+    },
+  ];
+
+  try {
+    await sendNativeFlow(sock, chatId, '⚙️ Pengaturan Chat', [
+      {
+        name: 'single_select',
+        buttonParamsJson: JSON.stringify({
+          title: 'Pengaturan',
+          sections,
+        }),
+      },
+    ], { footer: `Mode: ${currentMode}` });
+  } catch (err) {
+    logger.warn({ err, chatId }, 'failed sending /settings interactive');
+    try {
+      await sock.sendMessage(chatId, { text: 'Failed to show settings menu.' });
+    } catch (e) { /* ignore */ }
+  }
+}
+
 function getWeekKey(date) {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
@@ -437,6 +730,18 @@ async function handleCommandListener(msg, context) {
 
     case 'sticker':
       return false;
+
+    case 'model':
+      await handleModel({ chatId, chatType, senderIsAdmin, senderIsOwner, args });
+      return true;
+
+    case 'modelcfg':
+      await handleModelcfg({ chatId, senderId, senderIsOwner, args });
+      return true;
+
+    case 'settings':
+      await handleSettings({ chatId, chatType, senderIsAdmin, senderIsOwner, args });
+      return true;
 
     default:
       return false;

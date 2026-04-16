@@ -8,7 +8,7 @@ import { sendNativeFlow, sendCarousel, sendRichMessage, sendList, sendCombinedBu
 // Slash command parsing
 // ---------------------------------------------------------------------------
 
-const SLASH_CMD_RE = /^\/(broadcast|prompt|reset|permission|info|mode|trigger|dashboard|help|debug|join|sticker)\b\s*([\s\S]*)/i;
+const SLASH_CMD_RE = /^\/(broadcast|prompt|reset|permission|info|mode|trigger|dashboard|help|debug|join|sticker|model|modelcfg|settings)\b\s*([\s\S]*)/i;
 
 function parseSlashCommand(text) {
   if (!text || typeof text !== 'string') return null;
