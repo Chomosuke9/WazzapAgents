@@ -9,6 +9,12 @@ import config from '../config.js';
 import wsClient from '../wsClient.js';
 import { setSockAccessor, invalidateGroupMetadata } from '../groupContext.js';
 import { runWithConcurrency } from './utils.js';
+import { parseSlashCommand } from './commands.js';
+import { handleCommandListener } from './commandHandler.js';
+import { isOwnerJid } from '../participants.js';
+import { roleFlagsForJid } from '../participants.js';
+import { getCachedGroupMetadata, defaultGroupContext, getGroupContext, currentBotAliases } from '../groupContext.js';
+import { normalizeJid } from '../identifiers.js';
 
 let sock;
 
@@ -97,6 +103,65 @@ async function startWhatsApp() {
     }
   });
 
+  // Listener 1: Command handler (non-blocking, instant response)
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify' || !Array.isArray(messages) || messages.length === 0) return;
+    for (const msg of messages) {
+      try {
+        const chatId = msg?.key?.remoteJid;
+        if (!chatId || chatId === 'status@broadcast') continue;
+        if (!msg?.message) continue;
+        if (msg?.key?.fromMe) continue;
+
+        const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || null;
+        if (!text || typeof text !== 'string') continue;
+
+        const slashCommand = parseSlashCommand(text);
+        if (!slashCommand) continue;
+
+        const isGroup = chatId.endsWith('@g.us');
+        const chatType = isGroup ? 'group' : 'private';
+        const fromId = msg.key.participant || msg.key.remoteJid;
+        const senderId = normalizeJid(fromId) || fromId;
+
+        let senderIsAdmin = false;
+        let botIsAdmin = false;
+        let botIsSuperAdmin = false;
+        let group = null;
+
+        if (isGroup) {
+          group = getCachedGroupMetadata(chatId) || defaultGroupContext(chatId);
+          const senderRole = roleFlagsForJid(group?.participantRoles, senderId);
+          senderIsAdmin = senderRole.isAdmin || senderRole.isSuperAdmin;
+          botIsAdmin = Boolean(group?.botIsAdmin);
+          botIsSuperAdmin = Boolean(group?.botIsSuperAdmin);
+        }
+
+        const context = {
+          slashCommand,
+          chatId,
+          chatType,
+          senderId,
+          senderIsAdmin,
+          senderIsOwner: isOwnerJid(senderId),
+          senderRole: isGroup ? roleFlagsForJid(group?.participantRoles, senderId) : { isAdmin: false, isSuperAdmin: false },
+          senderDisplay: msg.pushName || '',
+          botIsAdmin,
+          botIsSuperAdmin,
+          contextMsgId: msg.key.id,
+          text,
+          group,
+          msg,
+        };
+
+        await handleCommandListener(msg, context);
+      } catch (err) {
+        logger.error({ err }, 'command listener error');
+      }
+    }
+  });
+
+  // Listener 2: Chatbot handler (send to Python)
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (!Array.isArray(messages) || messages.length === 0) return;
     const batchStartMs = Date.now();

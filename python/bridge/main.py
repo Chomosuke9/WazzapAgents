@@ -22,7 +22,6 @@ try:
   from .log import setup_logging, set_chat_log_context, reset_chat_log_context
   from .llm.llm1 import call_llm1, LLM1Decision
   from .llm.llm2 import generate_reply
-  from .commands import parse_command, handle_command, CommandResult
   from .db import (
     get_mode as db_get_mode,
     get_triggers as db_get_triggers,
@@ -318,13 +317,15 @@ async def handle_socket(ws):
       return
 
     # --- Slash command handling ---
-    # Check each payload for slash commands. Process them, add to history, skip LLM.
+    # Commands are now handled by Node.js (commandHandler.js).
+    # Python only adds commands to history for context and handles /sticker (PIL) and /reset (memory clear).
     remaining_payloads: list[dict] = []
     for payload in non_empty_payloads:
-      # Track media attachment paths so /sticker and create_sticker LLM2 tool can find them later.
       _store_media_path(media_paths_by_chat, payload)
 
       slash_cmd = payload.get("slashCommand")
+      cmd_handled = bool(payload.get("commandHandled"))
+
       if not slash_cmd or not isinstance(slash_cmd, dict):
         remaining_payloads.append(payload)
         continue
@@ -332,34 +333,19 @@ async def handle_socket(ws):
       cmd_name = slash_cmd.get("command") or ""
       cmd_args = slash_cmd.get("args") or ""
       p_chat_id = payload.get("chatId") or "unknown"
-      p_chat_type, p_bot_is_admin, _ = _chat_state_from_payload(payload)
-      p_sender_is_admin = bool(payload.get("senderIsAdmin")) or bool(payload.get("senderIsOwner"))
-      p_sender_jid = payload.get("senderId")
-
-      # Add command message to history
       history = per_chat[p_chat_id]
+
+      # Add command message to history (for LLM context)
       _append_or_merge_history_payload(history, payload)
 
-      # Handle /reset specially: clear memory
-      if cmd_name == "reset":
-        result = handle_command(
-          cmd_name, cmd_args,
-          chat_id=p_chat_id,
-          chat_type=p_chat_type,
-          sender_is_admin=p_sender_is_admin,
-          sender_jid=p_sender_jid,
-          bot_is_admin=p_bot_is_admin,
-        )
-        if result and result.success:
-          per_chat[p_chat_id].clear()
-          logger.info("Memory cleared for chat_id=%s via /reset", p_chat_id)
-        if result and result.reply:
-          reply_to = _normalize_context_msg_id(payload.get("contextMsgId"))
-          await send_message(ws, p_chat_id, result.reply, reply_to, request_id=_make_request_id("cmd"))
+      # If command already handled by Node.js, skip further processing
+      if cmd_handled:
+        logger.debug("command %s handled by gateway, skipping", cmd_name, extra={"chat_id": p_chat_id})
         continue
 
-      # Handle /sticker: create meme-style sticker from attached or replied-to image/video
+      # Handle /sticker: create meme-style sticker (requires PIL, stays in Python)
       if cmd_name == "sticker":
+        p_chat_type, p_bot_is_admin, _ = _chat_state_from_payload(payload)
         upper_text, lower_text = _parse_sticker_args(cmd_args)
         media_path = _resolve_sticker_media(media_paths_by_chat, payload, p_chat_id)
         reply_to = _normalize_context_msg_id(payload.get("contextMsgId"))
@@ -390,21 +376,14 @@ async def handle_socket(ws):
             )
         continue
 
-      # Handle /prompt, /permission, etc.
-      result = handle_command(
-        cmd_name, cmd_args,
-        chat_id=p_chat_id,
-        chat_type=p_chat_type,
-        sender_is_admin=p_sender_is_admin,
-        sender_jid=p_sender_jid,
-        bot_is_admin=p_bot_is_admin,
-      )
-      if result is not None and result.reply:
-        reply_to = _normalize_context_msg_id(payload.get("contextMsgId"))
-        await send_message(ws, p_chat_id, result.reply, reply_to, request_id=_make_request_id("cmd"))
-      elif result is None:
-        # Command not handled here (e.g. /broadcast handled by gateway); still skip LLM
-        pass
+      # Handle /reset: clear memory (Python manages per_chat history)
+      if cmd_name == "reset":
+        per_chat[p_chat_id].clear()
+        logger.info("Memory cleared for chat_id=%s via /reset", p_chat_id)
+        continue
+
+      # All other commands are handled by Node.js, just skip
+      logger.debug("command %s not handled in Python, skipping", cmd_name, extra={"chat_id": p_chat_id})
       continue
 
     non_empty_payloads = remaining_payloads
@@ -1172,6 +1151,14 @@ async def handle_socket(ws):
 
       if event_type == "error":
         logger.warning("Gateway error: %s", event.get("payload"))
+        continue
+
+      # Handle clear_history message from Node.js (after /reset)
+      if event_type == "clear_history":
+        clear_chat_id = event.get("chatId")
+        if clear_chat_id and clear_chat_id in per_chat:
+          per_chat[clear_chat_id].clear()
+          logger.info("History cleared for chat_id=%s via clear_history message", clear_chat_id)
         continue
 
       if event_type != "incoming_message":

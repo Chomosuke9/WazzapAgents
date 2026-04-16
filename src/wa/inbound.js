@@ -42,7 +42,7 @@ import {
   emitGroupJoinContextEvent,
   emitBotRoleChangeEvent,
 } from './events.js';
-import { parseSlashCommand, handleBroadcastCommand, handleInfoCommand, handleDebugCommand, handleJoinCommand } from './commands.js';
+import { parseSlashCommand } from './commands.js';
 
 async function buildMentionedParticipants(chatId, mentionedJids, botAliasSet = null) {
   if (!Array.isArray(mentionedJids) || mentionedJids.length === 0) return null;
@@ -224,45 +224,15 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
     }
   }
 
-  // Detect slash commands
+  // Detect slash commands for context
+  // Note: Commands are now handled by commandHandler.js in connection.js
+  // We still detect slash commands and send to Python for context/history
   const slashCommand = (!fromMe && typeof text === 'string')
     ? parseSlashCommand(text)
     : null;
 
-  // Handle /broadcast entirely on the gateway side
-  if (slashCommand && slashCommand.command === 'broadcast') {
-    await handleBroadcastCommand({
-      chatId,
-      senderId,
-      text: slashCommand.args,
-      quotedMessageId: quoted?.messageId || null,
-      contextMsgId,
-      msg,
-    });
-    return;
-  }
-
-  if (slashCommand && slashCommand.command === 'info') {
-    await handleInfoCommand({
-      chatId,
-      senderId,
-      senderDisplay,
-      senderRole,
-      isGroup,
-      group,
-    });
-    return;
-  }
-
-  if (slashCommand && slashCommand.command === 'debug') {
-    await handleDebugCommand({ chatId, senderId, args: slashCommand.args });
-    return;
-  }
-
-  if (slashCommand && slashCommand.command === 'join') {
-    await handleJoinCommand({ chatId, senderId, args: slashCommand.args });
-    return;
-  }
+  // Mark if command was handled by Node.js (for Python to skip processing)
+  const commandHandled = slashCommand ? true : false;
 
   const payload = {
     contextMsgId,
@@ -294,6 +264,7 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
     location,
     groupDescription: group?.description || null,
     slashCommand: slashCommand || null,
+    commandHandled,
   };
 
   wsClient.send({ type: 'incoming_message', payload });
