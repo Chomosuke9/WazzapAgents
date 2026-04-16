@@ -747,7 +747,7 @@ function getWeekKey(date) {
 }
 
 async function handleCommandListener(msg, context) {
-  const { slashCommand, chatId, chatType, senderIsAdmin, senderId, botIsAdmin, contextMsgId } = context;
+  const { slashCommand, chatId, chatType, senderIsAdmin, senderId, botIsAdmin, senderIsOwner, contextMsgId } = context;
 
   if (!slashCommand) return false;
 
