@@ -2,8 +2,7 @@ import logger from '../logger.js';
 import { isOwnerJid, roleFlagsForJid } from '../participants.js';
 import { getSock } from './connection.js';
 import { sendRichMessage, sendNativeFlow } from './interactive/index.js';
-import { downloadContentFromMessage } from 'baileys';
-import { streamToFile } from '../utils.js';
+import { streamToFile, withTimeout } from '../utils.js';
 import {
   getPrompt,
   setPrompt,
@@ -38,6 +37,7 @@ import {
 import { sendOutgoing } from './outbound.js';
 import { createStickerFile } from './stickerTool.js';
 import { unwrapMessage } from '../messageParser.js';
+import { downloadMediaToFile, mapMediaKind } from '../mediaHandler.js';
 
 const PROMPT_MAX_CHARS = 4000;
 
@@ -181,11 +181,10 @@ async function handleSticker({ chatId, chatType, senderIsAdmin, senderIsOwner, a
   const [upperText, lowerText] = parseStickerArgs(args);
 
   const { contentType, message: innerMessage } = unwrapMessage(msg.message) || {};
-  let content = contentType ? innerMessage[contentType] : null;
   let mediaPath = null;
 
   if (contentType === 'imageMessage' || contentType === 'videoMessage') {
-    mediaPath = await downloadMediaContent(msg.message, contentType, msg.key.id);
+    mediaPath = await downloadMediaContent(innerMessage[contentType], contentType, msg.key.id);
   }
 
   if (!mediaPath && innerMessage?.extendedTextMessage?.contextInfo) {
@@ -194,7 +193,7 @@ async function handleSticker({ chatId, chatType, senderIsAdmin, senderIsOwner, a
       const { contentType: qType, message: qMsg } = unwrapMessage(ctx.quotedMessage) || {};
       const qContent = qType ? qMsg?.[qType] : null;
       if (qType === 'imageMessage' || qType === 'videoMessage') {
-        mediaPath = await downloadMediaContent(ctx.quotedMessage, qType, ctx.stanzaId);
+        mediaPath = await downloadMediaContent(qContent, qType, ctx.stanzaId);
       }
     }
   }
@@ -231,18 +230,15 @@ function parseStickerArgs(args) {
   return [args.trim() || null, null];
 }
 
-async function downloadMediaContent(message, contentType, messageId) {
-  const mediaKind = contentType === 'imageMessage' ? 'image'
-    : contentType === 'videoMessage' ? 'video'
-    : null;
+async function downloadMediaContent(content, contentType, messageId) {
+  const mediaKind = mapMediaKind(contentType);
   if (!mediaKind) return null;
 
   try {
-    const stream = await downloadContentFromMessage(message[contentType], mediaKind);
     const ext = mediaKind === 'video' ? 'mp4' : 'jpg';
     const filename = `${messageId}_${mediaKind}.${ext}`;
     const filepath = `${config.mediaDir}/${filename}`;
-    await streamToFile(stream, filepath);
+    await downloadMediaToFile(content, mediaKind, filepath, withTimeout);
     return filepath;
   } catch (err) {
     logger.warn({ err, messageId, contentType }, 'failed to download media for sticker');
