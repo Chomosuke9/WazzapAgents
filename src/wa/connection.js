@@ -276,6 +276,9 @@ async function startWhatsApp() {
   async function handleButtonResponse(msg, chatId, senderId) {
     const buttonsResponse = msg?.message?.buttonsResponseMessage;
     const listResponse = msg?.message?.listResponseMessage;
+    const interactiveResponse = msg?.message?.interactiveResponseMessage;
+    
+    const singleSelectReply = listResponse?.singleSelectReply || interactiveResponse?.singleSelectReply;
     
     logger.info({ 
       chatId, 
@@ -283,16 +286,19 @@ async function startWhatsApp() {
       msgType: msg?.message ? Object.keys(msg.message).join(',') : 'none',
       hasButtons: !!buttonsResponse,
       hasList: !!listResponse,
+      hasInteractive: !!interactiveResponse,
       buttonsKeys: buttonsResponse ? Object.keys(buttonsResponse).join(',') : 'none',
       listKeys: listResponse ? Object.keys(listResponse).join(',') : 'none',
+      interactiveKeys: interactiveResponse ? Object.keys(interactiveResponse).join(',') : 'none',
       selectedButtonId: buttonsResponse?.selectedButtonId,
-      singleSelectReply: listResponse?.singleSelectReply,
-      singleSelectReplyKeys: listResponse?.singleSelectReply ? Object.keys(listResponse.singleSelectReply).join(',') : 'none',
+      singleSelectReply: singleSelectReply,
+      singleSelectReplyKeys: singleSelectReply ? Object.keys(singleSelectReply).join(',') : 'none',
+      singleSelectReplyRowId: singleSelectReply?.selectedRowId,
     }, 'handleButtonResponse check');
     
-    if (!buttonsResponse && !listResponse) return false;
+    if (!buttonsResponse && !listResponse && !interactiveResponse) return false;
 
-    const selectedId = (buttonsResponse?.selectedButtonId) || (listResponse?.singleSelectReply?.selectedRowId);
+    const selectedId = (buttonsResponse?.selectedButtonId) || (singleSelectReply?.selectedRowId);
     logger.info({ selectedId, chatId }, 'button selected');
     
     if (!selectedId) return false;

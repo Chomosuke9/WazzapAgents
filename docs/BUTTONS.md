@@ -94,7 +94,8 @@ msg.message.buttonsResponseMessage.selectedButtonId
 
 ### For single_select:
 ```javascript
-msg.message.listResponseMessage.singleSelectReply.selectedRowId
+// The singleSelectReply is in interactiveResponseMessage (not listResponseMessage)
+msg.message.interactiveResponseMessage.singleSelectReply.selectedRowId
 // Example: "model_select:gpt-4o"
 ```
 
@@ -126,16 +127,20 @@ settings:prompt            → settings prompt action
 
 ```javascript
 async function handleButtonResponse(msg, chatId, senderId) {
-  // Check for button response
+  // Check for button response (quick_reply and single_select come from different message types)
   const buttonsResponse = msg?.message?.buttonsResponseMessage;
   const listResponse = msg?.message?.listResponseMessage;
+  const interactiveResponse = msg?.message?.interactiveResponseMessage;
   
-  if (!buttonsResponse && !listResponse) return false;
+  // singleSelectReply can be in listResponse or interactiveResponse
+  const singleSelectReply = listResponse?.singleSelectReply || interactiveResponse?.singleSelectReply;
+  
+  if (!buttonsResponse && !listResponse && !interactiveResponse) return false;
 
   // Get selected ID
   const selectedId = 
     (buttonsResponse?.selectedButtonId) || 
-    (listResponse?.singleSelectReply?.selectedRowId);
+    (singleSelectReply?.selectedRowId);
     
   if (!selectedId) return false;
 
@@ -250,7 +255,8 @@ logger.info({
   msgType: msg?.message ? Object.keys(msg.message).join(',') : 'none',
   hasButtons: !!buttonsResponse,
   hasList: !!listResponse,
+  hasInteractive: !!interactiveResponse,
   selectedButtonId: buttonsResponse?.selectedButtonId,
-  selectedRowId: listResponse?.singleSelectReply?.selectedRowId
+  selectedRowId: (listResponse?.singleSelectReply || interactiveResponse?.singleSelectReply)?.selectedRowId
 }, 'button response received');
 ```
