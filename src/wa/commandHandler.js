@@ -11,7 +11,6 @@ import {
   setMode,
   getTriggers,
   setTriggers,
-  clearSettings,
   getStats,
   getTopUsers,
   getLlm2Model,
@@ -160,8 +159,6 @@ async function handleReset({ chatId, chatType, senderIsAdmin, senderIsOwner, con
     } catch (err) { /* ignore */ }
     return;
   }
-
-  clearSettings(chatId);
 
   wsClient.send({ type: 'clear_history', chatId });
 
@@ -329,7 +326,7 @@ async function handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, send
 
   if (!isPrivate && !senderIsOwner && !senderIsAdmin) {
     try {
-      await sock.sendMessage(chatId, { text: 'Only the bot owner or group admins can change the mode.' });
+      await sock.sendMessage(chatId, { text: 'Only group admins can change the mode.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -369,7 +366,7 @@ async function handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, s
 
   if (!isPrivate && !senderIsOwner && !senderIsAdmin) {
     try {
-      await sock.sendMessage(chatId, { text: 'Only the bot owner or group admins can change triggers.' });
+      await sock.sendMessage(chatId, { text: 'Only group admins can change triggers.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -715,11 +712,11 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
 async function handleSettings({ chatId, chatType, senderId, senderIsAdmin, senderIsOwner, args }) {
   const sock = getSock();
   const isPrivate = chatType === 'private';
-  const canUse = isPrivate ? senderIsOwner : senderIsAdmin;
+  const canUse = isPrivate || senderIsOwner || senderIsAdmin;
 
   if (!canUse) {
     try {
-      await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can access settings.' });
+      await sock.sendMessage(chatId, { text: 'Only group admins can access settings.' });
     } catch (err) { /* ignore */ }
     return;
   }
