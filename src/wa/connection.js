@@ -183,6 +183,7 @@ async function setDefaultModel(sock, chatId, modelId) {
   const allModels = getAllModels();
   const minOrder = Math.min(...allModels.map((m) => m.sortOrder));
   updateModel(modelId, { sortOrder: minOrder - 1 });
+  wsClient.send({ type: 'invalidate_default_model' });
   await sock.sendMessage(chatId, { text: `Model "${model.displayName}" set as default.` });
 }
 
@@ -338,6 +339,7 @@ async function startWhatsApp() {
           return true;
         }
         setLlm2Model(chatId, modelId);
+        wsClient.send({ type: 'invalidate_llm2_model', chatId });
         const models = getAllActiveModels();
         const model = models.find((m) => m.modelId === modelId);
         const displayName = model?.displayName || modelId;

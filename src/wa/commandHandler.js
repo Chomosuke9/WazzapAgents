@@ -667,6 +667,9 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
       const [modelId, displayName, ...descParts] = subArgs;
       const description = descParts.join(' ');
       const success = addModel(modelId, displayName, description);
+      if (success) {
+        wsClient.send({ type: 'invalidate_default_model' });
+      }
       try {
         await sock.sendMessage(chatId, { text: success ? `Model "${displayName}" added.` : `Model "${modelId}" already exists.` });
       } catch (err) { /* ignore */ }
@@ -693,6 +696,9 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
         }
       }
       const success = updateModel(modelId, updates);
+      if (success) {
+        wsClient.send({ type: 'invalidate_default_model' });
+      }
       try {
         await sock.sendMessage(chatId, { text: success ? `Model "${modelId}" updated.` : `Model "${modelId}" not found.` });
       } catch (err) { /* ignore */ }
@@ -709,6 +715,9 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
       }
       const [modelId] = subArgs;
       const success = deleteModel(modelId);
+      if (success) {
+        wsClient.send({ type: 'invalidate_default_model' });
+      }
       try {
         await sock.sendMessage(chatId, { text: success ? `Model "${modelId}" deleted.` : `Model "${modelId}" not found.` });
       } catch (err) { /* ignore */ }

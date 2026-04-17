@@ -339,6 +339,26 @@ def get_all_models() -> list[dict]:
   ]
 
 
+def clear_llm2_model_cache(chat_id: Optional[str] = None) -> None:
+  """Clear the LLM2 model cache. If chat_id is provided, only that chat is invalidated. Otherwise, all chats are cleared."""
+  global _llm2_model_cache
+  with _cache_lock:
+    if chat_id is not None:
+      if chat_id in _llm2_model_cache:
+        del _llm2_model_cache[chat_id]
+        logger.debug("Cleared LLM2 model cache for chat_id=%s", chat_id)
+    else:
+      _llm2_model_cache.clear()
+      logger.debug("Cleared all LLM2 model caches")
+
+
+def clear_default_llm2_model_cache() -> None:
+  """Clear the default LLM2 model cache."""
+  global _default_llm2_model_cache
+  _default_llm2_model_cache = None
+  logger.debug("Cleared default LLM2 model cache")
+
+
 def add_model(model_id: str, display_name: str, description: str = "", sort_order: Optional[int] = None) -> bool:
   """Add a new model. Returns False if model_id already exists."""
   global _default_llm2_model_cache

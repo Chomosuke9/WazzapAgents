@@ -33,6 +33,8 @@ try:
     clear_mutes as db_clear_mutes,
     get_mute_remaining_minutes as db_get_mute_remaining,
     set_permission as db_set_permission,
+    clear_llm2_model_cache as db_clear_llm2_model_cache,
+    clear_default_llm2_model_cache as db_clear_default_llm2_model_cache,
   )
   from .dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop
   from .stickers import resolve_sticker
@@ -107,6 +109,8 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     clear_mutes as db_clear_mutes,
     get_mute_remaining_minutes as db_get_mute_remaining,
     set_permission as db_set_permission,
+    clear_llm2_model_cache as db_clear_llm2_model_cache,
+    clear_default_llm2_model_cache as db_clear_default_llm2_model_cache,
   )
   from bridge.dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop  # type: ignore
   from bridge.stickers import resolve_sticker  # type: ignore
@@ -1159,6 +1163,19 @@ async def handle_socket(ws):
         if clear_chat_id and clear_chat_id in per_chat:
           per_chat[clear_chat_id].clear()
           logger.info("History cleared for chat_id=%s via clear_history message", clear_chat_id)
+        continue
+
+      # Handle invalidate_llm2_model message from Node.js (after model change)
+      if event_type == "invalidate_llm2_model":
+        clear_chat_id = event.get("chatId")
+        db_clear_llm2_model_cache(clear_chat_id)
+        logger.info("LLM2 model cache cleared for chat_id=%s via invalidate_llm2_model message", clear_chat_id)
+        continue
+
+      # Handle invalidate_default_model message from Node.js (after modelcfg changes)
+      if event_type == "invalidate_default_model":
+        db_clear_default_llm2_model_cache()
+        logger.info("Default LLM2 model cache cleared via invalidate_default_model message")
         continue
 
       if event_type != "incoming_message":
