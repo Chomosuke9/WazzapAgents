@@ -531,6 +531,12 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
       description: m.description || `ID: ${m.modelId}`,
     }));
 
+    const editModelRows = getAllModels().map((m) => ({
+      id: `/modelcfg edit ${m.modelId}`,
+      title: m.displayName + (m.isActive ? '' : ' (inactive)'),
+      description: m.description || `ID: ${m.modelId}`,
+    }));
+
     const buttons = [
       {
         name: 'single_select',
@@ -543,17 +549,13 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
         }),
       },
       {
-        name: 'quick_reply',
+        name: 'single_select',
         buttonParamsJson: JSON.stringify({
-          display_text: 'Add Model',
-          id: 'modelcfg:add',
-        }),
-      },
-      {
-        name: 'quick_reply',
-        buttonParamsJson: JSON.stringify({
-          display_text: 'Edit Model',
-          id: 'modelcfg:edit',
+          title: 'Edit Model',
+          sections: [{
+            title: 'Select Model to Edit',
+            rows: editModelRows,
+          }],
         }),
       },
       {
@@ -729,10 +731,17 @@ async function handleSettings({ chatId, chatType, senderId, senderIsAdmin, sende
 
   const buttons = [
     {
-      name: 'quick_reply',
+      name: 'single_select',
       buttonParamsJson: JSON.stringify({
-        display_text: 'Get Prompt',
-        id: '/prompt',
+        title: 'Change Mode',
+        sections: [{
+          title: 'Select Mode',
+          rows: [
+            { id: '/mode auto', title: 'Auto', description: 'LLM decides when to respond' },
+            { id: '/mode prefix', title: 'Prefix', description: 'Only responds when triggered' },
+            { id: '/mode hybrid', title: 'Hybrid', description: 'Prefix first, fallback to auto' },
+          ],
+        }],
       }),
     },
     {
@@ -760,6 +769,19 @@ async function handleSettings({ chatId, chatType, senderId, senderIsAdmin, sende
             { id: '/permission 1', title: 'Level 1 - Delete', description: 'Can delete' },
             { id: '/permission 2', title: 'Level 2 - Mute', description: 'Delete & mute' },
             { id: '/permission 3', title: 'Level 3 - All', description: 'Delete, mute & kick' },
+          ],
+        }],
+      }),
+    },
+    {
+      name: 'single_select',
+      buttonParamsJson: JSON.stringify({
+        title: 'Misc',
+        sections: [{
+          title: 'Misc Options',
+          rows: [
+            { id: '/prompt', title: 'Get Prompt', description: 'View current prompt' },
+            { id: '/reset', title: 'Reset Chat', description: 'Clear bot memory for this chat' },
           ],
         }],
       }),
