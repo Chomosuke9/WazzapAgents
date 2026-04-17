@@ -304,7 +304,20 @@ async function handlePermission({ chatId, chatType, senderIsAdmin, senderIsOwner
 
 async function handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args }) {
   const sock = getSock();
-  const isPrivate = chatType === 'private';
+
+  if (chatType === 'private') {
+    try {
+      await sock.sendMessage(chatId, { text: '/mode can only be used in group chats.' });
+    } catch (err) { /* ignore */ }
+    return;
+  }
+
+  if (!senderIsOwner && !senderIsAdmin) {
+    try {
+      await sock.sendMessage(chatId, { text: 'Only group admins can change the mode.' });
+    } catch (err) { /* ignore */ }
+    return;
+  }
 
   if (!args) {
     const current = getMode(chatId);
@@ -320,13 +333,6 @@ async function handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, send
           '_hybrid_ = checks prefix triggers first, falls back to auto (LLM1). If a prefix trigger arrives while LLM1 is running, LLM1 is cancelled and bot responds immediately'
         ),
       });
-    } catch (err) { /* ignore */ }
-    return;
-  }
-
-  if (!isPrivate && !senderIsOwner && !senderIsAdmin) {
-    try {
-      await sock.sendMessage(chatId, { text: 'Only group admins can change the mode.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -347,7 +353,20 @@ async function handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, send
 
 async function handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args }) {
   const sock = getSock();
-  const isPrivate = chatType === 'private';
+
+  if (chatType === 'private') {
+    try {
+      await sock.sendMessage(chatId, { text: '/trigger can only be used in group chats.' });
+    } catch (err) { /* ignore */ }
+    return;
+  }
+
+  if (!senderIsOwner && !senderIsAdmin) {
+    try {
+      await sock.sendMessage(chatId, { text: 'Only group admins can change triggers.' });
+    } catch (err) { /* ignore */ }
+    return;
+  }
 
   if (!args) {
     const current = getTriggers(chatId);
@@ -361,13 +380,6 @@ async function handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, s
         await sock.sendMessage(chatId, { text: 'No triggers enabled. Bot won\'t respond in prefix mode.\nUse /trigger all to enable all triggers.' });
       } catch (err) { /* ignore */ }
     }
-    return;
-  }
-
-  if (!isPrivate && !senderIsOwner && !senderIsAdmin) {
-    try {
-      await sock.sendMessage(chatId, { text: 'Only group admins can change triggers.' });
-    } catch (err) { /* ignore */ }
     return;
   }
 
