@@ -99,14 +99,13 @@ async function handleHelp({ chatId }) {
   }
 }
 
-async function handlePrompt({ chatId, chatType, senderIsAdmin, senderIsOwner, args }) {
+async function handlePrompt({ chatId, chatType, senderIsAdmin, args }) {
   const sock = getSock();
   const isPrivate = chatType === 'private';
-  const canUse = isPrivate ? senderIsOwner : senderIsAdmin;
 
-  if (!canUse) {
+  if (!isPrivate && !senderIsAdmin) {
     try {
-      await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can use /prompt.' });
+      await sock.sendMessage(chatId, { text: 'Only group admins can use /prompt.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -147,14 +146,13 @@ async function handlePrompt({ chatId, chatType, senderIsAdmin, senderIsOwner, ar
   } catch (err) { /* ignore */ }
 }
 
-async function handleReset({ chatId, chatType, senderIsAdmin, senderIsOwner, contextMsgId }) {
+async function handleReset({ chatId, chatType, senderIsAdmin, contextMsgId }) {
   const sock = getSock();
   const isPrivate = chatType === 'private';
-  const canUse = isPrivate ? senderIsOwner : senderIsAdmin;
 
-  if (!canUse) {
+  if (!isPrivate && !senderIsAdmin) {
     try {
-      await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can use /reset.' });
+      await sock.sendMessage(chatId, { text: 'Only group admins can use /reset.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -248,7 +246,7 @@ async function downloadMediaContent(content, contentType, messageId) {
   }
 }
 
-async function handlePermission({ chatId, chatType, senderIsAdmin, senderIsOwner, botIsAdmin, args }) {
+async function handlePermission({ chatId, chatType, senderIsAdmin, botIsAdmin, args }) {
   const sock = getSock();
 
   if (chatType === 'private') {
@@ -820,15 +818,15 @@ async function handleCommandListener(msg, context) {
       return true;
 
     case 'prompt':
-      await handlePrompt({ chatId, chatType, senderIsAdmin, senderIsOwner, args });
+      await handlePrompt({ chatId, chatType, senderIsAdmin, args });
       return true;
 
     case 'reset':
-      await handleReset({ chatId, chatType, senderIsAdmin, senderIsOwner, contextMsgId });
+      await handleReset({ chatId, chatType, senderIsAdmin, contextMsgId });
       return true;
 
     case 'permission':
-      await handlePermission({ chatId, chatType, senderIsAdmin, senderIsOwner, botIsAdmin, args });
+      await handlePermission({ chatId, chatType, senderIsAdmin, botIsAdmin, args });
       return true;
 
     case 'mode':
