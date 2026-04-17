@@ -472,7 +472,7 @@ async function handleDashboard({ chatId }) {
 async function handleModel({ chatId, chatType, senderIsAdmin, senderIsOwner, args }) {
   const sock = getSock();
   const isPrivate = chatType === 'private';
-  const canUse = isPrivate ? senderIsOwner : senderIsAdmin;
+  const canUse = isPrivate || senderIsOwner || senderIsAdmin;
 
   if (!canUse) {
     try {
@@ -492,6 +492,7 @@ async function handleModel({ chatId, chatType, senderIsAdmin, senderIsOwner, arg
   const currentModelId = getLlm2Model(chatId);
   const defaultModel = getDefaultLlm2Model();
   const activeModelId = currentModelId || defaultModel?.modelId || null;
+  const activeModel = models.find((m) => m.modelId === activeModelId);
 
   const sections = models.map((m) => ({
     title: m.displayName,
@@ -511,7 +512,7 @@ async function handleModel({ chatId, chatType, senderIsAdmin, senderIsOwner, arg
           sections,
         }),
       },
-    ], { footer: 'Model saat ini: ' + (activeModelId || 'default') });
+    ], { footer: 'Model saat ini: ' + (activeModel?.displayName || 'default') });
   } catch (err) {
     logger.warn({ err, chatId }, 'failed sending /model interactive');
     try {
@@ -898,6 +899,7 @@ async function handleCommandListener(msg, context) {
       await handleModelcfg({ chatId, senderId, senderIsOwner, args });
       return true;
 
+    case 'setting':
     case 'settings':
       await handleSettings({ chatId, chatType, senderId, senderIsAdmin, senderIsOwner, args });
       return true;

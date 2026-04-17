@@ -203,6 +203,7 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
   const botMentioned = botMentionedByJid || botMentionedByText;
   const quotedSenderId = normalizeJid(quoted?.senderId) || quoted?.senderId || null;
   const repliedToBot = Boolean(quotedSenderId && botAliases.has(quotedSenderId));
+  const replyToInteractive = repliedToBot && quoted?.type === 'interactiveMessage';
 
   const attachments = [];
   const mediaKinds = [
@@ -250,7 +251,7 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
     botIsAdmin: Boolean(group?.botIsAdmin),
     botIsSuperAdmin: Boolean(group?.botIsSuperAdmin),
     fromMe,
-    contextOnly: fromMe || contentType === 'reactionMessage',
+    contextOnly: fromMe || contentType === 'reactionMessage' || replyToInteractive,
     triggerLlm1: false,
     timestampMs: Number(msg.messageTimestamp) * 1000,
     messageType: contentType,
