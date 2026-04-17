@@ -278,27 +278,28 @@ async function startWhatsApp() {
     const listResponse = msg?.message?.listResponseMessage;
     const interactiveResponse = msg?.message?.interactiveResponseMessage;
     
-    const singleSelectReply = listResponse?.singleSelectReply || interactiveResponse?.singleSelectReply;
+    const nativeFlowParams = (() => {
+      try {
+        const paramsStr = interactiveResponse?.nativeFlowResponseMessage?.paramsJson;
+        if (paramsStr) return JSON.parse(paramsStr);
+      } catch {}
+      return null;
+    })();
+    const selectedId = (buttonsResponse?.selectedButtonId) || 
+                       (listResponse?.singleSelectReply?.selectedRowId) ||
+                       (nativeFlowParams?.id);
     
     logger.info({ 
       chatId, 
       msgKey: msg?.key?.id,
       msgType: msg?.message ? Object.keys(msg.message).join(',') : 'none',
-      hasButtons: !!buttonsResponse,
-      hasList: !!listResponse,
-      hasInteractive: !!interactiveResponse,
-      buttonsKeys: buttonsResponse ? Object.keys(buttonsResponse).join(',') : 'none',
-      listKeys: listResponse ? Object.keys(listResponse).join(',') : 'none',
-      interactiveKeys: interactiveResponse ? Object.keys(interactiveResponse).join(',') : 'none',
-      selectedButtonId: buttonsResponse?.selectedButtonId,
-      singleSelectReply: singleSelectReply,
-      singleSelectReplyKeys: singleSelectReply ? Object.keys(singleSelectReply).join(',') : 'none',
-      singleSelectReplyRowId: singleSelectReply?.selectedRowId,
+      buttonsResponse: buttonsResponse?.selectedButtonId,
+      listRowId: listResponse?.singleSelectReply?.selectedRowId,
+      nativeFlowParams: nativeFlowParams,
+      selectedId,
     }, 'handleButtonResponse check');
     
-    if (!buttonsResponse && !listResponse && !interactiveResponse) return false;
-
-    const selectedId = (buttonsResponse?.selectedButtonId) || (singleSelectReply?.selectedRowId);
+    if (!selectedId) return false;
     logger.info({ selectedId, chatId }, 'button selected');
     
     if (!selectedId) return false;
