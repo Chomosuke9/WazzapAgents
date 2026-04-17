@@ -277,12 +277,23 @@ async function startWhatsApp() {
     const buttonsResponse = msg?.message?.buttonsResponseMessage;
     const listResponse = msg?.message?.listResponseMessage;
     
-    logger.debug({ chatId, hasButtons: !!buttonsResponse, hasList: !!listResponse, msgType: Object.keys(msg?.message || {}).join(',') }, 'handleButtonResponse check');
+    logger.info({ 
+      chatId, 
+      msgKey: msg?.key?.id,
+      msgType: msg?.message ? Object.keys(msg.message).join(',') : 'none',
+      hasButtons: !!buttonsResponse,
+      hasList: !!listResponse,
+      buttonsKeys: buttonsResponse ? Object.keys(buttonsResponse).join(',') : 'none',
+      listKeys: listResponse ? Object.keys(listResponse).join(',') : 'none',
+      selectedButtonId: buttonsResponse?.selectedButtonId,
+      singleSelectReply: listResponse?.singleSelectReply,
+      singleSelectReplyKeys: listResponse?.singleSelectReply ? Object.keys(listResponse.singleSelectReply).join(',') : 'none',
+    }, 'handleButtonResponse check');
     
     if (!buttonsResponse && !listResponse) return false;
 
     const selectedId = (buttonsResponse?.selectedButtonId) || (listResponse?.singleSelectReply?.selectedRowId);
-    logger.debug({ selectedId, chatId }, 'button selected');
+    logger.info({ selectedId, chatId }, 'button selected');
     
     if (!selectedId) return false;
 
@@ -443,7 +454,10 @@ async function startWhatsApp() {
 
   // Listener 1: Command handler (non-blocking, instant response)
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify' || !Array.isArray(messages) || messages.length === 0) return;
+    logger.debug({ type, messageCount: messages?.length }, 'messages.upsert received');
+    
+    if (!Array.isArray(messages) || messages.length === 0) return;
+    
     for (const msg of messages) {
       try {
         const chatId = msg?.key?.remoteJid;
@@ -453,6 +467,8 @@ async function startWhatsApp() {
 
         const fromId = msg.key.participant || msg.key.remoteJid;
         const senderId = normalizeJid(fromId) || fromId;
+
+        logger.info({ chatId, senderId, msgKey: msg?.key?.id, type, msgContentType: msg.message ? Object.keys(msg.message).join(',') : 'none' }, 'message received');
 
         if (await handleButtonResponse(msg, chatId, senderId)) {
           continue;
