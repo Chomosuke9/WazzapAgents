@@ -292,6 +292,12 @@ async function startWhatsApp() {
         const { handleCommandListener } = await import('./commandHandler.js');
         const slashCommand = parseSlashCommand(selectedId);
         if (slashCommand) {
+          logger.debug({ selectedId, slashCommand, chatId }, 'button click -> slash command');
+          const fakeMsg = {
+            key: { ...msg.key, id: `btn_${Date.now()}` },
+            message: { conversation: selectedId },
+            pushName: msg.pushName,
+          };
           const context = {
             slashCommand,
             chatId,
@@ -303,12 +309,12 @@ async function startWhatsApp() {
             senderDisplay: msg.pushName || '',
             botIsAdmin: group?.botIsAdmin || false,
             botIsSuperAdmin: group?.botIsSuperAdmin || false,
-            contextMsgId: msg.key.id,
+            contextMsgId: null,
             text: selectedId,
             group,
-            msg,
+            msg: fakeMsg,
           };
-          await handleCommandListener(msg, context);
+          await handleCommandListener(fakeMsg, context);
         }
         return true;
       }
