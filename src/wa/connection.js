@@ -86,7 +86,7 @@ async function showModelSelectionForEdit(sock, chatId) {
     {
       title: 'Select Model to Edit',
       rows: models.map((m) => ({
-        rowId: `/modelcfg edit ${m.modelId}`,
+        id: `/modelcfg edit ${m.modelId}`,
         title: m.displayName + (m.isActive ? '' : ' (inactive)'),
         description: m.description || `ID: ${m.modelId}`,
       })),
@@ -159,7 +159,7 @@ async function showModelSelectionForDefault(sock, chatId) {
     {
       title: 'Select Default Model',
       rows: models.map((m) => ({
-        rowId: `/modelcfg default ${m.modelId}`,
+        id: `/modelcfg default ${m.modelId}`,
         title: m.displayName,
         description: m.description || `ID: ${m.modelId}`,
       })),
@@ -281,35 +281,16 @@ async function startWhatsApp() {
     const nativeFlowParams = (() => {
       try {
         const paramsStr = interactiveResponse?.nativeFlowResponseMessage?.paramsJson;
-        logger.debug({ chatId, paramsStr }, 'nativeFlowResponseMessage paramsJson');
         if (paramsStr) return JSON.parse(paramsStr);
-      } catch (e) {
-        logger.debug({ chatId, err: e.message }, 'nativeFlowParams parse error');
-      }
+      } catch {}
       return null;
     })();
     const selectedId = (buttonsResponse?.selectedButtonId) || 
                        (listResponse?.singleSelectReply?.selectedRowId) ||
                        (nativeFlowParams?.id);
     
-    logger.info({ 
-      chatId, 
-      msgKey: msg?.key?.id,
-      msgType: msg?.message ? Object.keys(msg.message).join(',') : 'none',
-      buttonsResponse: buttonsResponse?.selectedButtonId,
-      listRowId: listResponse?.singleSelectReply?.selectedRowId,
-      nativeFlowParams: nativeFlowParams,
-      selectedId,
-    }, 'handleButtonResponse check');
-    
-    if (!selectedId) {
-      logger.debug({ chatId, msgKey: msg?.key?.id, rawMsg: JSON.stringify(msg.message) }, 'no selectedId found');
-    }
-    
     if (!selectedId) return false;
     logger.info({ selectedId, chatId }, 'button selected');
-    
-    if (!selectedId) return false;
 
     const isGroup = chatId.endsWith('@g.us');
     const group = isGroup ? (getCachedGroupMetadata(chatId) || defaultGroupContext(chatId)) : null;
