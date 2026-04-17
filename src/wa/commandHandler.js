@@ -481,22 +481,22 @@ async function handleModel({ chatId, chatType, senderIsAdmin, senderIsOwner, arg
   const sections = models.map((m) => ({
     title: m.displayName,
     rows: [{
+      rowId: `/model ${m.modelId}`,
       title: m.displayName + (m.modelId === activeModelId ? ' ✓' : ''),
       description: m.description || '',
-      id: `model_select:${m.modelId}`,
     }],
   }));
 
   try {
-    await sendNativeFlow(sock, chatId, 'Pilih Model LLM', [
+    await sendNativeFlow(sock, chatId, 'Select LLM Model', [
       {
         name: 'single_select',
         buttonParamsJson: JSON.stringify({
-          title: 'Pilih Model',
+          title: 'Select Model',
           sections,
         }),
       },
-    ], { footer: 'Model saat ini: ' + (activeModelId || 'default') });
+    ], { footer: 'Current: ' + (activeModelId || 'default') });
   } catch (err) {
     logger.warn({ err, chatId }, 'failed sending /model interactive');
     try {
@@ -519,28 +519,46 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
   const subArgs = parts.slice(1);
 
   if (!subcommand) {
-    const sections = [
+    const buttons = [
       {
-        title: 'Manajemen Model',
-        rows: [
-          { title: 'List Models', description: 'Lihat semua model', id: 'modelcfg:list' },
-          { title: 'Add Model', description: 'Tambah model baru', id: 'modelcfg:add' },
-          { title: 'Edit Model', description: 'Edit model yang ada', id: 'modelcfg:edit' },
-          { title: 'Set Default', description: 'Jadikan model default', id: 'modelcfg:default' },
-          { title: 'Remove Model', description: 'Hapus model', id: 'modelcfg:remove_menu' },
-        ],
+        name: 'quick_reply',
+        buttonParamsJson: JSON.stringify({
+          display_text: 'List Models',
+          id: '/modelcfg list',
+        }),
+      },
+      {
+        name: 'quick_reply',
+        buttonParamsJson: JSON.stringify({
+          display_text: 'Add Model',
+          id: '/modelcfg add',
+        }),
+      },
+      {
+        name: 'quick_reply',
+        buttonParamsJson: JSON.stringify({
+          display_text: 'Edit Model',
+          id: '/modelcfg edit',
+        }),
+      },
+      {
+        name: 'quick_reply',
+        buttonParamsJson: JSON.stringify({
+          display_text: 'Set Default',
+          id: '/modelcfg default',
+        }),
+      },
+      {
+        name: 'quick_reply',
+        buttonParamsJson: JSON.stringify({
+          display_text: 'Remove Model',
+          id: '/modelcfg remove_menu',
+        }),
       },
     ];
+
     try {
-      await sendNativeFlow(sock, chatId, 'Model Configuration', [
-        {
-          name: 'single_select',
-          buttonParamsJson: JSON.stringify({
-            title: 'Pengaturan Model',
-            sections,
-          }),
-        },
-      ], { footer: 'Bot Owner Only' });
+      await sendNativeFlow(sock, chatId, 'Model Configuration', buttons, { footer: 'Bot Owner Only' });
     } catch (err) {
       logger.warn({ err, chatId }, 'failed sending /modelcfg menu');
       try {
@@ -562,9 +580,9 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
       {
         title: 'Select Model to Remove',
         rows: models.map((m) => ({
+          rowId: `/modelcfg remove ${m.modelId}`,
           title: m.displayName + (m.isActive ? '' : ' (inactive)'),
           description: m.description || `ID: ${m.modelId}`,
-          id: `modelcfg_remove:${m.modelId}`,
         })),
       },
     ];
@@ -573,11 +591,11 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
         {
           name: 'single_select',
           buttonParamsJson: JSON.stringify({
-            title: 'Hapus Model',
+            title: 'Remove Model',
             sections,
           }),
         },
-      ], { footer: 'Pilih model untuk dihapus' });
+      ], { footer: 'Select a model to remove' });
     } catch (err) {
       logger.warn({ err, chatId }, 'failed sending /modelcfg remove menu');
       try {
@@ -692,46 +710,67 @@ async function handleSettings({ chatId, chatType, senderId, senderIsAdmin, sende
   const activeModelId = currentModelId || defaultModel?.modelId;
   const activeModelName = (activeModelId ? getAllModels().find((m) => m.modelId === activeModelId)?.displayName : null) || defaultModel?.displayName || 'default';
 
-  const currentPrompt = getPrompt(chatId);
   const currentPermission = getPermission(chatId);
   const currentMode = getMode(chatId);
 
-  const permissionLabels = ['0 (forbidden)', '1 (delete)', '2 (delete & mute)', '3 (delete, mute & kick)'];
+  const permissionLabels = ['Forbidden', 'Delete only', 'Delete & mute', 'All moderation'];
   const permissionLabel = permissionLabels[currentPermission] || String(currentPermission);
 
-  const sections = [
+  const buttons = [
     {
-      title: 'Pengaturan Chat',
-      rows: [
-        {
-          title: '📋 Edit Prompt',
-          description: currentPrompt ? (currentPrompt.slice(0, 50) + '...') : '(default)',
-          id: 'settings:prompt',
-        },
-        {
-          title: '🤖 Ganti Model',
-          description: `Model saat ini: ${activeModelName}`,
-          id: 'settings:model',
-        },
-        {
-          title: '🔐 Atur Permission',
-          description: `Level ${currentPermission}: ${permissionLabel}`,
-          id: 'settings:permission',
-        },
-      ],
+      name: 'quick_reply',
+      buttonParamsJson: JSON.stringify({
+        display_text: 'Get Prompt',
+        id: '/prompt',
+      }),
+    },
+    {
+      name: 'single_select',
+      buttonParamsJson: JSON.stringify({
+        title: 'Change Mode',
+        sections: [{
+          title: 'Select Mode',
+          rows: [
+            { rowId: '/mode auto', title: 'Auto', description: 'LLM decides when to respond' },
+            { rowId: '/mode prefix', title: 'Prefix', description: 'Only responds when triggered' },
+            { rowId: '/mode hybrid', title: 'Hybrid', description: 'Prefix first, then auto' },
+          ],
+        }],
+      }),
+    },
+    {
+      name: 'single_select',
+      buttonParamsJson: JSON.stringify({
+        title: 'Change Model',
+        sections: [{
+          title: 'Select Model',
+          rows: getAllActiveModels().map((m) => ({
+            rowId: `/model ${m.modelId}`,
+            title: m.displayName,
+            description: m.description || '',
+          })),
+        }],
+      }),
+    },
+    {
+      name: 'single_select',
+      buttonParamsJson: JSON.stringify({
+        title: 'Set Permission',
+        sections: [{
+          title: 'Permission Level',
+          rows: [
+            { rowId: '/permission 0', title: 'Level 0 - Forbidden', description: 'No moderation allowed' },
+            { rowId: '/permission 1', title: 'Level 1 - Delete', description: 'Can delete messages' },
+            { rowId: '/permission 2', title: 'Level 2 - Mute', description: 'Can delete & mute' },
+            { rowId: '/permission 3', title: 'Level 3 - All', description: 'Can delete, mute & kick' },
+          ],
+        }],
+      }),
     },
   ];
 
   try {
-    await sendNativeFlow(sock, chatId, '⚙️ Pengaturan Chat', [
-      {
-        name: 'single_select',
-        buttonParamsJson: JSON.stringify({
-          title: 'Pengaturan',
-          sections,
-        }),
-      },
-    ], { footer: `Mode: ${currentMode}` });
+    await sendNativeFlow(sock, chatId, `⚙️ Chat Settings\n\nCurrent:\n- Mode: ${currentMode}\n- Model: ${activeModelName}\n- Permission: Level ${currentPermission} (${permissionLabel})`, buttons, { footer: 'Settings' });
   } catch (err) {
     logger.warn({ err, chatId }, 'failed sending /settings interactive');
     try {

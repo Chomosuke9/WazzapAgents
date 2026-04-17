@@ -86,16 +86,16 @@ async function showModelSelectionForEdit(sock, chatId) {
     {
       title: 'Select Model to Edit',
       rows: models.map((m) => ({
+        rowId: `/modelcfg edit ${m.modelId}`,
         title: m.displayName + (m.isActive ? '' : ' (inactive)'),
         description: m.description || `ID: ${m.modelId}`,
-        id: `modelcfg_edit:${m.modelId}`,
       })),
     },
   ];
-  await sendNativeFlow(sock, chatId, '✏️ Edit Model', [
+  await sendNativeFlow(sock, chatId, 'Edit Model', [
     {
       name: 'single_select',
-      buttonParamsJson: JSON.stringify({ title: 'Pilih Model', sections }),
+      buttonParamsJson: JSON.stringify({ title: 'Select Model', sections }),
     },
   ], { footer: 'Select a model to edit' });
 }
@@ -110,7 +110,7 @@ async function showModelEditForm(sock, chatId, senderId, modelId) {
 
   pendingForms.set(chatId, { type: 'edit_model', modelId, senderId });
 
-  const helpText = `✏️ Edit Model: ${model.displayName}
+  const helpText = `Edit Model: ${model.displayName}
 
 Current values:
 - name=${model.displayName}
@@ -132,7 +132,7 @@ Or send "cancel" to cancel.`;
 async function showModelAddForm(sock, chatId, senderId) {
   pendingForms.set(chatId, { type: 'add_model', senderId });
 
-  const helpText = `➕ Add New Model
+  const helpText = `Add New Model
 
 Send the following format:
 model_id
@@ -159,16 +159,16 @@ async function showModelSelectionForDefault(sock, chatId) {
     {
       title: 'Select Default Model',
       rows: models.map((m) => ({
+        rowId: `/modelcfg default ${m.modelId}`,
         title: m.displayName,
         description: m.description || `ID: ${m.modelId}`,
-        id: `modelcfg_default:${m.modelId}`,
       })),
     },
   ];
-  await sendNativeFlow(sock, chatId, '⭐ Set Default Model', [
+  await sendNativeFlow(sock, chatId, 'Set Default Model', [
     {
       name: 'single_select',
-      buttonParamsJson: JSON.stringify({ title: 'Pilih Default', sections }),
+      buttonParamsJson: JSON.stringify({ title: 'Select Default', sections }),
     },
   ], { footer: 'Model with smallest order will be used as default' });
 }
@@ -288,6 +288,31 @@ async function startWhatsApp() {
     const senderIsOwner = isOwnerJid(senderId);
 
     try {
+      if (selectedId.startsWith('/')) {
+        const { handleCommandListener } = await import('./commandHandler.js');
+        const slashCommand = parseSlashCommand(selectedId);
+        if (slashCommand) {
+          const context = {
+            slashCommand,
+            chatId,
+            chatType: isGroup ? 'group' : 'private',
+            senderId,
+            senderIsAdmin,
+            senderIsOwner,
+            senderRole,
+            senderDisplay: msg.pushName || '',
+            botIsAdmin: group?.botIsAdmin || false,
+            botIsSuperAdmin: group?.botIsSuperAdmin || false,
+            contextMsgId: msg.key.id,
+            text: selectedId,
+            group,
+            msg,
+          };
+          await handleCommandListener(msg, context);
+        }
+        return true;
+      }
+
       if (selectedId.startsWith('model_select:')) {
         const modelId = selectedId.replace('model_select:', '');
         const canUse = isGroup ? senderIsAdmin : senderIsOwner;
@@ -397,46 +422,6 @@ async function startWhatsApp() {
           return true;
         }
 
-        return true;
-      }
-
-      if (selectedId.startsWith('modelcfg_remove:')) {
-        if (!isOwnerJid(senderId)) {
-          await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
-          return true;
-        }
-        const modelId = selectedId.replace('modelcfg_remove:', '');
-        const sections = [
-          {
-            title: 'Konfirmasi Hapus',
-            rows: [
-              { title: 'Ya, Hapus', description: `Hapus model ${modelId}`, id: `modelcfg_confirm_remove:${modelId}` },
-              { title: 'Batal', description: 'Batalkan operasi', id: 'modelcfg_cancel_remove' },
-            ],
-          },
-        ];
-        await sendNativeFlow(sock, chatId, `⚠️ Hapus "${modelId}"?`, [
-          {
-            name: 'single_select',
-            buttonParamsJson: JSON.stringify({ title: 'Konfirmasi', sections }),
-          },
-        ], { footer: 'Tindakan ini tidak dapat dibatalkan' });
-        return true;
-      }
-
-      if (selectedId === 'modelcfg_cancel_remove') {
-        await sock.sendMessage(chatId, { text: 'Operasi dibatalkan.' });
-        return true;
-      }
-
-      if (selectedId.startsWith('modelcfg_confirm_remove:')) {
-        if (!isOwnerJid(senderId)) {
-          await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
-          return true;
-        }
-        const modelId = selectedId.replace('modelcfg_confirm_remove:', '');
-        const success = deleteModel(modelId);
-        await sock.sendMessage(chatId, { text: success ? `Model "${modelId}" dihapus.` : `Model "${modelId}" tidak ditemukan.` });
         return true;
       }
     } catch (err) {
