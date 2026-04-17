@@ -276,9 +276,14 @@ async function startWhatsApp() {
   async function handleButtonResponse(msg, chatId, senderId) {
     const buttonsResponse = msg?.message?.buttonsResponseMessage;
     const listResponse = msg?.message?.listResponseMessage;
+    
+    logger.debug({ chatId, hasButtons: !!buttonsResponse, hasList: !!listResponse, msgType: Object.keys(msg?.message || {}).join(',') }, 'handleButtonResponse check');
+    
     if (!buttonsResponse && !listResponse) return false;
 
     const selectedId = (buttonsResponse?.selectedButtonId) || (listResponse?.singleSelectReply?.selectedRowId);
+    logger.debug({ selectedId, chatId }, 'button selected');
+    
     if (!selectedId) return false;
 
     const isGroup = chatId.endsWith('@g.us');
@@ -289,10 +294,10 @@ async function startWhatsApp() {
 
     try {
       if (selectedId.startsWith('/')) {
+        logger.info({ selectedId, chatId, senderId }, 'button click -> slash command');
         const { handleCommandListener } = await import('./commandHandler.js');
         const slashCommand = parseSlashCommand(selectedId);
         if (slashCommand) {
-          logger.debug({ selectedId, slashCommand, chatId }, 'button click -> slash command');
           const fakeMsg = {
             key: { ...msg.key, id: `btn_${Date.now()}` },
             message: { conversation: selectedId },

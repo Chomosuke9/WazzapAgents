@@ -725,52 +725,30 @@ async function handleSettings({ chatId, chatType, senderId, senderIsAdmin, sende
       }),
     },
     {
-      name: 'single_select',
+      name: 'quick_reply',
       buttonParamsJson: JSON.stringify({
-        title: 'Change Mode',
-        sections: [{
-          title: 'Select Mode',
-          rows: [
-            { rowId: '/mode auto', title: 'Auto', description: 'LLM decides when to respond' },
-            { rowId: '/mode prefix', title: 'Prefix', description: 'Only responds when triggered' },
-            { rowId: '/mode hybrid', title: 'Hybrid', description: 'Prefix first, then auto' },
-          ],
-        }],
+        display_text: 'Change Mode',
+        id: '/mode',
       }),
     },
     {
-      name: 'single_select',
+      name: 'quick_reply',
       buttonParamsJson: JSON.stringify({
-        title: 'Change Model',
-        sections: [{
-          title: 'Select Model',
-          rows: getAllActiveModels().map((m) => ({
-            rowId: `/model ${m.modelId}`,
-            title: m.displayName,
-            description: m.description || '',
-          })),
-        }],
+        display_text: 'Change Model',
+        id: '/model',
       }),
     },
     {
-      name: 'single_select',
+      name: 'quick_reply',
       buttonParamsJson: JSON.stringify({
-        title: 'Set Permission',
-        sections: [{
-          title: 'Permission Level',
-          rows: [
-            { rowId: '/permission 0', title: 'Level 0 - Forbidden', description: 'No moderation allowed' },
-            { rowId: '/permission 1', title: 'Level 1 - Delete', description: 'Can delete messages' },
-            { rowId: '/permission 2', title: 'Level 2 - Mute', description: 'Can delete & mute' },
-            { rowId: '/permission 3', title: 'Level 3 - All', description: 'Can delete, mute & kick' },
-          ],
-        }],
+        display_text: 'Set Permission',
+        id: '/permission',
       }),
     },
   ];
 
   try {
-    await sendNativeFlow(sock, chatId, `⚙️ Chat Settings\n\nCurrent:\n- Mode: ${currentMode}\n- Model: ${activeModelName}\n- Permission: Level ${currentPermission} (${permissionLabel})`, buttons, { footer: 'Settings' });
+    await sendNativeFlow(sock, chatId, `Chat Settings\n\nCurrent:\n- Mode: ${currentMode}\n- Model: ${activeModelName}\n- Permission: Level ${currentPermission} (${permissionLabel})`, buttons, { footer: 'Click a button to view options' });
   } catch (err) {
     logger.warn({ err, chatId }, 'failed sending /settings interactive');
     try {
