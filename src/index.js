@@ -1,5 +1,6 @@
 import logger from './logger.js';
 import wsClient from './wsClient.js';
+import db from './db.js';
 import {
   startWhatsApp,
   sendOutgoing,
@@ -202,6 +203,7 @@ async function bootstrap() {
     process.exit(1);
   }
 
+  await db.init();
   await startWhatsApp();
 
   wsClient.on('message', async (msg) => {

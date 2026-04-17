@@ -3,8 +3,8 @@
 ## Status: IN PROGRESS
 
 ### Todo List
-- [ ] Migrate `better-sqlite3` → `sql.js` (database broken)
-- [ ] Fix interactive menu submenus (menu-in-menu)
+- [x] Migrate `better-sqlite3` → `sql.js` (database broken) ✅
+- [x] Fix interactive menu submenus (menu-in-menu) ✅
 - [ ] Fix bugs in commands (some commands still failing)
 - [ ] Test all commands after fixes
 
@@ -145,14 +145,14 @@ Need to implement menu-in-menu pattern:
 ### Button ID Format
 ```
 modelcfg:list                    → show list
-modelcfg:add                     → show add form
+modelcfg:add                     → show add form (reply-to-message pattern)
 modelcfg:edit                    → show model selection
-modelcfg:edit:gpt-4o-mini       → show edit form for gpt-4o-mini
-modelcfg:remove                 → show model selection
-modelcfg:remove:gpt-4o-mini     → show confirm delete
-modelcfg:default                → show model selection
-modelcfg:default:gpt-4o-mini    → set as default
-modelcfg:back                   → go back to main menu
+modelcfg:edit:<model_id>        → show edit form (reply-to-message pattern)
+modelcfg:default                 → show model selection
+modelcfg:default:<model_id>     → set as default
+modelcfg_remove:<model_id>       → show confirm delete
+modelcfg_confirm_remove:<model_id> → delete model
+modelcfg_cancel_remove            → cancel delete
 ```
 
 ### For Edit Model Form
@@ -200,20 +200,19 @@ const SLASH_CMD_RE = /^\/(broadcast|prompt|reset|permission|info|mode|trigger|da
 
 **Supported Button IDs:**
 ```
-model_select:<model_id>         → select a model
-settings:model                  → settings → model menu
-settings:prompt                 → settings → prompt info
-settings:permission             → settings → permission info
-modelcfg:list                   → show model list
-modelcfg:add                    → show add model form
-modelcfg:edit                   → show model selection for edit
-modelcfg:edit:<model_id>        → show edit form
-modelcfg:remove                 → show model selection for remove
-modelcfg:remove:<model_id>      → show confirm delete
-modelcfg:confirm_remove:<model_id> → delete model
-modelcfg:default                → show model selection for default
-modelcfg:default:<model_id>     → set as default
-modelcfg:cancel_remove          → cancel delete
+model_select:<model_id>              → select a model
+settings:model                       → settings → model menu
+settings:prompt                      → settings → prompt info
+settings:permission                  → settings → permission info
+modelcfg:list                       → show model list
+modelcfg:add                        → show add model form
+modelcfg:edit                       → show model selection for edit
+modelcfg:edit:<model_id>            → show edit form
+modelcfg:default                    → show model selection for default
+modelcfg:default:<model_id>         → set as default
+modelcfg_remove:<model_id>          → show confirm delete
+modelcfg_confirm_remove:<model_id>  → delete model
+modelcfg_cancel_remove              → cancel delete
 ```
 
 ---
@@ -246,7 +245,7 @@ python/bridge/
 ### Node.js (Commands - Needs Fixes)
 ```
 src/
-├── db.js                    # ❌ BROKEN - needs sql.js migration
+├── db.js                    # ✅ FIXED - sql.js migration complete
 ├── config.js                # Configuration
 ├── logger.js                # Logging
 ├── wsClient.js              # WebSocket to LLM
@@ -357,13 +356,13 @@ CREATE TABLE llm_models (
 ## 10. Known Issues
 
 1. **Database Broken** - `better-sqlite3` native binding fails
-   - Fix: Migrate to `sql.js`
+   - Status: ✅ FIXED - Migrated to `sql.js`
 
 2. **Submenus Missing** - Interactive menus don't have submenu navigation
-   - Fix: Implement state machine or flow-based navigation
+   - Status: ✅ FIXED - Flow-based navigation implemented with reply-to-message pattern
 
 3. **Some Commands Failing** - Database-dependent commands error
-   - Fix: After sql.js migration
+   - Status: ✅ FIXED - sql.js migration complete
 
 4. **Button Click Not Working** - Was going to Python chatbot
    - Status: ✅ FIXED - now handled in messages.upsert
@@ -394,10 +393,77 @@ LOG_LEVEL=debug
 
 ---
 
-## 13. Git History
+## 13. sql.js Implementation Details
+
+### Key Differences from better-sqlite3
+- Async initialization via `initSqlJs()`
+- In-memory database loaded from file (Uint8Array)
+- Must call `saveDb()` to persist changes to disk
+
+### Auto-save Strategy
+- **Instant save** → Settings writes (prompt, permission, mode, triggers, llm2_model)
+- **Batch save** → Stats writes (every 3 minutes via interval)
+
+### Wrapper Functions
+```javascript
+function runQuery(sql, ...params)      // INSERT/UPDATE/DELETE
+function getOne(sql, ...params)        // SELECT single row
+function getAll(sql, ...params)        // SELECT multiple rows
+```
+
+---
+
+## 15. Submenu Implementation
+
+### Approach: Flow-Based Navigation with Reply-to-Message
+
+For forms that require text input (add/edit model), we use a reply-to-message pattern:
+1. User clicks button (e.g., "Add Model")
+2. Bot sends a form message with instructions
+3. User replies with their input
+4. Bot processes the reply
+
+### State Machine
+- `pendingForms` Map tracks which form each chat is waiting for
+- Key: `chatId`
+- Value: `{ type, modelId?, senderId }`
+
+### Supported Form Types
+| Type | Format | Description |
+|------|--------|-------------|
+| `edit_model` | `name=new\ndesc=text` | Update model properties |
+| `add_model` | `model_id\nname\n[desc]` | Add new model |
+
+### Cancel
+User can send "cancel" or "batal" to cancel any pending form.
+
+### Example Flows
+
+**Edit Model:**
+```
+/modelcfg → menu
+  → "Edit Model" → model selection
+    → Select "GPT-4o" → edit form
+      User replies: "name=GPT-4o Mini\nactive=1"
+      → Model updated
+```
+
+**Add Model:**
+```
+/modelcfg → menu
+  → "Add Model" → add form
+    User replies: "gpt-4o-mini\nGPT-4o Mini\nFast model"
+    → Model added
+```
+
+---
+
+## 14. Git History
 
 Recent commits:
 ```
+xxxxxxx fix: implement submenu navigation for modelcfg
+xxxxxxx migrate: better-sqlite3 → sql.js (native binding fix)
 a600cb1 update PLAN.md to reflect current progress
 472a821 fix: button responses handled in messages.upsert listener
 e81f29c fix: handle listResponseMessage for single_select
@@ -412,16 +478,11 @@ cd134bd fix sticker: use saveMedia instead of downloadContentFromMessage
 
 ## 14. Next Session Tasks
 
-1. **Priority 1:** Migrate `src/db.js` to `sql.js`
-   - Install sql.js package
-   - Rewrite database wrapper
-   - Test all DB operations
-
-2. **Priority 2:** Implement submenu navigation
+1. **Priority 1:** Implement submenu navigation
    - Add state tracking for menu navigation
    - Implement edit model flow
    - Test all submenus
 
-3. **Priority 3:** Test and fix remaining issues
-   - Test all commands
+2. **Priority 2:** Test and fix remaining issues
+   - Test all DB-dependent commands
    - Fix any remaining bugs

@@ -526,6 +526,7 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
           { title: 'List Models', description: 'Lihat semua model', id: 'modelcfg:list' },
           { title: 'Add Model', description: 'Tambah model baru', id: 'modelcfg:add' },
           { title: 'Edit Model', description: 'Edit model yang ada', id: 'modelcfg:edit' },
+          { title: 'Set Default', description: 'Jadikan model default', id: 'modelcfg:default' },
           { title: 'Remove Model', description: 'Hapus model', id: 'modelcfg:remove_menu' },
         ],
       },

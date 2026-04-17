@@ -19,10 +19,172 @@ import {
   getLlm2Model,
   setLlm2Model,
   getAllActiveModels,
+  getAllModels,
   getDefaultLlm2Model,
   deleteModel,
+  updateModel,
 } from '../db.js';
 import { sendRichMessage, sendNativeFlow } from './interactive/index.js';
+
+const pendingForms = new Map();
+
+function clearPendingForm(chatId) {
+  pendingForms.delete(chatId);
+}
+
+function parseModelReply(chatId, text) {
+  const form = pendingForms.get(chatId);
+  if (!form) return null;
+
+  if (form.type === 'edit_model') {
+    const modelId = form.modelId;
+    clearPendingForm(chatId);
+
+    const updates = {};
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+
+    for (const line of lines) {
+      const [key, ...valueParts] = line.split('=');
+      if (!key || valueParts.length === 0) continue;
+      const value = valueParts.join('=').trim();
+      const k = key.trim().toLowerCase();
+
+      if (k === 'name') updates.displayName = value;
+      else if (k === 'desc') updates.description = value;
+      else if (k === 'active') updates.isActive = value === '1' || value === 'true' || value === 'yes';
+      else if (k === 'order') {
+        const n = parseInt(value, 10);
+        if (!isNaN(n)) updates.sortOrder = n;
+      }
+    }
+
+    const success = updateModel(modelId, updates);
+    return { action: 'edit_model', modelId, success, updates };
+  }
+
+  if (form.type === 'add_model') {
+    clearPendingForm(chatId);
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) {
+      return { action: 'add_model', error: 'Format: model_id\\ndisplay_name\\n[description]' };
+    }
+    const [modelId, displayName, ...descParts] = lines;
+    const description = descParts.join(' ');
+    return { action: 'add_model', modelId, displayName, description };
+  }
+
+  return null;
+}
+
+async function showModelSelectionForEdit(sock, chatId) {
+  const models = getAllModels();
+  if (models.length === 0) {
+    await sock.sendMessage(chatId, { text: 'No models to edit.' });
+    return;
+  }
+  const sections = [
+    {
+      title: 'Select Model to Edit',
+      rows: models.map((m) => ({
+        title: m.displayName + (m.isActive ? '' : ' (inactive)'),
+        description: m.description || `ID: ${m.modelId}`,
+        id: `modelcfg_edit:${m.modelId}`,
+      })),
+    },
+  ];
+  await sendNativeFlow(sock, chatId, '✏️ Edit Model', [
+    {
+      name: 'single_select',
+      buttonParamsJson: JSON.stringify({ title: 'Pilih Model', sections }),
+    },
+  ], { footer: 'Select a model to edit' });
+}
+
+async function showModelEditForm(sock, chatId, senderId, modelId) {
+  const models = getAllModels();
+  const model = models.find((m) => m.modelId === modelId);
+  if (!model) {
+    await sock.sendMessage(chatId, { text: `Model "${modelId}" not found.` });
+    return;
+  }
+
+  pendingForms.set(chatId, { type: 'edit_model', modelId, senderId });
+
+  const helpText = `✏️ Edit Model: ${model.displayName}
+
+Current values:
+- name=${model.displayName}
+- desc=${model.description || ''}
+- active=${model.isActive ? '1' : '0'}
+- order=${model.sortOrder}
+
+Send your changes in format:
+name=new_name
+desc=new_description
+active=1
+order=2
+
+Or send "cancel" to cancel.`;
+
+  await sock.sendMessage(chatId, { text: helpText });
+}
+
+async function showModelAddForm(sock, chatId, senderId) {
+  pendingForms.set(chatId, { type: 'add_model', senderId });
+
+  const helpText = `➕ Add New Model
+
+Send the following format:
+model_id
+display_name
+description (optional)
+
+Example:
+gpt-4o
+GPT-4 Omni
+Fast and capable model
+
+Or send "cancel" to cancel.`;
+
+  await sock.sendMessage(chatId, { text: helpText });
+}
+
+async function showModelSelectionForDefault(sock, chatId) {
+  const models = getAllModels().filter((m) => m.isActive);
+  if (models.length === 0) {
+    await sock.sendMessage(chatId, { text: 'No active models to set as default.' });
+    return;
+  }
+  const sections = [
+    {
+      title: 'Select Default Model',
+      rows: models.map((m) => ({
+        title: m.displayName,
+        description: m.description || `ID: ${m.modelId}`,
+        id: `modelcfg_default:${m.modelId}`,
+      })),
+    },
+  ];
+  await sendNativeFlow(sock, chatId, '⭐ Set Default Model', [
+    {
+      name: 'single_select',
+      buttonParamsJson: JSON.stringify({ title: 'Pilih Default', sections }),
+    },
+  ], { footer: 'Model with smallest order will be used as default' });
+}
+
+async function setDefaultModel(sock, chatId, modelId) {
+  const models = getAllModels();
+  const model = models.find((m) => m.modelId === modelId);
+  if (!model) {
+    await sock.sendMessage(chatId, { text: `Model "${modelId}" not found.` });
+    return;
+  }
+  const allModels = getAllModels();
+  const minOrder = Math.min(...allModels.map((m) => m.sortOrder));
+  updateModel(modelId, { sortOrder: minOrder - 1 });
+  await sock.sendMessage(chatId, { text: `Model "${model.displayName}" set as default.` });
+}
 
 let sock;
 
@@ -190,8 +352,9 @@ async function startWhatsApp() {
           return true;
         }
         const subcommand = selectedId.replace('modelcfg:', '');
+
         if (subcommand === 'list') {
-          const models = getAllActiveModels();
+          const models = getAllModels();
           if (models.length === 0) {
             await sock.sendMessage(chatId, { text: 'No models configured.' });
             return true;
@@ -200,11 +363,40 @@ async function startWhatsApp() {
           const defaultModel = getDefaultLlm2Model();
           for (const m of models) {
             const isDefault = defaultModel?.modelId === m.modelId;
-            lines.push(`${isDefault ? '✓' : '○'} ${m.displayName} (${m.modelId})`);
+            lines.push(`${isDefault ? '✓' : '○'} ${m.displayName} (${m.modelId})${isDefault ? ' [DEFAULT]' : ''}`);
+            if (m.description) lines.push(`   ${m.description}`);
           }
           await sock.sendMessage(chatId, { text: lines.join('\n') });
           return true;
         }
+
+        if (subcommand === 'add') {
+          await showModelAddForm(sock, chatId, senderId);
+          return true;
+        }
+
+        if (subcommand === 'edit') {
+          await showModelSelectionForEdit(sock, chatId);
+          return true;
+        }
+
+        if (subcommand.startsWith('edit:')) {
+          const modelId = subcommand.replace('edit:', '');
+          await showModelEditForm(sock, chatId, senderId, modelId);
+          return true;
+        }
+
+        if (subcommand === 'default') {
+          await showModelSelectionForDefault(sock, chatId);
+          return true;
+        }
+
+        if (subcommand.startsWith('default:')) {
+          const modelId = subcommand.replace('default:', '');
+          await setDefaultModel(sock, chatId, modelId);
+          return true;
+        }
+
         return true;
       }
 
@@ -271,6 +463,39 @@ async function startWhatsApp() {
         }
 
         const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || null;
+
+        if (pendingForms.has(chatId) && senderId === pendingForms.get(chatId).senderId) {
+          const normalizedText = text?.trim().toLowerCase();
+          if (normalizedText === 'cancel' || normalizedText === 'batal') {
+            clearPendingForm(chatId);
+            await sock.sendMessage(chatId, { text: 'Operasi dibatalkan.' });
+            continue;
+          }
+
+          const result = parseModelReply(chatId, text);
+          if (result) {
+            if (result.action === 'edit_model') {
+              await sock.sendMessage(chatId, {
+                text: result.success
+                  ? `Model "${result.modelId}" diupdate.`
+                  : `Model "${result.modelId}" tidak ditemukan.`
+              });
+            } else if (result.action === 'add_model') {
+              if (result.error) {
+                await sock.sendMessage(chatId, { text: result.error });
+              } else {
+                const { addModel } = await import('../db.js');
+                const success = addModel(result.modelId, result.displayName, result.description);
+                await sock.sendMessage(chatId, {
+                  text: success
+                    ? `Model "${result.displayName}" ditambahkan.`
+                    : `Model "${result.modelId}" sudah ada.`
+                });
+              }
+            }
+            continue;
+          }
+        }
         if (!text || typeof text !== 'string') continue;
 
         const slashCommand = parseSlashCommand(text);
