@@ -99,11 +99,13 @@ async function handleHelp({ chatId }) {
   }
 }
 
-async function handlePrompt({ chatId, chatType, senderIsAdmin, args }) {
+async function handlePrompt({ chatId, chatType, senderIsAdmin, senderIsOwner, args }) {
   const sock = getSock();
   const isPrivate = chatType === 'private';
 
-  if (!isPrivate && !senderIsAdmin) {
+  if (isPrivate || senderIsOwner || senderIsAdmin) {
+    // proceed
+  } else {
     try {
       await sock.sendMessage(chatId, { text: 'Only group admins can use /prompt.' });
     } catch (err) { /* ignore */ }
@@ -146,11 +148,13 @@ async function handlePrompt({ chatId, chatType, senderIsAdmin, args }) {
   } catch (err) { /* ignore */ }
 }
 
-async function handleReset({ chatId, chatType, senderIsAdmin, contextMsgId }) {
+async function handleReset({ chatId, chatType, senderIsAdmin, senderIsOwner, contextMsgId }) {
   const sock = getSock();
   const isPrivate = chatType === 'private';
 
-  if (!isPrivate && !senderIsAdmin) {
+  if (isPrivate || senderIsOwner || senderIsAdmin) {
+    // proceed
+  } else {
     try {
       await sock.sendMessage(chatId, { text: 'Only group admins can use /reset.' });
     } catch (err) { /* ignore */ }
@@ -246,7 +250,7 @@ async function downloadMediaContent(content, contentType, messageId) {
   }
 }
 
-async function handlePermission({ chatId, chatType, senderIsAdmin, botIsAdmin, args }) {
+async function handlePermission({ chatId, chatType, senderIsAdmin, senderIsOwner, botIsAdmin, args }) {
   const sock = getSock();
 
   if (chatType === 'private') {
@@ -256,9 +260,9 @@ async function handlePermission({ chatId, chatType, senderIsAdmin, botIsAdmin, a
     return;
   }
 
-  if (!senderIsAdmin) {
+  if (!senderIsOwner && !senderIsAdmin) {
     try {
-      await sock.sendMessage(chatId, { text: 'Only group admins can use /permission.' });
+      await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can use /permission.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -301,7 +305,7 @@ async function handlePermission({ chatId, chatType, senderIsAdmin, botIsAdmin, a
   } catch (err) { /* ignore */ }
 }
 
-async function handleMode({ chatId, chatType, senderIsAdmin, senderId, args }) {
+async function handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args }) {
   const sock = getSock();
 
   if (!args) {
@@ -322,7 +326,7 @@ async function handleMode({ chatId, chatType, senderIsAdmin, senderId, args }) {
     return;
   }
 
-  if (!isOwnerJid(senderId) && !senderIsAdmin) {
+  if (!senderIsOwner && !senderIsAdmin) {
     try {
       await sock.sendMessage(chatId, { text: 'Only the bot owner or group admins can change the mode.' });
     } catch (err) { /* ignore */ }
@@ -343,7 +347,7 @@ async function handleMode({ chatId, chatType, senderIsAdmin, senderId, args }) {
   } catch (err) { /* ignore */ }
 }
 
-async function handleTrigger({ chatId, chatType, senderIsAdmin, senderId, args }) {
+async function handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args }) {
   const sock = getSock();
 
   if (!args) {
@@ -361,7 +365,7 @@ async function handleTrigger({ chatId, chatType, senderIsAdmin, senderId, args }
     return;
   }
 
-  if (!isOwnerJid(senderId) && !senderIsAdmin) {
+  if (!senderIsOwner && !senderIsAdmin) {
     try {
       await sock.sendMessage(chatId, { text: 'Only the bot owner or group admins can change triggers.' });
     } catch (err) { /* ignore */ }
@@ -818,23 +822,23 @@ async function handleCommandListener(msg, context) {
       return true;
 
     case 'prompt':
-      await handlePrompt({ chatId, chatType, senderIsAdmin, args });
+      await handlePrompt({ chatId, chatType, senderIsAdmin, senderIsOwner, args });
       return true;
 
     case 'reset':
-      await handleReset({ chatId, chatType, senderIsAdmin, contextMsgId });
+      await handleReset({ chatId, chatType, senderIsAdmin, senderIsOwner, contextMsgId });
       return true;
 
     case 'permission':
-      await handlePermission({ chatId, chatType, senderIsAdmin, botIsAdmin, args });
+      await handlePermission({ chatId, chatType, senderIsAdmin, senderIsOwner, botIsAdmin, args });
       return true;
 
     case 'mode':
-      await handleMode({ chatId, chatType, senderIsAdmin, senderId, args });
+      await handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args });
       return true;
 
     case 'trigger':
-      await handleTrigger({ chatId, chatType, senderIsAdmin, senderId, args });
+      await handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args });
       return true;
 
     case 'dashboard':
