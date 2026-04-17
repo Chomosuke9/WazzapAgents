@@ -475,6 +475,12 @@ async function startWhatsApp() {
         const senderId = normalizeJid(fromId) || fromId;
 
         logger.info({ chatId, senderId, msgKey: msg?.key?.id, type, msgContentType: msg.message ? Object.keys(msg.message).join(',') : 'none' }, 'message received');
+        
+        logger.debug({ 
+          chatId, 
+          msgKey: msg?.key?.id,
+          fullMsg: JSON.stringify(msg.message, null, 2)
+        }, 'FULL_MESSAGE_DUMP');
 
         if (await handleButtonResponse(msg, chatId, senderId)) {
           continue;
