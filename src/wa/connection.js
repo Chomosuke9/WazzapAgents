@@ -526,7 +526,7 @@ async function startWhatsApp() {
         let group = null;
 
         if (isGroup) {
-          group = getCachedGroupMetadata(chatId) || defaultGroupContext(chatId);
+          group = await getGroupContext(chatId);
           const senderRole = roleFlagsForJid(group?.participantRoles, senderId);
           senderIsAdmin = senderRole.isAdmin || senderRole.isSuperAdmin;
           botIsAdmin = Boolean(group?.botIsAdmin);

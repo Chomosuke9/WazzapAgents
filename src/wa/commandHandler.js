@@ -307,6 +307,7 @@ async function handlePermission({ chatId, chatType, senderIsAdmin, senderIsOwner
 
 async function handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args }) {
   const sock = getSock();
+  const isPrivate = chatType === 'private';
 
   if (!args) {
     const current = getMode(chatId);
@@ -326,7 +327,7 @@ async function handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, send
     return;
   }
 
-  if (!senderIsOwner && !senderIsAdmin) {
+  if (!isPrivate && !senderIsOwner && !senderIsAdmin) {
     try {
       await sock.sendMessage(chatId, { text: 'Only the bot owner or group admins can change the mode.' });
     } catch (err) { /* ignore */ }
@@ -349,6 +350,7 @@ async function handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, send
 
 async function handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args }) {
   const sock = getSock();
+  const isPrivate = chatType === 'private';
 
   if (!args) {
     const current = getTriggers(chatId);
@@ -365,7 +367,7 @@ async function handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, s
     return;
   }
 
-  if (!senderIsOwner && !senderIsAdmin) {
+  if (!isPrivate && !senderIsOwner && !senderIsAdmin) {
     try {
       await sock.sendMessage(chatId, { text: 'Only the bot owner or group admins can change triggers.' });
     } catch (err) { /* ignore */ }
