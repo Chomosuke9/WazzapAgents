@@ -807,6 +807,8 @@ function getWeekKey(date) {
 
 async function handleCommandListener(msg, context) {
   const { slashCommand, chatId, chatType, senderIsAdmin, senderId, botIsAdmin, senderIsOwner, contextMsgId } = context;
+  
+  logger.debug({ command: slashCommand?.command, senderId, senderIsAdmin, senderIsOwner, chatId }, 'handleCommandListener called');
 
   if (!slashCommand) return false;
 
