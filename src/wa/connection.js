@@ -400,14 +400,17 @@ async function startWhatsApp() {
         return true;
       }
 
-      if (selectedId.startsWith('modelcfg:')) {
+      if (selectedId.startsWith('modelcfg:') || selectedId.startsWith('modelcfg_')) {
         if (!isOwnerJid(senderId)) {
           await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
           return true;
         }
-        const subcommand = selectedId.replace('modelcfg:', '');
+        
+        const subcommand = selectedId.replace('modelcfg:', '').replace('modelcfg_', '');
+        const [action, ...rest] = subcommand.split('_');
+        const modelId = rest.join('_');
 
-        if (subcommand === 'list') {
+        if (action === 'list') {
           const models = getAllModels();
           if (models.length === 0) {
             await sock.sendMessage(chatId, { text: 'No models configured.' });
@@ -424,30 +427,35 @@ async function startWhatsApp() {
           return true;
         }
 
-        if (subcommand === 'add') {
+        if (action === 'add') {
           await showModelAddForm(sock, chatId, senderId);
           return true;
         }
 
-        if (subcommand === 'edit') {
+        if (action === 'edit') {
           await showModelSelectionForEdit(sock, chatId);
           return true;
         }
 
-        if (subcommand.startsWith('edit:')) {
-          const modelId = subcommand.replace('edit:', '');
-          await showModelEditForm(sock, chatId, senderId, modelId);
+        if (action === 'default') {
+          if (modelId) {
+            await setDefaultModel(sock, chatId, modelId);
+          } else {
+            await showModelSelectionForDefault(sock, chatId);
+          }
           return true;
         }
 
-        if (subcommand === 'default') {
-          await showModelSelectionForDefault(sock, chatId);
-          return true;
-        }
-
-        if (subcommand.startsWith('default:')) {
-          const modelId = subcommand.replace('default:', '');
-          await setDefaultModel(sock, chatId, modelId);
+        if (action === 'remove') {
+          if (modelId) {
+            const success = deleteModel(modelId);
+            const models = getAllModels();
+            const model = models.find((m) => m.modelId === modelId);
+            const displayName = model?.displayName || modelId;
+            await sock.sendMessage(chatId, { text: success ? `Model "${displayName}" removed.` : `Model "${modelId}" not found.` });
+          } else {
+            await sock.sendMessage(chatId, { text: 'Usage: /modelcfg remove <model_id>' });
+          }
           return true;
         }
 
@@ -476,12 +484,6 @@ async function startWhatsApp() {
         const senderId = normalizeJid(fromId) || fromId;
 
         logger.info({ chatId, senderId, msgKey: msg?.key?.id, type, msgContentType: msg.message ? Object.keys(msg.message).join(',') : 'none' }, 'message received');
-        
-        logger.debug({ 
-          chatId, 
-          msgKey: msg?.key?.id,
-          fullMsg: JSON.stringify(msg.message, null, 2)
-        }, 'FULL_MESSAGE_DUMP');
 
         if (await handleButtonResponse(msg, chatId, senderId)) {
           continue;
