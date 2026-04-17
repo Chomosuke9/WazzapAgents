@@ -99,13 +99,14 @@ async function handleHelp({ chatId }) {
   }
 }
 
-async function handlePrompt({ chatId, chatType, senderIsAdmin, args }) {
+async function handlePrompt({ chatId, chatType, senderIsAdmin, senderIsOwner, args }) {
   const sock = getSock();
   const isPrivate = chatType === 'private';
+  const canUse = isPrivate ? senderIsOwner : senderIsAdmin;
 
-  if (!isPrivate && !senderIsAdmin) {
+  if (!canUse) {
     try {
-      await sock.sendMessage(chatId, { text: 'Only group admins can use /prompt.' });
+      await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can use /prompt.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -146,13 +147,14 @@ async function handlePrompt({ chatId, chatType, senderIsAdmin, args }) {
   } catch (err) { /* ignore */ }
 }
 
-async function handleReset({ chatId, chatType, senderIsAdmin, contextMsgId }) {
+async function handleReset({ chatId, chatType, senderIsAdmin, senderIsOwner, contextMsgId }) {
   const sock = getSock();
   const isPrivate = chatType === 'private';
+  const canUse = isPrivate ? senderIsOwner : senderIsAdmin;
 
-  if (!isPrivate && !senderIsAdmin) {
+  if (!canUse) {
     try {
-      await sock.sendMessage(chatId, { text: 'Only group admins can use /reset.' });
+      await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can use /reset.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -246,7 +248,7 @@ async function downloadMediaContent(content, contentType, messageId) {
   }
 }
 
-async function handlePermission({ chatId, chatType, senderIsAdmin, botIsAdmin, args }) {
+async function handlePermission({ chatId, chatType, senderIsAdmin, senderIsOwner, botIsAdmin, args }) {
   const sock = getSock();
 
   if (chatType === 'private') {
@@ -807,8 +809,6 @@ function getWeekKey(date) {
 
 async function handleCommandListener(msg, context) {
   const { slashCommand, chatId, chatType, senderIsAdmin, senderId, botIsAdmin, senderIsOwner, contextMsgId } = context;
-  
-  logger.debug({ command: slashCommand?.command, senderId, senderIsAdmin, senderIsOwner, chatId }, 'handleCommandListener called');
 
   if (!slashCommand) return false;
 
@@ -820,15 +820,15 @@ async function handleCommandListener(msg, context) {
       return true;
 
     case 'prompt':
-      await handlePrompt({ chatId, chatType, senderIsAdmin, args });
+      await handlePrompt({ chatId, chatType, senderIsAdmin, senderIsOwner, args });
       return true;
 
     case 'reset':
-      await handleReset({ chatId, chatType, senderIsAdmin, contextMsgId });
+      await handleReset({ chatId, chatType, senderIsAdmin, senderIsOwner, contextMsgId });
       return true;
 
     case 'permission':
-      await handlePermission({ chatId, chatType, senderIsAdmin, botIsAdmin, args });
+      await handlePermission({ chatId, chatType, senderIsAdmin, senderIsOwner, botIsAdmin, args });
       return true;
 
     case 'mode':

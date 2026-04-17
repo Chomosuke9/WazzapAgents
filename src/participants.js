@@ -284,8 +284,7 @@ function isOwnerJid(senderId) {
     }
     return false;
   });
-  
-  logger.debug({ senderId, raw, normalized, candidates: [...candidates], ownerJids: config.botOwnerJids, match }, 'isOwnerJid check');
+
   return match;
 }
 

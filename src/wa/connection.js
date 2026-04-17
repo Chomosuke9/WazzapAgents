@@ -297,8 +297,6 @@ async function startWhatsApp() {
     const senderRole = isGroup ? roleFlagsForJid(group?.participantRoles, senderId) : { isAdmin: false, isSuperAdmin: false };
     const senderIsAdmin = senderRole.isAdmin || senderRole.isSuperAdmin;
     const senderIsOwner = isOwnerJid(senderId);
-    
-    logger.debug({ senderId, senderIsAdmin, senderIsOwner, isGroup }, 'button response permission check');
 
     try {
       if (selectedId.startsWith('/')) {
