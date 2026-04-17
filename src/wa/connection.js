@@ -414,8 +414,9 @@ async function startWhatsApp() {
         }
         
         const subcommand = selectedId.replace('modelcfg:', '').replace('modelcfg_', '');
-        const [action, ...rest] = subcommand.split('_');
-        const modelId = rest.join('_');
+        const colonIdx = subcommand.indexOf(':');
+        const action = colonIdx >= 0 ? subcommand.slice(0, colonIdx) : subcommand;
+        const modelId = colonIdx >= 0 ? subcommand.slice(colonIdx + 1) : '';
 
         if (action === 'list') {
           const models = getAllModels();
