@@ -332,7 +332,7 @@ async function startWhatsApp() {
 
       if (selectedId.startsWith('model_select:')) {
         const modelId = selectedId.replace('model_select:', '');
-        const canUse = isGroup ? senderIsAdmin : senderIsOwner;
+        const canUse = senderIsOwner || (isGroup && senderIsAdmin);
         if (!canUse) {
           await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can change the model.' });
           return true;
@@ -347,7 +347,7 @@ async function startWhatsApp() {
 
       if (selectedId.startsWith('settings:')) {
         const action = selectedId.replace('settings:', '');
-        const canUse = isGroup ? senderIsAdmin : senderIsOwner;
+        const canUse = senderIsOwner || (isGroup && senderIsAdmin);
         if (!canUse) {
           await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can access settings.' });
           return true;
