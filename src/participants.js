@@ -272,7 +272,7 @@ function isOwnerJid(senderId) {
     }
   }
 
-  return config.botOwnerJids.some((ownerJid) => {
+  const match = config.botOwnerJids.some((ownerJid) => {
     if (!ownerJid) return false;
     const ownerLocal = ownerJid.split('@')[0];
     const ownerDigits = ownerJid.replace(/\D/g, '');
@@ -284,6 +284,9 @@ function isOwnerJid(senderId) {
     }
     return false;
   });
+  
+  logger.debug({ senderId, raw, normalized, candidates: [...candidates], ownerJids: config.botOwnerJids, match }, 'isOwnerJid check');
+  return match;
 }
 
 export {
