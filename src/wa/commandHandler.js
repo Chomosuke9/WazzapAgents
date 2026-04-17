@@ -520,13 +520,13 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
 
   if (!subcommand) {
     const modelRows = getAllActiveModels().map((m) => ({
-      rowId: `modelcfg_default:${m.modelId}`,
+      id: `modelcfg_default:${m.modelId}`,
       title: m.displayName,
       description: m.description || '',
     }));
     
     const allModelRows = getAllModels().map((m) => ({
-      rowId: `modelcfg_remove:${m.modelId}`,
+      id: `modelcfg_remove:${m.modelId}`,
       title: m.displayName + (m.isActive ? '' : ' (inactive)'),
       description: m.description || `ID: ${m.modelId}`,
     }));
@@ -742,7 +742,7 @@ async function handleSettings({ chatId, chatType, senderId, senderIsAdmin, sende
         sections: [{
           title: 'Select Model',
           rows: getAllActiveModels().map((m) => ({
-            rowId: `model_select:${m.modelId}`,
+            id: `model_select:${m.modelId}`,
             title: m.displayName,
             description: m.description || '',
           })),
@@ -756,10 +756,10 @@ async function handleSettings({ chatId, chatType, senderId, senderIsAdmin, sende
         sections: [{
           title: 'Permission Level',
           rows: [
-            { rowId: '/permission 0', title: 'Level 0 - Forbidden', description: 'No moderation' },
-            { rowId: '/permission 1', title: 'Level 1 - Delete', description: 'Can delete' },
-            { rowId: '/permission 2', title: 'Level 2 - Mute', description: 'Delete & mute' },
-            { rowId: '/permission 3', title: 'Level 3 - All', description: 'Delete, mute & kick' },
+            { id: '/permission 0', title: 'Level 0 - Forbidden', description: 'No moderation' },
+            { id: '/permission 1', title: 'Level 1 - Delete', description: 'Can delete' },
+            { id: '/permission 2', title: 'Level 2 - Mute', description: 'Delete & mute' },
+            { id: '/permission 3', title: 'Level 3 - All', description: 'Delete, mute & kick' },
           ],
         }],
       }),
