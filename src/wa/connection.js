@@ -281,8 +281,11 @@ async function startWhatsApp() {
     const nativeFlowParams = (() => {
       try {
         const paramsStr = interactiveResponse?.nativeFlowResponseMessage?.paramsJson;
+        logger.debug({ chatId, paramsStr }, 'nativeFlowResponseMessage paramsJson');
         if (paramsStr) return JSON.parse(paramsStr);
-      } catch {}
+      } catch (e) {
+        logger.debug({ chatId, err: e.message }, 'nativeFlowParams parse error');
+      }
       return null;
     })();
     const selectedId = (buttonsResponse?.selectedButtonId) || 
@@ -298,6 +301,10 @@ async function startWhatsApp() {
       nativeFlowParams: nativeFlowParams,
       selectedId,
     }, 'handleButtonResponse check');
+    
+    if (!selectedId) {
+      logger.debug({ chatId, msgKey: msg?.key?.id, rawMsg: JSON.stringify(msg.message) }, 'no selectedId found');
+    }
     
     if (!selectedId) return false;
     logger.info({ selectedId, chatId }, 'button selected');
