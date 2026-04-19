@@ -61,13 +61,13 @@ const HELP_TEXT = `*WazzapAgents - Daftar Perintah*
 • */info* — Informasi profil, peran, dan chat
 • */dashboard* — Statistik penggunaan bot
 • */join* [link] — Masuk grup via link
+• */sticker* — Buat stiker (balas gambar)
 
 *Pengaturan & Moderasi (Admin/Owner)*
 • */setting* — Menu pengaturan interaktif
 • */prompt* [teks] — Atur kepribadian bot
 • */reset* — Hapus memori percakapan
 • */model* — Pilih model AI
-• */sticker* — Buat stiker (balas gambar)
 • */mode* [auto|prefix|hybrid] — Mode respon
 • */trigger* [opsi] — Atur pemicu respon
 
@@ -154,15 +154,6 @@ async function handleReset({ chatId, chatType, senderIsAdmin, senderIsOwner, con
 }
 
 async function handleSticker({ chatId, chatType, senderIsAdmin, senderIsOwner, args, msg }) {
-  const isPrivate = chatType === 'private';
-  const canUse = isPrivate ? senderIsOwner : senderIsAdmin;
-  if (!canUse) {
-    try {
-      await getSock().sendMessage(chatId, { text: 'Only group admins or bot owner can use /sticker.' });
-    } catch (err) { /* ignore */ }
-    return;
-  }
-
   const [upperText, lowerText] = parseStickerArgs(args);
 
   const { contentType, message: innerMessage } = unwrapMessage(msg.message) || {};
