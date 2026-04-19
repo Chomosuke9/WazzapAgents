@@ -393,54 +393,18 @@ def _extract_actions_from_tool_calls(
         "replyTo": reply_to,
       })
 
-    elif name == "react_to_message":
-      emoji = str(args.get("emoji") or "").strip()
+    elif name == "llm_express":
+      expression = str(args.get("expression") or "").strip()
       ctx_id = _normalize_context_msg_id(args.get("context_msg_id"))
-      if not emoji or not ctx_id:
+      if not expression or not ctx_id:
         continue
       if allowed_context_ids and ctx_id not in allowed_context_ids:
         logger.warning("react target ignored: context id %s not in allowed set", ctx_id)
         continue
       actions.append({
-        "type": "react_message",
+        "type": "express_message",
         "contextMsgId": ctx_id,
-        "emoji": emoji,
-      })
-
-    elif name == "send_sticker":
-      sticker_name = str(args.get("sticker_name") or "").strip()
-      if not sticker_name:
-        continue
-      reply_to = _resolve_reply_target(
-        args.get("context_msg_id"),
-        fallback_reply_to=fallback_reply_to,
-        allowed_context_ids=allowed_context_ids,
-      )
-      actions.append({
-        "type": "send_sticker",
-        "stickerName": sticker_name,
-        "replyTo": reply_to,
-      })
-
-    elif name == "create_sticker":
-      ctx_id = _normalize_context_msg_id(args.get("context_msg_id", ""))
-      if not ctx_id:
-        logger.warning("create_sticker ignored: missing or invalid context_msg_id")
-        continue
-      upper = str(args.get("upper_text") or "").strip() or None
-      lower = str(args.get("lower_text") or "").strip() or None
-      try:
-        fsize = int(args.get("font_size") or 150)
-        fsize = max(50, min(500, fsize))
-      except (TypeError, ValueError):
-        fsize = 50
-      actions.append({
-        "type": "create_sticker",
-        "contextMsgId": ctx_id,
-        "upperText": upper,
-        "lowerText": lower,
-        "fontSize": fsize,
-        "replyTo": ctx_id,
+        "expression": expression,
       })
 
     elif name == "delete_messages":

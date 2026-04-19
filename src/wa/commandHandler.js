@@ -184,8 +184,13 @@ async function handleSticker({ chatId, chatType, senderIsAdmin, senderIsOwner, a
   const { contentType, message: innerMessage } = unwrapMessage(msg.message) || {};
   let mediaPath = null;
 
-  if (contentType === 'imageMessage' || contentType === 'videoMessage') {
+  if (contentType === 'imageMessage') {
     mediaPath = await downloadMediaContent(innerMessage[contentType], contentType, msg.key.id);
+  } else if (contentType === 'videoMessage') {
+    try {
+      await getSock().sendMessage(chatId, { text: '/sticker saat ini hanya mendukung gambar (video belum didukung).' });
+    } catch (err) { /* ignore */ }
+    return;
   }
 
   if (!mediaPath && innerMessage?.extendedTextMessage?.contextInfo) {
@@ -193,15 +198,20 @@ async function handleSticker({ chatId, chatType, senderIsAdmin, senderIsOwner, a
     if (ctx.quotedMessage) {
       const { contentType: qType, message: qMsg } = unwrapMessage(ctx.quotedMessage) || {};
       const qContent = qType ? qMsg?.[qType] : null;
-      if (qType === 'imageMessage' || qType === 'videoMessage') {
+      if (qType === 'imageMessage') {
         mediaPath = await downloadMediaContent(qContent, qType, ctx.stanzaId);
+      } else if (qType === 'videoMessage') {
+        try {
+          await getSock().sendMessage(chatId, { text: '/sticker saat ini hanya mendukung gambar (video belum didukung).' });
+        } catch (err) { /* ignore */ }
+        return;
       }
     }
   }
 
   if (!mediaPath) {
     try {
-      await getSock().sendMessage(chatId, { text: 'Send an image or video with /sticker caption, or reply to an image/video.' });
+      await getSock().sendMessage(chatId, { text: 'Send an image with /sticker caption, or reply to an image.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -233,7 +243,7 @@ function parseStickerArgs(args) {
 
 async function downloadMediaContent(content, contentType, messageId) {
   const mediaKind = mapMediaKind(contentType);
-  if (!mediaKind) return null;
+  if (!mediaKind || mediaKind !== 'image') return null;
 
   try {
     const ext = mediaKind === 'video' ? 'mp4' : 'jpg';

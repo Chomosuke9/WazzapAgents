@@ -942,6 +942,31 @@ async def handle_socket(ws):
             )
             action_counts[action_type] += 1
             continue
+          if action_type == "express_message":
+            expression = str(action.get("expression") or "").strip()
+            if not expression:
+              continue
+            sticker_path = resolve_sticker(expression)
+            if sticker_path:
+              request_id = _make_request_id("sticker")
+              await send_sticker(
+                ws,
+                chat_id,
+                sticker_path,
+                action.get("contextMsgId"),
+                request_id=request_id,
+              )
+              record_stat(chat_id, "stickers_sent")
+            else:
+              await send_react_message(
+                ws,
+                chat_id,
+                action.get("contextMsgId"),
+                expression,
+                request_id=_make_request_id("react"),
+              )
+            action_counts[action_type] += 1
+            continue
           if action_type == "send_sticker":
             sticker_name = action.get("stickerName", "")
             sticker_path = resolve_sticker(sticker_name)
@@ -960,44 +985,6 @@ async def handle_socket(ws):
               logger.warning(
                 "sticker not found: %s",
                 sticker_name,
-                extra={"chat_id": chat_id},
-              )
-            continue
-          if action_type == "create_sticker":
-            ctx_id = action.get("contextMsgId")
-            media_path = media_paths_by_chat.get(chat_id, {}).get(ctx_id) if ctx_id else None
-            if not media_path:
-              logger.warning(
-                "create_sticker: no media for context_msg_id=%s",
-                ctx_id,
-                extra={"chat_id": chat_id},
-              )
-              continue
-            try:
-              upper = action.get("upperText") or None
-              lower = action.get("lowerText") or None
-              fsize = int(action.get("fontSize") or 150)
-              sticker_path = create_sticker_file(media_path, upper, lower, fsize)
-              await send_sticker(
-                ws,
-                chat_id,
-                sticker_path,
-                action.get("replyTo"),
-                request_id=_make_request_id("sticker"),
-              )
-              record_stat(chat_id, "stickers_sent")
-              action_counts[action_type] += 1
-              log_parts = ["Successfully created sticker"]
-              if upper:
-                log_parts.append(f"upper_text: {upper}")
-              if lower:
-                log_parts.append(f"lower_text: {lower}")
-              if upper or lower:
-                log_parts.append(f"font_size: {fsize}")
-              _append_sticker_log_to_history(history, ", ".join(log_parts))
-            except Exception as err:
-              logger.exception(
-                "create_sticker action failed: %s", err,
                 extra={"chat_id": chat_id},
               )
             continue

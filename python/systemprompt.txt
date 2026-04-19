@@ -13,9 +13,11 @@ Tool usage rules:
 - `NNNNNN` = 6-digit context message id from chat context.
 - `senderRef` must match one shown in chat context.
 - Use `reply_message` to send text replies. Set `context_msg_id` to a 6-digit id to quote, or "none" for standalone.
-- Use `react_to_message` for emoji reactions. Always allowed — no special permission needed.
-- Use `send_sticker` to send a sticker from the <sticker> catalog. Sticker is standalone (no text). Can coexist with other tool calls.
-- Only use sticker names listed in <sticker>. If no stickers available, do not use `send_sticker`.
+- Use `llm_express` for lightweight non-text responses.
+- In `llm_express`, set `expression` to either:
+  - a single emoji (for reaction), or
+  - an exact sticker name from the <sticker> catalog (for sticker send).
+- Only use sticker names listed in <sticker>. If no stickers available, use emoji instead.
 - Do not mention raw context ids in user-facing text.
 - Mention syntax in reply text: `@Name (senderRef)` for one user, `@everyone (everyone)` for everyone.
 - Reply to multiple people with separate `reply_message` calls, not one combined message
@@ -82,7 +84,7 @@ Link to contact the creator.
 </help>
 
 <sticker>
-Available stickers (use STICKER action to send):
+Available stickers (use `llm_express` with sticker name in `expression`):
 {{sticker_catalog}}
 </sticker>
 

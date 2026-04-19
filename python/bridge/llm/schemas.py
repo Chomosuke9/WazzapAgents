@@ -142,56 +142,34 @@ LLM2_REPLY_TOOL = {
   },
 }
 
-LLM2_REACT_TOOL = {
+LLM2_EXPRESS_TOOL = {
   "type": "function",
   "function": {
-    "name": "react_to_message",
-    "description": "React to a message with an emoji.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "context_msg_id": {
-          "type": "string",
-          "description": "The 6-digit contextMsgId to react to.",
-          "minLength": 6,
-          "maxLength": 6,
-        },
-        "emoji": {
-          "type": "string",
-          "description": "A single emoji to react with (e.g. 👍, 😂, ❤️).",
-          "minLength": 1,
-          "maxLength": 10,
-        },
-      },
-      "required": ["context_msg_id", "emoji"],
-      "additionalProperties": False,
-    },
-    "strict": True,
-  },
-}
-
-LLM2_STICKER_TOOL = {
-  "type": "function",
-  "function": {
-    "name": "send_sticker",
+    "name": "llm_express",
     "description": (
-      "Send a sticker from the available catalog. "
-      "Use context_msg_id to quote a message, or 'none' for standalone."
+      "Express a non-text reaction to a message — either an emoji reaction or a sticker — "
+      "instead of sending a text reply."
     ),
     "parameters": {
       "type": "object",
       "properties": {
         "context_msg_id": {
           "type": "string",
-          "description": "The 6-digit contextMsgId to reply to, or 'none'.",
+          "description": "The 6-digit contextMsgId to target.",
+          "minLength": 6,
+          "maxLength": 6,
         },
-        "sticker_name": {
+        "expression": {
           "type": "string",
-          "description": "Exact sticker name from the <sticker> catalog.",
+          "description": (
+            "Either a single emoji to react with (e.g. 👍, 😂, ❤️), "
+            "or the exact sticker name from the <sticker> catalog."
+          ),
           "minLength": 1,
+          "maxLength": 100,
         },
       },
-      "required": ["context_msg_id", "sticker_name"],
+      "required": ["context_msg_id", "expression"],
       "additionalProperties": False,
     },
     "strict": True,
@@ -303,49 +281,8 @@ LLM2_KICK_TOOL = {
   },
 }
 
-LLM2_CREATE_STICKER_TOOL = {
-  "type": "function",
-  "function": {
-    "name": "create_sticker",
-    "description": (
-      "Create a custom sticker from an image or video message with optional text overlay. "
-      "NOT for daily usage — only use when the user explicitly asks to create a sticker from an image/video. "
-      "The source image must be referenced by its contextMsgId from the conversation history."
-    ),
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "context_msg_id": {
-          "type": "string",
-          "description": "The 6-digit contextMsgId of the image or video message to convert into a sticker.",
-          "minLength": 6,
-          "maxLength": 6,
-        },
-        "upper_text": {
-          "type": "string",
-          "description": "Text to display at the top of the sticker (optional, will be uppercased).",
-        },
-        "lower_text": {
-          "type": "string",
-          "description": "Text to display at the bottom of the sticker (optional, will be uppercased).",
-        },
-        "font_size": {
-          "type": "integer",
-          "description": "Font size for text overlays (default: 150, range: 50-500).",
-          "default": 150,
-          "minimum": 50,
-          "maximum": 500,
-        },
-      },
-      "required": ["context_msg_id"],
-      "additionalProperties": False,
-    },
-    "strict": False,
-  },
-}
-
 # Base tools always available to LLM2.
-LLM2_BASE_TOOLS = [LLM2_REPLY_TOOL, LLM2_REACT_TOOL, LLM2_STICKER_TOOL, LLM2_CREATE_STICKER_TOOL]
+LLM2_BASE_TOOLS = [LLM2_REPLY_TOOL, LLM2_EXPRESS_TOOL]
 
 
 def build_llm2_tools(
