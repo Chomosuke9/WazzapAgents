@@ -484,7 +484,7 @@ async function handleDebugCommand({ chatId, senderId, args }) {
 }
 
 // ---------------------------------------------------------------------------
-// /join command — join a group via invite link (owner only)
+// /join command — join a group via invite link
 // ---------------------------------------------------------------------------
 
 const INVITE_LINK_RE = /chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/;

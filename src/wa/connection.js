@@ -24,6 +24,7 @@ import {
   deleteModel,
   updateModel,
 } from '../db.js';
+import { unwrapMessage, extractText } from '../messageParser.js';
 import { sendRichMessage, sendNativeFlow } from './interactive/index.js';
 
 const pendingForms = new Map();
@@ -470,7 +471,8 @@ async function startWhatsApp() {
         const chatId = msg?.key?.remoteJid;
         if (!chatId || chatId === 'status@broadcast') continue;
         if (!msg?.message) continue;
-        if (msg?.key?.fromMe) continue;
+        // Bot messages are allowed to trigger commands, loop prevention is handled in inbound.js + python bridge
+        // if (msg?.key?.fromMe) continue;
 
         const fromId = msg.key.participant || msg.key.remoteJid;
         const senderId = normalizeJid(fromId) || fromId;
@@ -481,7 +483,8 @@ async function startWhatsApp() {
           continue;
         }
 
-        const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || null;
+        const { message: innerMessage } = unwrapMessage(msg.message);
+        const text = extractText(innerMessage);
 
         if (pendingForms.has(chatId) && senderId === pendingForms.get(chatId).senderId) {
           const normalizedText = text?.trim().toLowerCase();

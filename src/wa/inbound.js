@@ -228,7 +228,7 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
   // Detect slash commands for context
   // Note: Commands are now handled by commandHandler.js in connection.js
   // We still detect slash commands and send to Python for context/history
-  const slashCommand = (!fromMe && typeof text === 'string')
+  const slashCommand = (typeof text === 'string')
     ? parseSlashCommand(text)
     : null;
 

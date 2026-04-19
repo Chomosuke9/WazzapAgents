@@ -54,40 +54,24 @@ const TRIGGER_DESCRIPTIONS = {
   name: 'bot name mentioned in text',
 };
 
-const HELP_TEXT = `*Daftar Perintah Bot*
+const HELP_TEXT = `*WazzapAgents - Daftar Perintah*
 
-*/prompt* [teks] — atur kepribadian/instruksi khusus bot untuk chat ini
-  _Wajib admin grup. /prompt clear untuk menghapus._
+*Umum (Semua Orang)*
+• */help* — Tampilkan pesan bantuan ini
+• */info* — Informasi profil, peran, dan chat
+• */dashboard* — Statistik penggunaan bot
+• */join* [link] — Masuk grup via link
 
-*/reset* — hapus memori percakapan bot di chat ini
-  _Wajib admin grup._
+*Pengaturan & Moderasi (Admin/Owner)*
+• */setting* — Menu pengaturan interaktif
+• */prompt* [teks] — Atur kepribadian bot
+• */reset* — Hapus memori percakapan
+• */model* — Pilih model AI
+• */sticker* — Buat stiker (balas gambar)
+• */mode* [auto|prefix|hybrid] — Mode respon
+• */trigger* [opsi] — Atur pemicu respon
 
-*/permission* [0-3] — atur izin moderasi (khusus grup)
-  _Wajib admin grup._
-  0 = tidak bisa kick/delete _(default)_
-  1 = boleh delete pesan
-  2 = boleh kick member
-  3 = boleh delete & kick
-
-*/mode* [auto|prefix|hybrid] — atur mode respons (khusus grup)
-  _Wajib owner atau admin grup._
-  auto = LLM memutuskan kapan merespons
-  prefix = hanya merespons jika ada trigger _(default)_
-  hybrid = prefix dulu, fallback ke auto
-
-*/trigger* [tag|reply|name|join|all|none] — toggle trigger di mode prefix
-  _Wajib owner atau admin grup._
-  tag = bot di-@mention
-  reply = seseorang membalas pesan bot
-  name = nama bot disebut dalam teks
-  join = member baru masuk grup
-  all/none = aktifkan/nonaktifkan semua
-
-*/join* <link> — masuk ke grup lewat link undangan
-
-*/dashboard* — lihat statistik penggunaan bot
-
-*/help* — tampilkan pesan ini`;
+_Ketik perintah tanpa argumen untuk melihat status saat ini._`;
 
 async function handleHelp({ chatId }) {
   const sock = getSock();
