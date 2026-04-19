@@ -167,6 +167,20 @@ def _ensure_stats_tables(conn: sqlite3.Connection) -> None:
   )
 
 
+def _ensure_moderation_tables(conn: sqlite3.Connection) -> None:
+  conn.executescript(
+    """
+    CREATE TABLE IF NOT EXISTS chat_mutes (
+      chat_id    TEXT NOT NULL,
+      sender_ref TEXT NOT NULL,
+      muted_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      duration_m INTEGER NOT NULL DEFAULT 60,
+      PRIMARY KEY (chat_id, sender_ref)
+    );
+    """
+  )
+
+
 def _ensure_split_ready() -> None:
   # Ensure connections are ready (creates tables if needed)
   _get_settings_conn()
