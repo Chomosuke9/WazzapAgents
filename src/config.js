@@ -13,6 +13,9 @@ const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
 const AUTH_DIR = path.join(DATA_DIR, 'auth');
 const MEDIA_DIR = process.env.MEDIA_DIR || path.join(DATA_DIR, 'media');
 const STICKERS_DIR = process.env.STICKERS_DIR || path.join(DATA_DIR, 'stickers');
+const SETTINGS_DB_PATH = process.env.SETTINGS_DB_PATH || path.join(DATA_DIR, 'settings.db');
+const STATS_DB_PATH = process.env.STATS_DB_PATH || path.join(DATA_DIR, 'stats.db');
+const MODERATION_DB_PATH = process.env.MODERATION_DB_PATH || path.join(DATA_DIR, 'moderation.db');
 
 fs.ensureDirSync(AUTH_DIR);
 fs.ensureDirSync(MEDIA_DIR);
@@ -50,6 +53,9 @@ const config = {
   wsEndpoint: process.env.LLM_WS_ENDPOINT,
   wsToken: process.env.LLM_WS_TOKEN || null,
   dataDir: DATA_DIR,
+  settingsDbPath: SETTINGS_DB_PATH,
+  statsDbPath: STATS_DB_PATH,
+  moderationDbPath: MODERATION_DB_PATH,
   reconnectIntervalMs: positiveInt(process.env.WS_RECONNECT_MS, 5000),
   authDir: AUTH_DIR,
   mediaDir: MEDIA_DIR,
