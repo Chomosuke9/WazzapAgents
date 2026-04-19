@@ -8,6 +8,8 @@ class LLMWebSocket extends EventEmitter {
     super();
     this.ws = null;
     this.reconnectTimer = null;
+    this.reliableQueue = [];
+    this.maxReliableQueue = 1000;
   }
 
   connect() {
@@ -42,6 +44,7 @@ class LLMWebSocket extends EventEmitter {
           role: 'whatsapp-gateway',
         },
       });
+      this.flushReliableQueue();
       this.emit('connected');
     });
 
@@ -78,6 +81,34 @@ class LLMWebSocket extends EventEmitter {
       logger.debug('ws not ready, drop message');
       return;
     }
+    this.sendRaw(message);
+  }
+
+  sendReliable(message) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.sendRaw(message);
+      return;
+    }
+    this.reliableQueue.push(message);
+    if (this.reliableQueue.length > this.maxReliableQueue) {
+      this.reliableQueue.shift();
+      logger.warn({ queueSize: this.reliableQueue.length }, 'reliable ws queue overflow; oldest message dropped');
+    }
+    logger.debug({ queueSize: this.reliableQueue.length, type: message?.type }, 'ws not ready, queued reliable message');
+  }
+
+  flushReliableQueue() {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.reliableQueue.length === 0) return;
+    const queued = [...this.reliableQueue];
+    this.reliableQueue.length = 0;
+    for (const message of queued) {
+      this.sendRaw(message);
+    }
+    logger.info({ count: queued.length }, 'flushed queued reliable ws messages');
+  }
+
+  sendRaw(message) {
     try {
       this.ws.send(JSON.stringify(message));
     } catch (err) {

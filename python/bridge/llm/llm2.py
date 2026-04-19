@@ -76,10 +76,29 @@ def _llm2_reasoning_effort() -> str | None:
 def get_llm2_model_for_chat(chat_id: str) -> str:
   """Get model_id for chat, or default if not set."""
   model_id = db_get_llm2_model(chat_id)
-  if model_id:
-    return model_id
   default_model = get_default_llm2_model()
-  return default_model["model_id"] if default_model else "gpt-4.1"
+  default_model_id = default_model["model_id"] if default_model else "gpt-4.1"
+  if model_id:
+    logger.debug(
+      "LLM2 model resolved from chat setting",
+      extra={
+        "chat_id": chat_id,
+        "chat_model": model_id,
+        "default_model": default_model_id,
+        "resolved_model": model_id,
+      },
+    )
+    return model_id
+  logger.debug(
+    "LLM2 model resolved from default setting",
+    extra={
+      "chat_id": chat_id,
+      "chat_model": None,
+      "default_model": default_model_id,
+      "resolved_model": default_model_id,
+    },
+  )
+  return default_model_id
 
 
 def _clean_env(raw: str | None) -> str | None:

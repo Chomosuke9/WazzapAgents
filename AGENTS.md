@@ -11,6 +11,14 @@
 - `examples/` – example LLM WebSocket server (`llm_ws_echo.py`).
 - `website/` – Docusaurus documentation site (Indonesian + English i18n).
 - `README.md` – protocol contract with the LLM (`incoming_message`, `send_message` payloads).
+- `docs/llm-architecture/` – architecture docs for LLM/agent developers. Read order: `00-overview.md` → `01-runtime-flow.md` → `02-modules-map.md` → `03-commands-and-permissions.md` → `04-protocol-and-actions.md` → `05-state-data-and-db.md`.
+
+## LLM Architecture Quick Summary
+- **Node Gateway (`src/`)**: WhatsApp socket (Baileys), slash-command + interactive handling, outbound WS client, and execution of actions sent by Python.
+- **Python Bridge (`python/bridge/`)**: message batching/debounce, LLM1 routing, LLM2 generation, moderation decisions, and dashboard stats writing.
+- **Protocol shape**: Node sends `incoming_message`; Python sends action commands (`send_message`, `delete_message`, `kick_member`, etc.); Node returns `action_ack`/`error`.
+- **Reliability rule**: use `wsClient.sendReliable()` for state-sync/control events (`clear_history`, model invalidation/set, status) so messages survive reconnects.
+- **Data ownership (current)**: Node mainly writes settings/model config and reads dashboard stats; Python writes stats and manages runtime/chat moderation state.
 
 ## Build, Test, and Development Commands
 - Install Node deps: `pnpm install` (Node 18+; project is ESM).

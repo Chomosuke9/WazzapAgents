@@ -49,6 +49,7 @@ const config = {
   instanceId: process.env.INSTANCE_ID || 'default',
   wsEndpoint: process.env.LLM_WS_ENDPOINT,
   wsToken: process.env.LLM_WS_TOKEN || null,
+  dataDir: DATA_DIR,
   reconnectIntervalMs: positiveInt(process.env.WS_RECONNECT_MS, 5000),
   authDir: AUTH_DIR,
   mediaDir: MEDIA_DIR,

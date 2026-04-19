@@ -33,6 +33,7 @@ try:
     clear_mutes as db_clear_mutes,
     get_mute_remaining_minutes as db_get_mute_remaining,
     set_permission as db_set_permission,
+    set_llm2_model as db_set_llm2_model,
     clear_llm2_model_cache as db_clear_llm2_model_cache,
     clear_default_llm2_model_cache as db_clear_default_llm2_model_cache,
   )
@@ -109,6 +110,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     clear_mutes as db_clear_mutes,
     get_mute_remaining_minutes as db_get_mute_remaining,
     set_permission as db_set_permission,
+    set_llm2_model as db_set_llm2_model,
     clear_llm2_model_cache as db_clear_llm2_model_cache,
     clear_default_llm2_model_cache as db_clear_default_llm2_model_cache,
   )
@@ -1170,6 +1172,15 @@ async def handle_socket(ws):
         clear_chat_id = event.get("chatId")
         db_clear_llm2_model_cache(clear_chat_id)
         logger.info("LLM2 model cache cleared for chat_id=%s via invalidate_llm2_model message", clear_chat_id)
+        continue
+
+      # Handle set_llm2_model message from Node.js (authoritative sync)
+      if event_type == "set_llm2_model":
+        chat_id = event.get("chatId")
+        model_id = event.get("modelId")
+        if chat_id:
+          db_set_llm2_model(chat_id, model_id)
+          logger.info("LLM2 model set via set_llm2_model message chat_id=%s model_id=%s", chat_id, model_id)
         continue
 
       # Handle invalidate_default_model message from Node.js (after modelcfg changes)

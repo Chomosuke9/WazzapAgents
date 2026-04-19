@@ -160,7 +160,7 @@ async function handleReset({ chatId, chatType, senderIsAdmin, senderIsOwner, con
     return;
   }
 
-  wsClient.send({ type: 'clear_history', chatId });
+  wsClient.sendReliable({ type: 'clear_history', chatId });
 
   try {
     await sock.sendMessage(chatId, { text: 'Bot memory for this chat has been reset.' });
@@ -668,7 +668,7 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
       const description = descParts.join(' ');
       const success = addModel(modelId, displayName, description);
       if (success) {
-        wsClient.send({ type: 'invalidate_default_model' });
+        wsClient.sendReliable({ type: 'invalidate_default_model' });
       }
       try {
         await sock.sendMessage(chatId, { text: success ? `Model "${displayName}" added.` : `Model "${modelId}" already exists.` });
@@ -697,7 +697,7 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
       }
       const success = updateModel(modelId, updates);
       if (success) {
-        wsClient.send({ type: 'invalidate_default_model' });
+        wsClient.sendReliable({ type: 'invalidate_default_model' });
       }
       try {
         await sock.sendMessage(chatId, { text: success ? `Model "${modelId}" updated.` : `Model "${modelId}" not found.` });
@@ -716,7 +716,7 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
       const [modelId] = subArgs;
       const success = deleteModel(modelId);
       if (success) {
-        wsClient.send({ type: 'invalidate_default_model' });
+        wsClient.sendReliable({ type: 'invalidate_default_model' });
       }
       try {
         await sock.sendMessage(chatId, { text: success ? `Model "${modelId}" deleted.` : `Model "${modelId}" not found.` });
@@ -909,7 +909,6 @@ async function handleCommandListener(msg, context) {
       return true;
 
     case 'setting':
-    case 'settings':
       await handleSettings({ chatId, chatType, senderId, senderIsAdmin, senderIsOwner, args });
       return true;
 

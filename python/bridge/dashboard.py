@@ -117,6 +117,15 @@ def flush_to_db() -> None:
     total = len(stats_snapshot) + len(user_snapshot)
     logger.debug("dashboard flush: %d stat rows, %d user rows", len(stats_snapshot), len(user_snapshot))
   except Exception as e:
+    with _buffer_lock:
+      for key, inc in stats_snapshot.items():
+        _stats_buffer[key] = _stats_buffer.get(key, 0) + inc
+      for key, (name, inc) in user_snapshot.items():
+        existing = _user_stats_buffer.get(key)
+        if existing:
+          _user_stats_buffer[key] = (name or existing[0], existing[1] + inc)
+        else:
+          _user_stats_buffer[key] = (name, inc)
     logger.warning("dashboard flush failed: %s", e)
 
 

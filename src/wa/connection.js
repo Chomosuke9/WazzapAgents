@@ -183,7 +183,7 @@ async function setDefaultModel(sock, chatId, modelId) {
   const allModels = getAllModels();
   const minOrder = Math.min(...allModels.map((m) => m.sortOrder));
   updateModel(modelId, { sortOrder: minOrder - 1 });
-  wsClient.send({ type: 'invalidate_default_model' });
+  wsClient.sendReliable({ type: 'invalidate_default_model' });
   await sock.sendMessage(chatId, { text: `Model "${model.displayName}" set as default.` });
 }
 
@@ -245,7 +245,7 @@ async function startWhatsApp() {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const reason = lastDisconnect?.error;
       logger.warn({ statusCode, reason }, 'connection closed, reconnecting');
-      wsClient.send({ type: 'whatsapp_status', payload: { status: 'closed', reason: statusCode, instanceId: config.instanceId } });
+      wsClient.sendReliable({ type: 'whatsapp_status', payload: { status: 'closed', reason: statusCode, instanceId: config.instanceId } });
       if (statusCode !== DisconnectReason.loggedOut) {
         startWhatsApp().catch((err) => logger.error({ err }, 'reconnect failed'));
       } else {
@@ -253,7 +253,7 @@ async function startWhatsApp() {
       }
     } else if (connection === 'open') {
       logger.info('WhatsApp socket connected');
-      wsClient.send({ type: 'whatsapp_status', payload: { status: 'open', instanceId: config.instanceId } });
+      wsClient.sendReliable({ type: 'whatsapp_status', payload: { status: 'open', instanceId: config.instanceId } });
     }
   });
 
@@ -339,7 +339,8 @@ async function startWhatsApp() {
           return true;
         }
         setLlm2Model(chatId, modelId);
-        wsClient.send({ type: 'invalidate_llm2_model', chatId });
+        wsClient.sendReliable({ type: 'set_llm2_model', chatId, modelId });
+        wsClient.sendReliable({ type: 'invalidate_llm2_model', chatId });
         const models = getAllActiveModels();
         const model = models.find((m) => m.modelId === modelId);
         const displayName = model?.displayName || modelId;

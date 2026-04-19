@@ -12,12 +12,11 @@ const DEFAULT_TRIGGERS = 'tag,reply,name';
 let _sql = null;
 let _db = null;
 let _dbPath = null;
-let _statsDirty = false;
-let _statsSaveInterval = null;
+let _lastLoadedMtimeMs = 0;
 
 function getDbPath() {
   if (_dbPath) return _dbPath;
-  const dataDir = config.dataDir || path.resolve(process.cwd(), 'data');
+  const dataDir = config.dataDir;
   if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
   }
@@ -25,26 +24,51 @@ function getDbPath() {
   return _dbPath;
 }
 
+function getFileMtimeMs(filePath) {
+  try {
+    return fs.statSync(filePath).mtimeMs || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function loadDbDataFromDisk(dbPath) {
+  if (!fs.existsSync(dbPath)) return null;
+  const fileBuffer = fs.readFileSync(dbPath);
+  return new Uint8Array(fileBuffer);
+}
+
+function replaceDb(data = null) {
+  _db = new _sql.Database(data);
+  initTables();
+}
+
+function refreshDbFromDiskIfChanged() {
+  if (!_sql || !_db || !_dbPath) return;
+  const diskMtimeMs = getFileMtimeMs(_dbPath);
+  if (!diskMtimeMs || diskMtimeMs <= _lastLoadedMtimeMs) return;
+  try {
+    const data = loadDbDataFromDisk(_dbPath);
+    replaceDb(data);
+    _lastLoadedMtimeMs = diskMtimeMs;
+    logger.debug({ dbPath: _dbPath }, 'DB refreshed from disk');
+  } catch (err) {
+    logger.warn({ err, dbPath: _dbPath }, 'DB refresh from disk failed');
+  }
+}
+
 function saveDb() {
   if (!_db) return;
   try {
     const data = _db.export();
     const buffer = Buffer.from(data);
-    fs.writeFileSync(_dbPath, buffer);
+    const tempPath = `${_dbPath}.tmp`;
+    fs.writeFileSync(tempPath, buffer);
+    fs.renameSync(tempPath, _dbPath);
+    _lastLoadedMtimeMs = getFileMtimeMs(_dbPath) || Date.now();
   } catch (err) {
     logger.error({ err }, 'DB save failed');
   }
-}
-
-function startStatsSaveInterval() {
-  if (_statsSaveInterval) return;
-  _statsSaveInterval = setInterval(() => {
-    if (_statsDirty) {
-      saveDb();
-      _statsDirty = false;
-      logger.debug('DB periodic save (stats)');
-    }
-  }, 3 * 60 * 1000);
 }
 
 async function init() {
@@ -54,19 +78,14 @@ async function init() {
 
   const dbPath = getDbPath();
   let data = null;
-
-  if (fs.existsSync(dbPath)) {
-    try {
-      const fileBuffer = fs.readFileSync(dbPath);
-      data = new Uint8Array(fileBuffer);
-    } catch (err) {
-      logger.warn({ err, dbPath }, 'Could not read existing DB, creating new');
-    }
+  try {
+    data = loadDbDataFromDisk(dbPath);
+  } catch (err) {
+    logger.warn({ err, dbPath }, 'Could not read existing DB, creating new');
   }
 
-  _db = new _sql.Database(data);
-  initTables();
-  startStatsSaveInterval();
+  replaceDb(data);
+  _lastLoadedMtimeMs = getFileMtimeMs(dbPath) || Date.now();
 
   logger.info({ dbPath }, 'DB initialized');
 }
@@ -119,10 +138,12 @@ function initTables() {
 }
 
 function runQuery(sql, ...params) {
+  refreshDbFromDiskIfChanged();
   _db.run(sql, params);
 }
 
 function getOne(sql, ...params) {
+  refreshDbFromDiskIfChanged();
   const stmt = _db.prepare(sql);
   stmt.bind(params);
   if (stmt.step()) {
@@ -135,6 +156,7 @@ function getOne(sql, ...params) {
 }
 
 function getAll(sql, ...params) {
+  refreshDbFromDiskIfChanged();
   const stmt = _db.prepare(sql);
   stmt.bind(params);
   const results = [];
