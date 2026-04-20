@@ -6,7 +6,7 @@ async function handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, send
 
   if (chatType === 'private') {
     try {
-      await sock.sendMessage(chatId, { text: '/mode can only be used in group chats.' });
+      await sock.sendMessage(chatId, { text: '`/mode` can only be used in group chats.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -39,7 +39,7 @@ async function handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, send
   const mode = args.trim().toLowerCase();
   if (!VALID_MODES.has(mode)) {
     try {
-      await sock.sendMessage(chatId, { text: 'Invalid mode. Use: /mode auto, /mode prefix, or /mode hybrid' });
+      await sock.sendMessage(chatId, { text: 'Invalid mode. Use: `/mode` auto, `/mode` prefix, or `/mode` hybrid' });
     } catch (err) { /* ignore */ }
     return;
   }

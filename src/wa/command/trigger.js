@@ -13,7 +13,7 @@ async function handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, s
 
   if (chatType === 'private') {
     try {
-      await sock.sendMessage(chatId, { text: '/trigger can only be used in group chats.' });
+      await sock.sendMessage(chatId, { text: '`/trigger` can only be used in group chats.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -34,7 +34,7 @@ async function handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, s
       } catch (err) { /* ignore */ }
     } else {
       try {
-        await sock.sendMessage(chatId, { text: 'No triggers enabled. Bot won\'t respond in prefix mode.\nUse /trigger all to enable all triggers.' });
+        await sock.sendMessage(chatId, { text: 'No triggers enabled. Bot won\'t respond in prefix mode.\nUse `/trigger` all to enable all triggers.' });
       } catch (err) { /* ignore */ }
     }
     return;

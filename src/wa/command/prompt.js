@@ -11,7 +11,7 @@ async function handlePrompt({ chatId, chatType, senderIsAdmin, senderIsOwner, ar
     // proceed
   } else {
     try {
-      await sock.sendMessage(chatId, { text: 'Only group admins can use /prompt.' });
+      await sock.sendMessage(chatId, { text: 'Only group admins can use `/prompt`.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -24,7 +24,7 @@ async function handlePrompt({ chatId, chatType, senderIsAdmin, senderIsOwner, ar
       } catch (err) { /* ignore */ }
     } else {
       try {
-        await sock.sendMessage(chatId, { text: 'No custom prompt set for this chat. Use /prompt <text> to set one.' });
+        await sock.sendMessage(chatId, { text: 'No custom prompt set for this chat. Use `/prompt` <text> to set one.' });
       } catch (err) { /* ignore */ }
     }
     return;

@@ -9,7 +9,7 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
   if (!isOwnerJid(senderId)) {
     logger.info({ senderId, chatId }, '/broadcast rejected: not owner');
     try {
-      await sock.sendMessage(chatId, { text: 'Only bot owners can use /broadcast.' });
+      await sock.sendMessage(chatId, { text: 'Only bot owners can use `/broadcast`.' });
     } catch (err) {
       logger.warn({ err }, 'failed sending broadcast rejection');
     }
@@ -77,7 +77,7 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
     }
   } else {
     try {
-      await sock.sendMessage(chatId, { text: 'Usage: /broadcast <text> or reply to a message with /broadcast.' });
+      await sock.sendMessage(chatId, { text: 'Usage: `/broadcast` <text> or reply to a message with `/broadcast`.' });
     } catch (e) { /* ignore */ }
     return;
   }

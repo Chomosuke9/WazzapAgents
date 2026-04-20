@@ -8,7 +8,7 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
   const sock = getSock();
   if (!senderIsOwner) {
     try {
-      await sock.sendMessage(chatId, { text: 'Only bot owner can use /modelcfg.' });
+      await sock.sendMessage(chatId, { text: 'Only bot owner can use `/modelcfg`.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -122,7 +122,7 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
       const models = getAllModels();
       if (models.length === 0) {
         try {
-          await sock.sendMessage(chatId, { text: 'No models configured. Use /modelcfg add <model_id> <display_name> [description]' });
+          await sock.sendMessage(chatId, { text: 'No models configured. Use `/modelcfg` add <model_id> <display_name> [description]' });
         } catch (err) { /* ignore */ }
         return;
       }
@@ -143,7 +143,7 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
     case 'add': {
       if (subArgs.length < 2) {
         try {
-          await sock.sendMessage(chatId, { text: 'Usage: /modelcfg add <model_id> <display_name> [description]' });
+          await sock.sendMessage(chatId, { text: 'Usage: `/modelcfg` add <model_id> <display_name> [description]' });
         } catch (err) { /* ignore */ }
         return;
       }
@@ -162,7 +162,7 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
     case 'edit': {
       if (subArgs.length < 1) {
         try {
-          await sock.sendMessage(chatId, { text: 'Usage: /modelcfg edit <model_id> [name=<name>] [desc=<desc>] [active=0|1] [order=<n>]' });
+          await sock.sendMessage(chatId, { text: 'Usage: `/modelcfg` edit <model_id> [name=<name>] [desc=<desc>] [active=0|1] [order=<n>]' });
         } catch (err) { /* ignore */ }
         return;
       }
@@ -192,7 +192,7 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
     case 'delete': {
       if (subArgs.length < 1) {
         try {
-          await sock.sendMessage(chatId, { text: 'Usage: /modelcfg remove <model_id>' });
+          await sock.sendMessage(chatId, { text: 'Usage: `/modelcfg` remove <model_id>' });
         } catch (err) { /* ignore */ }
         return;
       }

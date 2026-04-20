@@ -10,7 +10,7 @@ async function handleReset({ chatId, chatType, senderIsAdmin, senderIsOwner, con
     // proceed
   } else {
     try {
-      await sock.sendMessage(chatId, { text: 'Only group admins can use /reset.' });
+      await sock.sendMessage(chatId, { text: 'Only group admins can use `/reset`.' });
     } catch (err) { /* ignore */ }
     return;
   }

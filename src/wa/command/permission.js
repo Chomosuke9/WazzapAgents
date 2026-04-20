@@ -13,14 +13,14 @@ async function handlePermission({ chatId, chatType, senderIsAdmin, senderIsOwner
 
   if (chatType === 'private') {
     try {
-      await sock.sendMessage(chatId, { text: '/permission can only be used in group chats.' });
+      await sock.sendMessage(chatId, { text: '`/permission` can only be used in group chats.' });
     } catch (err) { /* ignore */ }
     return;
   }
 
   if (!senderIsOwner && !senderIsAdmin) {
     try {
-      await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can use /permission.' });
+      await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can use `/permission`.' });
     } catch (err) { /* ignore */ }
     return;
   }
@@ -37,7 +37,7 @@ async function handlePermission({ chatId, chatType, senderIsAdmin, senderIsOwner
   const level = parseInt(args.trim(), 10);
   if (isNaN(level)) {
     try {
-      await sock.sendMessage(chatId, { text: 'Usage: /permission 0, 1, 2, or 3.' });
+      await sock.sendMessage(chatId, { text: 'Usage: `/permission` 0, 1, 2, or 3.' });
     } catch (err) { /* ignore */ }
     return;
   }

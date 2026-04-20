@@ -18,7 +18,7 @@ async function handleModel({ chatId, chatType, senderIsAdmin, senderIsOwner, arg
   const models = getAllActiveModels();
   if (models.length === 0) {
     try {
-      await sock.sendMessage(chatId, { text: 'No models available. Ask the bot owner to add models using /modelcfg.' });
+      await sock.sendMessage(chatId, { text: 'No models available. Ask the bot owner to add models using `/modelcfg`.' });
     } catch (err) { /* ignore */ }
     return;
   }

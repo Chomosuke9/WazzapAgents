@@ -382,11 +382,11 @@ async function startWhatsApp() {
           return true;
         }
         if (action === 'prompt') {
-          await sock.sendMessage(chatId, { text: 'Gunakan /prompt <teks> untuk mengubah prompt.' });
+          await sock.sendMessage(chatId, { text: 'Gunakan `/prompt` <teks> untuk mengubah prompt.' });
           return true;
         }
         if (action === 'permission') {
-          await sock.sendMessage(chatId, { text: 'Gunakan /permission <0-3> untuk mengubah level.' });
+          await sock.sendMessage(chatId, { text: 'Gunakan `/permission` <0-3> untuk mengubah level.' });
           return true;
         }
         return true;
@@ -447,7 +447,7 @@ async function startWhatsApp() {
             const displayName = model?.displayName || modelId;
             await sock.sendMessage(chatId, { text: success ? `Model "${displayName}" removed.` : `Model "${modelId}" not found.` });
           } else {
-            await sock.sendMessage(chatId, { text: 'Usage: /modelcfg remove <model_id>' });
+            await sock.sendMessage(chatId, { text: 'Usage: `/modelcfg` remove <model_id>' });
           }
           return true;
         }

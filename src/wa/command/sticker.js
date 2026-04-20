@@ -268,7 +268,7 @@ async function handleSticker({ chatId, chatType, senderIsAdmin, senderIsOwner, a
   if (!mediaPath) {
     try {
       await getSock().sendMessage(chatId, {
-        text: 'Kirim gambar/video dengan caption /sticker, atau reply gambar/video dengan /sticker.',
+        text: 'Kirim gambar/video dengan caption `/sticker`, atau reply gambar/video dengan `/sticker`.',
       });
     } catch (err) { /* ignore */ }
     return;

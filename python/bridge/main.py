@@ -358,7 +358,7 @@ async def handle_socket(ws):
         if not media_path:
           await send_message(
             ws, p_chat_id,
-            "Send an image with the /sticker caption or reply to an image.",
+            "Send an image with the `/sticker` caption or reply to an image.",
             reply_to, request_id=_make_request_id("cmd"),
           )
         else:
@@ -1228,7 +1228,7 @@ async def handle_socket(ws):
           await send_message(
             ws,
             chat_id,
-            "Bot is now an admin! Moderation features (/permission) can now be enabled by group admins.",
+            "Bot is now an admin! Moderation features (`/permission`) can now be enabled by group admins.",
             None,
             request_id=_make_request_id("role_notify"),
           )

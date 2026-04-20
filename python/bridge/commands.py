@@ -145,7 +145,7 @@ def _handle_prompt(
     return CommandResult(
       command="prompt",
       success=False,
-      reply="Only group admins can use /prompt.",
+      reply="Only group admins can use `/prompt`.",
     )
 
   if not args:
@@ -160,7 +160,7 @@ def _handle_prompt(
     return CommandResult(
       command="prompt",
       success=True,
-      reply="No custom prompt set for this chat. Use /prompt <text> to set one.",
+      reply="No custom prompt set for this chat. Use `/prompt` <text> to set one.",
     )
 
   # Clear prompt if "-" or "clear"
@@ -204,7 +204,7 @@ def _handle_reset(
     return CommandResult(
       command="reset",
       success=False,
-      reply="Only group admins can use /reset.",
+      reply="Only group admins can use `/reset`.",
     )
 
   # Memory clearing is done by the caller (main.py) based on this result.
@@ -239,14 +239,14 @@ def _handle_permission(
     return CommandResult(
       command="permission",
       success=False,
-      reply="/permission can only be used in group chats.",
+      reply="`/permission` can only be used in group chats.",
     )
 
   if not sender_is_admin:
     return CommandResult(
       command="permission",
       success=False,
-      reply="Only group admins can use /permission.",
+      reply="Only group admins can use `/permission`.",
     )
 
   if not args:
@@ -264,7 +264,7 @@ def _handle_permission(
     return CommandResult(
       command="permission",
       success=False,
-      reply="Usage: /permission 0, 1, 2, or 3.",
+      reply="Usage: `/permission` 0, 1, 2, or 3.",
     )
 
   if level < 0 or level > 3:
@@ -331,7 +331,7 @@ def _handle_mode(
     return CommandResult(
       command="mode",
       success=False,
-      reply=f"Invalid mode. Use: /mode auto, /mode prefix, or /mode hybrid",
+      reply=f"Invalid mode. Use: `/mode` auto, `/mode` prefix, or `/mode` hybrid",
     )
 
   set_mode(chat_id, mode)
@@ -374,7 +374,7 @@ def _handle_trigger(
     return CommandResult(
       command="trigger",
       success=True,
-      reply="No triggers enabled. Bot won't respond in prefix mode.\nUse /trigger all to enable all triggers.",
+      reply="No triggers enabled. Bot won't respond in prefix mode.\nUse `/trigger` all to enable all triggers.",
     )
 
   if not _is_owner(sender_jid) and not sender_is_admin:
@@ -434,25 +434,25 @@ def _handle_trigger(
 _HELP_TEXT = """\
 *Daftar Perintah Bot*
 
-*/prompt* [teks] — atur kepribadian/instruksi khusus bot untuk chat ini
-  _Wajib admin grup. /prompt clear untuk menghapus._
+\`/prompt\` [teks] — atur kepribadian/instruksi khusus bot untuk chat ini
+  _Wajib admin grup. \`/prompt\` clear untuk menghapus._
 
-*/reset* — hapus memori percakapan bot di chat ini
+\`/reset\` — hapus memori percakapan bot di chat ini
   _Wajib admin grup._
 
-*/permission* [0-3] — atur izin moderasi (khusus grup)
+\`/permission\` [0-3] — atur izin moderasi (khusus grup)
   _Wajib admin grup._
   0 = tidak bisa kick/delete _(default)_
   1 = boleh delete pesan
   2 = boleh kick member
   3 = boleh delete & kick
 
-*/mode* [auto|prefix] — atur mode respons (khusus grup)
+\`/mode\` [auto|prefix] — atur mode respons (khusus grup)
   _Wajib owner atau admin grup._
   auto = LLM memutuskan kapan merespons
   prefix = hanya merespons jika ada trigger _(default)_
 
-*/trigger* [tag|reply|name|join|all|none] — toggle trigger di mode prefix
+\`/trigger\` [tag|reply|name|join|all|none] — toggle trigger di mode prefix
   _Wajib owner atau admin grup._
   tag = bot di-@mention
   reply = seseorang membalas pesan bot
@@ -460,11 +460,11 @@ _HELP_TEXT = """\
   join = member baru masuk grup
   all/none = aktifkan/nonaktifkan semua
 
-*/join* <link> — masuk ke grup lewat link undangan
+\`/join\` <link> — masuk ke grup lewat link undangan
 
-*/dashboard* — lihat statistik penggunaan bot
+\`/dashboard\` — lihat statistik penggunaan bot
 
-*/help* — tampilkan pesan ini\
+\`/help\` — tampilkan pesan ini\
 """
 
 

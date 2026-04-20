@@ -12,7 +12,7 @@ async function handleJoinCommand({ chatId, senderId, args }) {
   const input = (args || '').trim();
   if (!input) {
     try {
-      await sock.sendMessage(chatId, { text: 'Usage: /join <invite link or code>\nExample: /join https://chat.whatsapp.com/ABC123' });
+      await sock.sendMessage(chatId, { text: 'Usage: `/join` <invite link or code>\nExample: `/join` https://chat.whatsapp.com/ABC123' });
     } catch (e) { /* ignore */ }
     return;
   }

@@ -240,7 +240,7 @@ async function handleDebugCommand({ chatId, senderId, args }) {
   if (!isOwnerJid(senderId)) {
     logger.info({ senderId, chatId }, '/debug rejected: not owner');
     try {
-      await sock.sendMessage(chatId, { text: 'Only bot owners can use /debug.' });
+      await sock.sendMessage(chatId, { text: 'Only bot owners can use `/debug`.' });
     } catch (err) {
       logger.warn({ err }, 'failed sending debug rejection');
     }
@@ -255,7 +255,7 @@ async function handleDebugCommand({ chatId, senderId, args }) {
     try {
       await sock.sendMessage(chatId, {
         text: [
-          'Usage: /debug <type>',
+          'Usage: `/debug` <type>',
           '',
           `Types: ${DEBUG_TYPES.join(', ')}`,
           '',
@@ -267,7 +267,7 @@ async function handleDebugCommand({ chatId, senderId, args }) {
           '- broadcast    → preview format pesan broadcast',
           '- carousel     → swipeable cards (tanpa header image, eksperimental)',
           '- carousel-img → swipeable cards dengan header image (eksperimental)',
-          '                 Opsional: /debug carousel-img <url>',
+          '                 Opsional: `/debug` carousel-img <url>',
           '- all          → buttons + menu + list + rich + combined + broadcast',
         ].join('\n'),
       });
