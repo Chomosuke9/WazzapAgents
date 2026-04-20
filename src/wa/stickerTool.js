@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto';
 import config from '../config.js';
 
 const STICKER_SIZE = 512;
-const OUTPUT_DIR = config.stickersDir;
+const OUTPUT_DIR = config.mediaDir;
 
 const SUPPORTED_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp']);
 
