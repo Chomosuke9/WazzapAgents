@@ -1,0 +1,17 @@
+// Barrel re-export — command handlers and parsing
+export { parseSlashCommand } from './parseCommand.js';
+export { handleBroadcastCommand } from './broadcast.js';
+export { handleInfoCommand } from './info.js';
+export { handleDebugCommand } from './debug.js';
+export { handleJoinCommand } from './join.js';
+export { handleHelp } from './help.js';
+export { handlePrompt } from './prompt.js';
+export { handleReset } from './reset.js';
+export { handleSticker } from './sticker.js';
+export { handlePermission } from './permission.js';
+export { handleMode } from './mode.js';
+export { handleTrigger } from './trigger.js';
+export { handleDashboard } from './dashboard.js';
+export { handleModel } from './model.js';
+export { handleModelcfg } from './modelcfg.js';
+export { handleSettings } from './setting.js';

@@ -40,7 +40,7 @@ import {
   emitGroupJoinContextEvent,
   emitBotRoleChangeEvent,
 } from './events.js';
-import { parseSlashCommand } from './commands.js';
+import { parseSlashCommand } from './command/index.js';
 
 async function buildMentionedParticipants(chatId, mentionedJids, botAliasSet = null) {
   if (!Array.isArray(mentionedJids) || mentionedJids.length === 0) return null;

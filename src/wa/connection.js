@@ -9,7 +9,7 @@ import config from '../config.js';
 import wsClient from '../wsClient.js';
 import { setSockAccessor, invalidateGroupMetadata } from '../groupContext.js';
 import { runWithConcurrency } from './utils.js';
-import { parseSlashCommand } from './commands.js';
+import { parseSlashCommand } from './command/index.js';
 import { handleCommandListener } from './commandHandler.js';
 import { isOwnerJid } from '../participants.js';
 import { roleFlagsForJid } from '../participants.js';
