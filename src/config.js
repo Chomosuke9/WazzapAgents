@@ -70,6 +70,12 @@ const config = {
   botOwnerJids: parseJidList(process.env.BOT_OWNER_JIDS),
   llmReplyInteractive: process.env.LLM_REPLY_INTERACTIVE === 'true',
   llmReplyFooter: process.env.LLM_REPLY_FOOTER || '',
+  stickerMaxDurationSec: positiveInt(process.env.STICKER_MAX_DURATION_SEC, 6),
+  stickerMaxSizeKb: positiveInt(process.env.STICKER_MAX_SIZE_KB, 1024),
+  stickerFps: positiveInt(process.env.STICKER_FPS, 15),
+  stickerQuality: positiveInt(process.env.STICKER_QUALITY, 75),
+  stickerPackName: process.env.STICKER_PACK_NAME || 'WazzapAgents',
+  stickerEmoji: process.env.STICKER_EMOJI || '🤖',
 };
 
 export default config;
