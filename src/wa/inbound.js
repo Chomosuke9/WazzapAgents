@@ -17,8 +17,6 @@ import {
   isOwnerJid,
 } from '../participants.js';
 import {
-  getCachedGroupMetadata,
-  defaultGroupContext,
   getGroupContext,
   normalizeGroupJoinAction,
   invalidateGroupMetadata,
@@ -78,14 +76,14 @@ async function handleGroupParticipantsUpdate(update) {
   if (!sock) return;
   const chatId = update?.id;
   if (!chatId || !chatId.endsWith('@g.us')) return;
-  invalidateGroupMetadata(chatId);
 
   const rawAction = typeof update?.action === 'string' ? update.action.toLowerCase() : '';
   const participants = compactParticipantJids(Array.isArray(update?.participants) ? update.participants : []);
   if (participants.length === 0) return;
   const actorId = compactParticipantJids([update?.authorPn, update?.author])[0] || null;
 
-  // Handle promote/demote: check if bot is among affected participants
+  // Handle promote/demote: invalidate AFTER event emission so that
+  // emitBotRoleChangeEvent can read cached group name/description
   const roleActions = new Set(['promote', 'demote']);
   if (roleActions.has(rawAction)) {
     const botAliases = new Set(currentBotAliases());
@@ -97,10 +95,13 @@ async function handleGroupParticipantsUpdate(update) {
         actorId,
       });
     }
+    invalidateGroupMetadata(chatId);
     return;
   }
 
-  // Handle join events
+  // Handle join events: invalidate before (emitGroupJoinContextEvent
+  // already forceRefreshes via getGroupContext)
+  invalidateGroupMetadata(chatId);
   const action = normalizeGroupJoinAction(rawAction);
   const joinActions = new Set(['add', 'invite', 'join', 'approve']);
   if (!joinActions.has(action)) return;
@@ -154,11 +155,7 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
 
   const groupStartMs = Date.now();
   const group = isGroup
-    ? (
-      fromMe
-        ? (getCachedGroupMetadata(chatId) || defaultGroupContext(chatId))
-        : await getGroupContext(chatId)
-    )
+    ? await getGroupContext(chatId)
     : null;
   perf.groupMs = Date.now() - groupStartMs;
   const senderRole = isGroup ? roleFlagsForJid(group?.participantRoles, senderId) : { isAdmin: false, isSuperAdmin: false };
