@@ -56,6 +56,7 @@ Self-Triggering Commands:
   - `/help`: Show available commands and bot guide. Trigger this yourself instead of listing commands manually.
   - `/dashboard`: View usage statistics for the current chat.
   - `/sticker`: Create a sticker from a replied image/video.
+  - `/group-status <text>`: Post a group status update. Can be used with a replied image or standalone text. Admin/owner only.
   - `/join <link>`: Join other WhatsApp group.
   - `/setting`: Send the configuration menu, most people only need these.
 - When you send a command, it will be executed immediately, and you will see the output in the next context window.

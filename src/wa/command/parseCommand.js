@@ -35,6 +35,8 @@ const COMMAND_ALIASES = new Map([
   ['models', 'model'],
   ['modelcfg', 'modelcfg'],
   ['modelcfgs', 'modelcfg'],
+  ['group-status', 'group-status'],
+  ['gs', 'group-status'],
 ]);
 
 function parseSlashCommand(text) {
