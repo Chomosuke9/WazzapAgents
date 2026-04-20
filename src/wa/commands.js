@@ -114,7 +114,13 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
 
     for (const groupJid of groupJids) {
       try {
-        await sock.sendMessage(groupJid, { forward: cachedMsg });
+        // Use Baileys native forward
+        await sock.sendMessage(groupJid, { 
+          forward: cachedMsg,
+          contextInfo: {
+            isForwarded: true
+          }
+        });
         sent += 1;
       } catch (err) {
         logger.warn({ err, groupJid }, 'broadcast forward failed');

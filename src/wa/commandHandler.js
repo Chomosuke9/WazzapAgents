@@ -822,6 +822,10 @@ async function handleCommandListener(msg, context) {
 
   const { command, args } = slashCommand;
 
+  // Extract quoted message ID if any
+  const { message: innerMessage } = unwrapMessage(msg.message);
+  const quotedMessageId = innerMessage?.extendedTextMessage?.contextInfo?.stanzaId || null;
+
   switch (command) {
     case 'help':
       await handleHelp({ chatId });
@@ -856,7 +860,7 @@ async function handleCommandListener(msg, context) {
         chatId,
         senderId,
         text: args,
-        quotedMessageId: null,
+        quotedMessageId,
         contextMsgId,
         msg,
       });
