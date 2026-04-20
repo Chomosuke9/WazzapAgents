@@ -246,6 +246,7 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
     senderRef,
     senderName: fromMe ? (senderDisplay || 'LLM') : senderDisplay,
     senderIsAdmin: senderRole.isAdmin || senderRole.isSuperAdmin,
+    senderIsSuperAdmin: Boolean(senderRole.isSuperAdmin),
     senderIsOwner: isOwnerJid(senderId),
     isGroup,
     botIsAdmin: Boolean(group?.botIsAdmin),

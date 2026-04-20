@@ -43,6 +43,7 @@ def _truncate_message(msg: WhatsAppMessage, max_chars: int) -> WhatsAppMessage:
     context_msg_id=msg.context_msg_id,
     sender_ref=msg.sender_ref,
     sender_is_admin=msg.sender_is_admin,
+    sender_is_super_admin=msg.sender_is_super_admin,
     text=_truncate_burst_text(msg.text, max_chars),
     media=msg.media,
     quoted_message_id=msg.quoted_message_id,
@@ -127,9 +128,9 @@ def build_llm1_prompt(
   current_line = _format_current_window(current_prompt_msg) or "(no current messages)"
   group_text = _group_description_block(group_description)
   context_messages = (
-    "older messages:\n"
+    "Older messages:\n"
     f"{hist_text}\n\n"
-    "current messages(burst):\n"
+    "Current messages (burst):\n"
     f"{current_line}\n"
   )
   current_content: str | list[dict] = context_messages
@@ -186,7 +187,7 @@ expression = single emoji OR exact sticker name from <sticker> catalog.
 
 **Bot role:** If bot is admin/super-admin → also respond to moderation messages. If normal member → ignore moderation situations entirely.
 
-**Burst:** Evaluate all messages in `current messages(burst)`. Busy bursts may overflow into `older messages` — still evaluate them.
+**Burst:** Evaluate all messages in `Current messages (burst)`. Busy bursts may overflow into `Older messages` — still evaluate them.
 
 **Sticker-only / media-without-text:** Treat as casual/non-verbal. Stay silent unless bot is mentioned, replied to, or media contains a direct question.
 
@@ -198,8 +199,9 @@ expression = single emoji OR exact sticker name from <sticker> catalog.
 
 - `Current message metadata`: mention/reply signals, recency, window size, chat state
 - `Group description`: use to judge topic relevance
-- `older messages` = background; `current messages(burst)` = trigger window
-- Message IDs: 6-digit. `<system>`/`<pending>` = non-actionable.
+- `Older messages` = background; `Current messages (burst)` = trigger window
+- Message IDs: 6-digit inside `[#...]`. `[#system]`/`[#pending]` = non-actionable.
+- Roles: `(admin)`, `(superadmin)`, or `(assistant)` are shown next to the name. Normal members have no role label.
 
 ---
 

@@ -347,16 +347,19 @@ def _payload_to_message(payload: dict) -> WhatsAppMessage:
     sender = assistant_name()
     sender_ref = assistant_sender_ref()
     sender_is_admin = False
+    sender_is_super_admin = False
   else:
     sender = payload.get("senderName") or payload.get("senderId") or payload.get("chatId")
     sender_ref = _clean_text(payload.get("senderRef")) or None
     sender_is_admin = bool(payload.get("senderIsAdmin"))
+    sender_is_super_admin = bool(payload.get("senderIsSuperAdmin"))
   return WhatsAppMessage(
     timestamp_ms=int(payload["timestampMs"]),
     sender=sender,
     context_msg_id=context_msg_id,
     sender_ref=sender_ref,
     sender_is_admin=sender_is_admin,
+    sender_is_super_admin=sender_is_super_admin,
     text=_payload_text_with_mentions(payload),
     media=_infer_media(payload),
     quoted_message_id=(
@@ -382,30 +385,48 @@ def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
     if bool(item.get("fromMe")):
       sender = assistant_name()
       sender_ref = assistant_sender_ref()
-      sender_admin = ""
+      role_label = "(assistant)"
     else:
       sender = item.get("senderName") or item.get("senderId") or item.get("chatId") or "unknown"
       sender_ref = _clean_text(item.get("senderRef")) or "unknown"
-      sender_admin = "[Admin]" if bool(item.get("senderIsAdmin")) else ""
+      role_label = _format_role(bool(item.get("senderIsAdmin")), bool(item.get("senderIsSuperAdmin")))
+    
     timestamp_ms = int(item.get("timestampMs") or last.get("timestampMs") or 0)
     formatted_time = format_context_time(timestamp_ms)
     text = _normalize_preview_text(_payload_text_with_mentions(item))
     media = _infer_media(item)
-    quoted = _quoted_preview(item)
-    suffix = f" | {quoted}" if quoted else ""
-    if text and media:
-      lines.append(f"<{context_msg_id}>[{formatted_time}]{sender_admin}{sender} ({sender_ref}):[{media}] {text}{suffix}")
-      continue
-    if text:
-      lines.append(f"<{context_msg_id}>[{formatted_time}]{sender_admin}{sender} ({sender_ref}):{text}{suffix}")
-      continue
-    if media:
-      lines.append(f"<{context_msg_id}>[{formatted_time}]{sender_admin}{sender} ({sender_ref}):[{media}]{suffix}")
-      continue
-    lines.append(f"<{context_msg_id}>[{formatted_time}]{sender_admin}{sender} ({sender_ref}):(empty){suffix}")
+    
+    # Header line
+    lines.append(f"[#{context_msg_id}] {formatted_time}")
+    
+    # Reply line
+    quoted = _quoted_from_payload(item)
+    if quoted:
+      q_id = _normalize_context_msg_id(quoted.get("contextMsgId")) or quoted.get("messageId") or "000000"
+      q_sender = _quoted_sender(quoted) or "someone"
+      q_text = _normalize_preview_text(quoted.get("text"))
+      q_media = _infer_quoted_media(quoted)
+      
+      q_content = f"[{q_media}] " if q_media else ""
+      if q_text:
+        q_content += f'"{q_text}"'
+      elif not q_media:
+        q_content = "(empty)"
+      
+      lines.append(f"REPLYING TO [#{q_id}] {q_sender}: {q_content}")
+
+    # Content line
+    media_part = f"[{media}] " if media else ""
+    content_text = text or (media_part.strip() if media_part else "(empty)")
+    if media and text:
+      content_text = f"[{media}] {text}"
+    
+    role_suffix = f" {role_label}" if role_label else ""
+    lines.append(f"{sender} ({sender_ref}){role_suffix}: {content_text}")
+    lines.append("") # Spacer
 
   burst_text = (
-    f"Burst messages ({len(payloads)} total, latest last):\n" + "\n".join(lines)
+    f"Burst messages ({len(payloads)} total, latest last):\n" + "\n".join(lines).strip()
   )
   return WhatsAppMessage(
     timestamp_ms=int(last["timestampMs"]),
@@ -413,6 +434,7 @@ def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
     context_msg_id=_normalize_context_msg_id(last.get("contextMsgId")),
     sender_ref=_clean_text(last.get("senderRef")) or None,
     sender_is_admin=bool(last.get("senderIsAdmin")),
+    sender_is_super_admin=bool(last.get("senderIsSuperAdmin")),
     text=burst_text,
     media=_infer_media(last),
     message_id=str(last.get("messageId")) if last.get("messageId") else None,

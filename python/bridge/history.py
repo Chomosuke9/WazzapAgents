@@ -64,6 +64,7 @@ class WhatsAppMessage:
   context_msg_id: Optional[str] = None
   sender_ref: Optional[str] = None
   sender_is_admin: bool = False
+  sender_is_super_admin: bool = False
   text: Optional[str] = None
   media: Optional[str] = None  # e.g., "media", "sticker", "image", "video"
   quoted_message_id: Optional[str] = None
@@ -124,38 +125,53 @@ def _message_text(msg: WhatsAppMessage) -> str:
   return media_part or text_part or "(empty)"
 
 
+def _format_role(is_admin: bool, is_super_admin: bool = False) -> str:
+  if is_super_admin:
+    return "(superadmin)"
+  if is_admin:
+    return "(admin)"
+  return ""
+
+
 def format_history(messages: Iterable[WhatsAppMessage]) -> str:
   lines: list[str] = []
   for msg in messages:
     context_msg_id = _normalize_context_msg_id(msg.context_msg_id, role=msg.role)
     time = format_context_time(msg.timestamp_ms)
+    
     if msg.role == "assistant":
       sender = assistant_name()
       sender_ref = assistant_sender_ref()
-      admin_prefix = ""
+      role_label = "(assistant)"
     else:
       sender = _compact(msg.sender) or "unknown"
       sender_ref = _compact(msg.sender_ref) or "unknown"
-      admin_prefix = "[Admin]" if msg.sender_is_admin else ""
-    message_text = _message_text(msg)
-    lines.append(f"<{context_msg_id}>[{time}]{admin_prefix}{sender} ({sender_ref}):{message_text}".rstrip())
+      role_label = _format_role(msg.sender_is_admin, msg.sender_is_super_admin)
 
-    quote_sender = _compact(msg.quoted_sender)
-    quote_text = _compact(msg.quoted_text)
-    quote_media = _compact(msg.quoted_media)
-    quote_id = _compact(msg.quoted_message_id)
-    quote_text_is_media_stub = bool(
-      quote_text and quote_text.startswith("<media:") and quote_text.endswith(">")
-    )
-    quote_parts: list[str] = []
-    if quote_sender:
-      quote_parts.append(f"from={quote_sender}")
-    if quote_id:
-      quote_parts.append(f"id={quote_id}")
-    if quote_media:
-      quote_parts.append(f"quoted_media={quote_media}")
-    if quote_text and not (quote_media and quote_text_is_media_stub):
-      quote_parts.append(f"quoted_text={quote_text}")
-    if quote_parts:
-      lines.append(f"  > reply_to: {' | '.join(quote_parts)}")
-  return "\n".join(lines)
+    # Header line
+    lines.append(f"[#{context_msg_id}] {time}")
+    
+    # Reply line
+    if msg.quoted_message_id:
+      q_id = _normalize_context_msg_id(msg.quoted_message_id)
+      q_sender = _compact(msg.quoted_sender) or "someone"
+      # Note: we don't always have the quoted sender's ref or role in the history object
+      # for historical messages if they weren't captured.
+      q_text = _compact(msg.quoted_text) or ""
+      q_media = _compact(msg.quoted_media)
+      
+      q_content = f"[{q_media}] " if q_media else ""
+      if q_text:
+        q_content += f'"{q_text}"'
+      elif not q_media:
+        q_content = "(empty)"
+      
+      lines.append(f"REPLYING TO [#{q_id}] {q_sender}: {q_content}")
+
+    # Content line
+    message_text = _message_text(msg)
+    role_suffix = f" {role_label}" if role_label else ""
+    lines.append(f"{sender} ({sender_ref}){role_suffix}: {message_text}")
+    lines.append("") # Empty line between messages
+
+  return "\n".join(lines).strip()
