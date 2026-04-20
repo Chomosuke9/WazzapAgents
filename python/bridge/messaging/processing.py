@@ -374,6 +374,14 @@ def _payload_to_message(payload: dict) -> WhatsAppMessage:
   )
 
 
+def _format_role(is_admin: bool, is_super_admin: bool) -> str:
+  if is_super_admin:
+    return "superadmin"
+  if is_admin:
+    return "admin"
+  return ""
+
+
 def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
   last = payloads[-1]
   if len(payloads) == 1:
