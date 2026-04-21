@@ -201,6 +201,7 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
       if (result.success) {
         wsClient.sendReliable({ type: 'invalidate_default_model' });
         for (const affectedChatId of result.affectedChatIds) {
+          wsClient.sendReliable({ type: 'set_llm2_model', chatId: affectedChatId, modelId: null });
           wsClient.sendReliable({ type: 'clear_history', chatId: affectedChatId });
           wsClient.sendReliable({ type: 'invalidate_llm2_model', chatId: affectedChatId });
         }
