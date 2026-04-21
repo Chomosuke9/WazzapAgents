@@ -50,8 +50,8 @@ function parseModelReply(chatId, text) {
       const value = valueParts.join('=').trim();
       const k = key.trim().toLowerCase();
 
-      if (k === 'name') updates.displayName = value;
-      else if (k === 'desc') updates.description = value;
+      if (k === 'name') updates.displayName = unquote(value);
+      else if (k === 'desc') updates.description = unquote(value);
       else if (k === 'active') updates.isActive = value === '1' || value === 'true' || value === 'yes';
       else if (k === 'order') {
         const n = parseInt(value, 10);
@@ -68,29 +68,49 @@ function parseModelReply(chatId, text) {
     clearPendingForm(chatId);
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     if (lines.length < 2) {
-      return { action: 'add_model', error: 'Format: model_id\ndisplay_name\n[description]\n[vision=true/false]' };
+      return { action: 'add_model', error: 'Format: model_id\n"Display Name"\n["Description"]\n[vision=true/false]' };
     }
-    // Check if the last line is a vision flag (true/false or vision=true/false)
+    const modelId = unquote(lines[0]);
+    const displayName = unquote(lines[1]);
+
+    // Parse remaining lines: key=value pairs and bare description text
     let visionSupport = false;
-    let descLines = [];
-    const lastLine = lines[lines.length - 1].toLowerCase();
-    if (lastLine === 'true' || lastLine === 'false') {
-      visionSupport = lastLine === 'true';
-      descLines = lines.slice(2, lines.length - 1);
-    } else if (lastLine.startsWith('vision=')) {
-      const val = lastLine.split('=')[1];
-      visionSupport = val === 'true' || val === '1' || val === 'yes';
-      descLines = lines.slice(2, lines.length - 1);
-    } else {
-      descLines = lines.slice(2);
+    let description = '';
+    const descParts = [];
+    for (let i = 2; i < lines.length; i++) {
+      const line = lines[i];
+      const lowerLine = line.toLowerCase();
+      // Check for key=value pairs
+      const eqIdx = line.indexOf('=');
+      if (eqIdx > 0) {
+        const k = line.slice(0, eqIdx).trim().toLowerCase();
+        const v = line.slice(eqIdx + 1).trim();
+        if (k === 'vision') {
+          visionSupport = v === 'true' || v === '1' || v === 'yes';
+          continue;
+        }
+      }
+      // Check for bare true/false as standalone vision flag
+      if (lowerLine === 'true' || lowerLine === 'false') {
+        visionSupport = lowerLine === 'true';
+        continue;
+      }
+      // Otherwise it's description text
+      descParts.push(unquote(line));
     }
-    const modelId = lines[0];
-    const displayName = lines[1];
-    const description = descLines.join(' ');
+    description = descParts.join(' ');
     return { action: 'add_model', modelId, displayName, description, visionSupport };
   }
 
   return null;
+}
+
+function unquote(str) {
+  if (!str) return str;
+  if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
+    return str.slice(1, -1);
+  }
+  return str;
 }
 
 async function showModelSelectionForEdit(sock, chatId) {
@@ -155,15 +175,19 @@ async function showModelAddForm(sock, chatId, senderId) {
 
 Send the following format:
 model_id
-display_name
-description (optional)
-vision (optional, true/false)
+"display_name"
+"description" (optional)
+vision=true (optional, default false)
 
-Example:
+Examples:
 gpt-4o
-GPT-4 Omni
-Fast and capable model
-true
+"GPT-4 Omni"
+"Fast and capable model"
+vision=true
+
+kimi-k2.6
+Kimi
+vision=true
 
 Or send "cancel" to cancel.`;
 
