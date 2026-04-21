@@ -105,7 +105,7 @@ async function handleCommandListener(msg, context) {
       return true;
 
     case 'group-status':
-      await handleGroupStatus({ chatId, chatType, senderIsAdmin, senderIsOwner, args, msg });
+      await handleGroupStatus({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args, msg });
       return true;
 
     default:
