@@ -31,12 +31,13 @@ function createGroupStatusMessage(innerMessage) {
 /**
  * Build the contextInfo required for group status messages.
  * - isGroupStatus: true  — marks this as a group status
- * - statusAttributions  — carries the authorJid so WhatsApp shows attribution
+ * - statusAttributions  — carries the type + authorJid so WhatsApp shows attribution
  */
 function createGroupStatusContextInfo(authorJid) {
   return {
     isGroupStatus: true,
     statusAttributions: [{
+      type: 5, // StatusAttributionType.GROUP_STATUS
       groupStatus: { authorJid: getCleanJid(authorJid) },
     }],
   };
@@ -71,13 +72,21 @@ async function downloadMediaContent(content, contentType, messageId) {
  * Send a text-only group status message.
  *
  * Structure:
- *   groupStatusMessage.message.extendedTextMessage
- *     .text = caption
- *     .contextInfo = { isGroupStatus: true, statusAttributions: [...] }
+ *   groupStatusMessage.message {
+ *     messageContextInfo: { deviceListMetadata, deviceListMetadataVersion },
+ *     extendedTextMessage: {
+ *       text,
+ *       contextInfo: { isGroupStatus: true, statusAttributions: [...] }
+ *     }
+ *   }
  */
 async function sendTextGroupStatus(sock, jid, text, authorJid) {
   const contextInfo = createGroupStatusContextInfo(authorJid);
   const innerMessage = {
+    messageContextInfo: {
+      deviceListMetadata: {},
+      deviceListMetadataVersion: 2,
+    },
     extendedTextMessage: {
       text,
       contextInfo,
@@ -103,8 +112,9 @@ async function sendTextGroupStatus(sock, jid, text, authorJid) {
  * 1. Upload media via generateWAMessageContent (uses sock.waUploadToServer)
  * 2. Inject contextInfo (isGroupStatus + statusAttributions) into the
  *    resulting imageMessage/videoMessage proto
- * 3. Wrap inside groupStatusMessage FutureProofMessage
- * 4. Relay via relayMessage
+ * 3. Add messageContextInfo with deviceListMetadata to the inner message
+ * 4. Wrap inside groupStatusMessage FutureProofMessage
+ * 5. Relay via relayMessage
  */
 async function sendMediaGroupStatus(sock, jid, mediaPath, mediaKind, caption, authorJid) {
   const contextInfo = createGroupStatusContextInfo(authorJid);
@@ -127,10 +137,16 @@ async function sendMediaGroupStatus(sock, jid, mediaPath, mediaKind, caption, au
     }
   }
 
-  // Step 3 — wrap in groupStatusMessage
+  // Step 3 — add messageContextInfo with device metadata
+  uploaded.messageContextInfo = {
+    deviceListMetadata: {},
+    deviceListMetadataVersion: 2,
+  };
+
+  // Step 4 — wrap in groupStatusMessage
   const wrapper = createGroupStatusMessage(uploaded);
 
-  // Step 4 — generate and relay
+  // Step 5 — generate and relay
   const msg = generateWAMessageFromContent(jid, wrapper, {
     userJid: sock.user.id,
   });
