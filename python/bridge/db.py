@@ -400,6 +400,7 @@ def get_model_vision_support(chat_id: str) -> bool:
   # Determine which model is active
   active_model_id = model_id if model_id else (default_model['model_id'] if default_model else None)
   if not active_model_id:
+    logger.debug('get_model_vision_support: no active model for chat_id=%s (model_id=%s, default=%s)', chat_id, model_id, default_model)
     return False
 
   # If using chat-specific model, look it up
@@ -410,10 +411,14 @@ def get_model_vision_support(chat_id: str) -> bool:
       'SELECT vision_support FROM llm_models WHERE model_id = ? AND is_active = 1',
       (model_id,),
     ).fetchone()
-    return bool(row['vision_support']) if row else False
+    result = bool(row['vision_support']) if row else False
+    logger.debug('get_model_vision_support: chat_id=%s model_id=%s (chat-specific) vision=%s', chat_id, model_id, result)
+    return result
 
   # Using default model
-  return bool(default_model.get('vision_support', False)) if default_model else False
+  result = bool(default_model.get('vision_support', False)) if default_model else False
+  logger.debug('get_model_vision_support: chat_id=%s model_id=%s (default) vision=%s', chat_id, active_model_id, result)
+  return result
 
 
 def set_llm2_model(chat_id: str, model_id: Optional[str]) -> None:

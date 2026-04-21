@@ -523,8 +523,13 @@ async def generate_reply(
   )
   media_parts: list[dict] = []
   media_notes: list[str] = []
+  media_globally_enabled = llm2_media_enabled()
   model_has_vision = get_model_vision_support(log_chat_id) if log_chat_id else False
-  if llm2_media_enabled() and model_has_vision:
+  logger.info(
+    "LLM2 vision check: chat_id=%s media_enabled=%s model_vision=%s will_send_media=%s",
+    log_chat_id, media_globally_enabled, model_has_vision, media_globally_enabled and model_has_vision,
+  )
+  if media_globally_enabled and model_has_vision:
     media_parts, media_notes = build_visual_parts(current_payload)
   if media_notes:
     messages_content_text += "\n\nVisual attachments:\n" + "\n".join(

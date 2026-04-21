@@ -45,19 +45,19 @@ function parseModelReply(chatId, text) {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
 
     for (const line of lines) {
-      const [key, ...valueParts] = line.split('=');
-      if (!key || valueParts.length === 0) continue;
-      const value = valueParts.join('=').trim();
-      const k = key.trim().toLowerCase();
+      const eqIdx = line.indexOf('=');
+      if (eqIdx < 1) continue;
+      const k = line.slice(0, eqIdx).trim().toLowerCase();
+      const v = line.slice(eqIdx + 1).trim();
 
-      if (k === 'name') updates.displayName = unquote(value);
-      else if (k === 'desc') updates.description = unquote(value);
-      else if (k === 'active') updates.isActive = value === '1' || value === 'true' || value === 'yes';
+      if (k === 'name') updates.displayName = v;
+      else if (k === 'desc') updates.description = v;
+      else if (k === 'active') updates.isActive = v === '1' || v === 'true' || v === 'yes';
       else if (k === 'order') {
-        const n = parseInt(value, 10);
+        const n = parseInt(v, 10);
         if (!isNaN(n)) updates.sortOrder = n;
       }
-      else if (k === 'vision') updates.visionSupport = value === 'true' || value === '1' || value === 'yes';
+      else if (k === 'vision') updates.visionSupport = v === 'true' || v === '1' || v === 'yes';
     }
 
     const success = updateModel(modelId, updates);
@@ -68,23 +68,23 @@ function parseModelReply(chatId, text) {
     clearPendingForm(chatId);
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     if (lines.length < 2) {
-      return { action: 'add_model', error: 'Format: model_id\n"Display Name"\n["Description"]\n[vision=true/false]' };
+      return { action: 'add_model', error: 'Format:\nmodel_id\ndisplay_name\n[description]\n[vision=true]' };
     }
-    const modelId = unquote(lines[0]);
-    const displayName = unquote(lines[1]);
+    const modelId = lines[0];
+    const displayName = lines[1];
 
-    // Parse remaining lines: key=value pairs and bare description text
+    // Parse remaining lines: key=value pairs and bare true/false as metadata,
+    // everything else as description text joined with newline
     let visionSupport = false;
-    let description = '';
     const descParts = [];
     for (let i = 2; i < lines.length; i++) {
       const line = lines[i];
       const lowerLine = line.toLowerCase();
-      // Check for key=value pairs
+      // Check for key=value pairs (e.g. vision=true)
       const eqIdx = line.indexOf('=');
       if (eqIdx > 0) {
         const k = line.slice(0, eqIdx).trim().toLowerCase();
-        const v = line.slice(eqIdx + 1).trim();
+        const v = line.slice(eqIdx + 1).trim().toLowerCase();
         if (k === 'vision') {
           visionSupport = v === 'true' || v === '1' || v === 'yes';
           continue;
@@ -96,21 +96,13 @@ function parseModelReply(chatId, text) {
         continue;
       }
       // Otherwise it's description text
-      descParts.push(unquote(line));
+      descParts.push(line);
     }
-    description = descParts.join(' ');
+    const description = descParts.join('\n');
     return { action: 'add_model', modelId, displayName, description, visionSupport };
   }
 
   return null;
-}
-
-function unquote(str) {
-  if (!str) return str;
-  if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
-    return str.slice(1, -1);
-  }
-  return str;
 }
 
 async function showModelSelectionForEdit(sock, chatId) {
@@ -173,21 +165,25 @@ async function showModelAddForm(sock, chatId, senderId) {
 
   const helpText = `Add New Model
 
-Send the following format:
+Send the following format (one field per line):
 model_id
-"display_name"
-"description" (optional)
+display_name
+description (optional, can be multiple lines)
 vision=true (optional, default false)
 
 Examples:
+
 gpt-4o
-"GPT-4 Omni"
-"Fast and capable model"
+GPT-4 Omni
+Fast and capable model
 vision=true
 
 kimi-k2.6
 Kimi
 vision=true
+
+my-model
+My Custom Model
 
 Or send "cancel" to cancel.`;
 
@@ -551,6 +547,9 @@ async function startWhatsApp() {
           const result = parseModelReply(chatId, text);
           if (result) {
             if (result.action === 'edit_model') {
+              if (result.success) {
+                wsClient.sendReliable({ type: 'invalidate_default_model' });
+              }
               await sock.sendMessage(chatId, {
                 text: result.success
                   ? `Model "${result.modelId}" diupdate.`
@@ -562,6 +561,9 @@ async function startWhatsApp() {
               } else {
                 const { addModel } = await import('../db.js');
                 const success = addModel(result.modelId, result.displayName, result.description, null, result.visionSupport);
+                if (success) {
+                  wsClient.sendReliable({ type: 'invalidate_default_model' });
+                }
                 await sock.sendMessage(chatId, {
                   text: success
                     ? `Model "${result.displayName}" ditambahkan.${result.visionSupport ? ' (Vision enabled)' : ''}`
