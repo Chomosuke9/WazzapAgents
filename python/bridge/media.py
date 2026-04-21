@@ -86,10 +86,12 @@ def build_visual_parts(
   max_bytes: int | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
   if not payload:
+    logger.debug('build_visual_parts: no payload, returning empty')
     return [], []
 
   attachments = payload.get("attachments") or []
   if not attachments:
+    logger.debug('build_visual_parts: no attachments in payload, returning empty')
     return [], []
 
   item_limit = max_items or media_max_items()
