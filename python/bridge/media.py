@@ -6,12 +6,17 @@ import os
 from pathlib import Path
 from typing import Any
 
+try:
+  from .log import setup_logging
+except ImportError:
+  from bridge.log import setup_logging  # type: ignore
 
 try:
   from .config import _parse_positive_int
 except ImportError:
   from bridge.config import _parse_positive_int  # type: ignore
 
+logger = setup_logging()
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
