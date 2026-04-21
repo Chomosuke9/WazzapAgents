@@ -631,6 +631,7 @@ function deleteModel(modelId) {
   const existing = getOneFromState(_settingsState, initSettingsTables, 'SELECT model_id FROM llm_models WHERE model_id = ?', modelId);
   if (!existing) return false;
   runSettingsQuery('DELETE FROM llm_models WHERE model_id = ?', modelId);
+  runSettingsQuery('UPDATE chat_settings SET llm2_model = NULL WHERE llm2_model = ?', modelId);
   saveDb(_settingsState);
   logger.info({ modelId }, 'DB delete_model');
   return true;

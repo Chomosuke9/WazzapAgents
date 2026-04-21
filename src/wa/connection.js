@@ -442,6 +442,9 @@ async function startWhatsApp() {
         if (action === 'remove') {
           if (modelId) {
             const success = deleteModel(modelId);
+            if (success) {
+              wsClient.sendReliable({ type: 'invalidate_default_model' });
+            }
             const models = getAllModels();
             const model = models.find((m) => m.modelId === modelId);
             const displayName = model?.displayName || modelId;

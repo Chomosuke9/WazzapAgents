@@ -520,7 +520,12 @@ def delete_model(model_id: str) -> bool:
   existing = conn.execute('SELECT model_id FROM llm_models WHERE model_id = ?', (model_id,)).fetchone()
   if not existing:
     return False
+  affected_rows = conn.execute('SELECT chat_id FROM chat_settings WHERE llm2_model = ?', (model_id,)).fetchall()
+  with _cache_lock:
+    for row in affected_rows:
+      _llm2_model_cache.pop(row['chat_id'], None)
   conn.execute('DELETE FROM llm_models WHERE model_id = ?', (model_id,))
+  conn.execute('UPDATE chat_settings SET llm2_model = NULL WHERE llm2_model = ?', (model_id,))
   conn.commit()
   logger.info('DB delete_model model_id=%s', model_id)
   return True
