@@ -441,14 +441,18 @@ async function startWhatsApp() {
 
         if (action === 'remove') {
           if (modelId) {
-            const success = deleteModel(modelId);
-            if (success) {
+            const result = deleteModel(modelId);
+            if (result.success) {
               wsClient.sendReliable({ type: 'invalidate_default_model' });
+              for (const affectedChatId of result.affectedChatIds) {
+                wsClient.sendReliable({ type: 'clear_history', chatId: affectedChatId });
+                wsClient.sendReliable({ type: 'invalidate_llm2_model', chatId: affectedChatId });
+              }
             }
             const models = getAllModels();
             const model = models.find((m) => m.modelId === modelId);
             const displayName = model?.displayName || modelId;
-            await sock.sendMessage(chatId, { text: success ? `Model "${displayName}" removed.` : `Model "${modelId}" not found.` });
+            await sock.sendMessage(chatId, { text: result.success ? `Model "${displayName}" removed.` : `Model "${modelId}" not found.` });
           } else {
             await sock.sendMessage(chatId, { text: 'Usage: `/modelcfg` remove <model_id>' });
           }

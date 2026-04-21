@@ -584,8 +584,13 @@ async def generate_reply(
       include_reasoning=bool(reasoning_effort),
     )
     if tools:
+      # Thinking/reasoning mode (reasoning_effort) does not support
+      # tool_choice="required" or tool_choice="object" on some
+      # providers (e.g. Qwen/Alibaba).  Fall back to "auto" so the
+      # model can still decide whether to call a tool.
+      tool_choice_val = "auto" if reasoning_effort else "required"
       try:
-        llm = llm.bind_tools(tools, tool_choice="required")
+        llm = llm.bind_tools(tools, tool_choice=tool_choice_val)
       except Exception:
         llm = llm.bind_tools(tools)
 

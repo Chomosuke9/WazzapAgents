@@ -197,12 +197,16 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
         return;
       }
       const [modelId] = subArgs;
-      const success = deleteModel(modelId);
-      if (success) {
+      const result = deleteModel(modelId);
+      if (result.success) {
         wsClient.sendReliable({ type: 'invalidate_default_model' });
+        for (const affectedChatId of result.affectedChatIds) {
+          wsClient.sendReliable({ type: 'clear_history', chatId: affectedChatId });
+          wsClient.sendReliable({ type: 'invalidate_llm2_model', chatId: affectedChatId });
+        }
       }
       try {
-        await sock.sendMessage(chatId, { text: success ? `Model "${modelId}" deleted.` : `Model "${modelId}" not found.` });
+        await sock.sendMessage(chatId, { text: result.success ? `Model "${modelId}" deleted.` : `Model "${modelId}" not found.` });
       } catch (err) { /* ignore */ }
       break;
     }

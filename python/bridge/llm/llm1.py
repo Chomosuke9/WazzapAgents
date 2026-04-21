@@ -379,14 +379,19 @@ async def call_llm1(
     )
 
     async def _invoke_once(llm_client: ChatOpenAI):
+      # Thinking/reasoning mode does not support tool_choice="required"
+      # on some providers (e.g. Qwen/Alibaba).  Use "auto" instead so
+      # the model can still decide whether to call a tool.
+      tool_choice_val = "auto" if reasoning_effort else "required"
       try:
         llm_with_tool = llm_client.bind_tools(
           LLM1_TOOLS,
-          tool_choice="required",
+          tool_choice=tool_choice_val,
         )
       except Exception as err:
         logger.warning(
-          "LLM1 bind_tools with tool_choice=required failed; retrying default bind_tools",
+          "LLM1 bind_tools with tool_choice=%s failed; retrying default bind_tools",
+          tool_choice_val,
           exc_info=err,
           extra={
             **ctx,
