@@ -37,18 +37,19 @@ function parseModelReply(chatId, text) {
   const form = pendingForms.get(chatId);
   if (!form) return null;
 
+  const fields = text.split('|').map(f => f.trim()).filter(Boolean);
+
   if (form.type === 'edit_model') {
     const modelId = form.modelId;
     clearPendingForm(chatId);
 
     const updates = {};
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
 
-    for (const line of lines) {
-      const eqIdx = line.indexOf('=');
+    for (const field of fields) {
+      const eqIdx = field.indexOf('=');
       if (eqIdx < 1) continue;
-      const k = line.slice(0, eqIdx).trim().toLowerCase();
-      const v = line.slice(eqIdx + 1).trim();
+      const k = field.slice(0, eqIdx).trim().toLowerCase();
+      const v = field.slice(eqIdx + 1).trim();
 
       if (k === 'name') updates.displayName = v;
       else if (k === 'desc') updates.description = v;
@@ -66,39 +67,38 @@ function parseModelReply(chatId, text) {
 
   if (form.type === 'add_model') {
     clearPendingForm(chatId);
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    if (lines.length < 2) {
-      return { action: 'add_model', error: 'Format:\nmodel_id\ndisplay_name\n[description]\n[vision=true]' };
+    if (fields.length < 2) {
+      return { action: 'add_model', error: 'Format: model_id|display_name|[description]|[vision=true]' };
     }
-    const modelId = lines[0];
-    const displayName = lines[1];
+    const modelId = fields[0];
+    const displayName = fields[1];
 
-    // Parse remaining lines: key=value pairs and bare true/false as metadata,
-    // everything else as description text joined with newline
+    // Parse remaining fields: key=value pairs and bare true/false as metadata,
+    // everything else as description text
     let visionSupport = false;
     const descParts = [];
-    for (let i = 2; i < lines.length; i++) {
-      const line = lines[i];
-      const lowerLine = line.toLowerCase();
+    for (let i = 2; i < fields.length; i++) {
+      const field = fields[i];
+      const lowerField = field.toLowerCase();
       // Check for key=value pairs (e.g. vision=true)
-      const eqIdx = line.indexOf('=');
+      const eqIdx = field.indexOf('=');
       if (eqIdx > 0) {
-        const k = line.slice(0, eqIdx).trim().toLowerCase();
-        const v = line.slice(eqIdx + 1).trim().toLowerCase();
+        const k = field.slice(0, eqIdx).trim().toLowerCase();
+        const v = field.slice(eqIdx + 1).trim().toLowerCase();
         if (k === 'vision') {
           visionSupport = v === 'true' || v === '1' || v === 'yes';
           continue;
         }
       }
       // Check for bare true/false as standalone vision flag
-      if (lowerLine === 'true' || lowerLine === 'false') {
-        visionSupport = lowerLine === 'true';
+      if (lowerField === 'true' || lowerField === 'false') {
+        visionSupport = lowerField === 'true';
         continue;
       }
       // Otherwise it's description text
-      descParts.push(line);
+      descParts.push(field);
     }
-    const description = descParts.join('\n');
+    const description = descParts.join(' ');
     return { action: 'add_model', modelId, displayName, description, visionSupport };
   }
 
@@ -148,12 +148,8 @@ Current values:
 - order=${model.sortOrder}
 - vision=${model.visionSupport ? 'true' : 'false'}
 
-Send your changes in format:
-name=new_name
-desc=new_description
-active=1
-order=2
-vision=true
+Send your changes using | as separator:
+name=New Name|desc=New description|vision=true
 
 Or send "cancel" to cancel.`;
 
@@ -165,25 +161,13 @@ async function showModelAddForm(sock, chatId, senderId) {
 
   const helpText = `Add New Model
 
-Send the following format (one field per line):
-model_id
-display_name
-description (optional, can be multiple lines)
-vision=true (optional, default false)
+Send using | as separator:
+model_id|display_name|description|vision=true
 
 Examples:
-
-gpt-4o
-GPT-4 Omni
-Fast and capable model
-vision=true
-
-kimi-k2.6
-Kimi
-vision=true
-
-my-model
-My Custom Model
+gpt-4o|GPT-4 Omni|Fast and capable model|vision=true
+kimi-k2.6|Kimi|vision=true
+my-model|My Custom Model
 
 Or send "cancel" to cancel.`;
 
