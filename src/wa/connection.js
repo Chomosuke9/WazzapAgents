@@ -57,6 +57,7 @@ function parseModelReply(chatId, text) {
         const n = parseInt(value, 10);
         if (!isNaN(n)) updates.sortOrder = n;
       }
+      else if (k === 'vision') updates.visionSupport = value === 'true' || value === '1' || value === 'yes';
     }
 
     const success = updateModel(modelId, updates);
@@ -67,11 +68,26 @@ function parseModelReply(chatId, text) {
     clearPendingForm(chatId);
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     if (lines.length < 2) {
-      return { action: 'add_model', error: 'Format: model_id\\ndisplay_name\\n[description]' };
+      return { action: 'add_model', error: 'Format: model_id\ndisplay_name\n[description]\n[vision=true/false]' };
     }
-    const [modelId, displayName, ...descParts] = lines;
-    const description = descParts.join(' ');
-    return { action: 'add_model', modelId, displayName, description };
+    // Check if the last line is a vision flag (true/false or vision=true/false)
+    let visionSupport = false;
+    let descLines = [];
+    const lastLine = lines[lines.length - 1].toLowerCase();
+    if (lastLine === 'true' || lastLine === 'false') {
+      visionSupport = lastLine === 'true';
+      descLines = lines.slice(2, lines.length - 1);
+    } else if (lastLine.startsWith('vision=')) {
+      const val = lastLine.split('=')[1];
+      visionSupport = val === 'true' || val === '1' || val === 'yes';
+      descLines = lines.slice(2, lines.length - 1);
+    } else {
+      descLines = lines.slice(2);
+    }
+    const modelId = lines[0];
+    const displayName = lines[1];
+    const description = descLines.join(' ');
+    return { action: 'add_model', modelId, displayName, description, visionSupport };
   }
 
   return null;
@@ -88,7 +104,7 @@ async function showModelSelectionForEdit(sock, chatId) {
       title: 'Select Model to Edit',
       rows: models.map((m) => ({
         id: `/modelcfg edit ${m.modelId}`,
-        title: m.displayName + (m.isActive ? '' : ' (inactive)'),
+        title: m.displayName + (m.isActive ? '' : ' (inactive)') + (m.visionSupport ? ' 👁' : ''),
         description: m.description || `ID: ${m.modelId}`,
       })),
     },
@@ -118,12 +134,14 @@ Current values:
 - desc=${model.description || ''}
 - active=${model.isActive ? '1' : '0'}
 - order=${model.sortOrder}
+- vision=${model.visionSupport ? 'true' : 'false'}
 
 Send your changes in format:
 name=new_name
 desc=new_description
 active=1
 order=2
+vision=true
 
 Or send "cancel" to cancel.`;
 
@@ -139,11 +157,13 @@ Send the following format:
 model_id
 display_name
 description (optional)
+vision (optional, true/false)
 
 Example:
 gpt-4o
 GPT-4 Omni
 Fast and capable model
+true
 
 Or send "cancel" to cancel.`;
 
@@ -161,7 +181,7 @@ async function showModelSelectionForDefault(sock, chatId) {
       title: 'Select Default Model',
       rows: models.map((m) => ({
         id: `/modelcfg default ${m.modelId}`,
-        title: m.displayName,
+        title: m.displayName + (m.visionSupport ? ' 👁' : ''),
         description: m.description || `ID: ${m.modelId}`,
       })),
     },
@@ -345,7 +365,8 @@ async function startWhatsApp() {
         const models = getAllActiveModels();
         const model = models.find((m) => m.modelId === modelId);
         const displayName = model?.displayName || modelId;
-        await sock.sendMessage(chatId, { text: `Model diubah ke: ${displayName}` });
+        const visionNote = model?.visionSupport ? ' (Vision)' : '';
+        await sock.sendMessage(chatId, { text: `Model diubah ke: ${displayName}${visionNote}` });
         return true;
       }
 
@@ -366,10 +387,10 @@ async function startWhatsApp() {
           const defaultModel = getDefaultLlm2Model();
           const activeModelId = currentModelId || defaultModel?.modelId || null;
           const sections = models.map((m) => ({
-            title: m.displayName,
+            title: m.displayName + (m.visionSupport ? ' 👁' : ''),
             rows: [{
               title: m.displayName + (m.modelId === activeModelId ? ' ✓' : ''),
-              description: m.description || '',
+              description: m.description || (m.visionSupport ? 'Vision support' : ''),
               id: `model_select:${m.modelId}`,
             }],
           }));
@@ -413,7 +434,8 @@ async function startWhatsApp() {
           const defaultModel = getDefaultLlm2Model();
           for (const m of models) {
             const isDefault = defaultModel?.modelId === m.modelId;
-            lines.push(`${isDefault ? '✓' : '○'} ${m.displayName} (${m.modelId})${isDefault ? ' [DEFAULT]' : ''}`);
+            const vision = m.visionSupport ? ' 👁' : '';
+            lines.push(`${isDefault ? '✓' : '○'} ${m.displayName} (${m.modelId})${isDefault ? ' [DEFAULT]' : ''}${vision}`);
             if (m.description) lines.push(`   ${m.description}`);
           }
           await sock.sendMessage(chatId, { text: lines.join('\n') });
@@ -515,10 +537,10 @@ async function startWhatsApp() {
                 await sock.sendMessage(chatId, { text: result.error });
               } else {
                 const { addModel } = await import('../db.js');
-                const success = addModel(result.modelId, result.displayName, result.description);
+                const success = addModel(result.modelId, result.displayName, result.description, null, result.visionSupport);
                 await sock.sendMessage(chatId, {
                   text: success
-                    ? `Model "${result.displayName}" ditambahkan.`
+                    ? `Model "${result.displayName}" ditambahkan.${result.visionSupport ? ' (Vision enabled)' : ''}`
                     : `Model "${result.modelId}" sudah ada.`
                 });
               }

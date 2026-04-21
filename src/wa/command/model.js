@@ -28,12 +28,11 @@ async function handleModel({ chatId, chatType, senderIsAdmin, senderIsOwner, arg
   const activeModelId = currentModelId || defaultModel?.modelId || null;
   const activeModel = models.find((m) => m.modelId === activeModelId);
 
-  const sections = models.map((m) => ({
-    title: m.displayName,
+const sections = models.map((m) => ({
+    title: m.displayName + (m.visionSupport ? ' 👁' : ''),
     rows: [{
       title: m.displayName + (m.modelId === activeModelId ? ' ✓' : ''),
-      description: m.description || '',
-      id: `model_select:${m.modelId}`,
+      description: m.description || (m.visionSupport ? 'Vision support' : ''),
     }],
   }));
 

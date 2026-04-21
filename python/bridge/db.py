@@ -122,11 +122,12 @@ def _ensure_settings_tables(conn: sqlite3.Connection) -> None:
     );
 
     CREATE TABLE IF NOT EXISTS llm_models (
-      model_id     TEXT PRIMARY KEY,
-      display_name TEXT NOT NULL,
-      description  TEXT,
-      is_active    INTEGER NOT NULL DEFAULT 1,
-      sort_order   INTEGER NOT NULL DEFAULT 0
+      model_id       TEXT PRIMARY KEY,
+      display_name   TEXT NOT NULL,
+      description    TEXT,
+      is_active      INTEGER NOT NULL DEFAULT 1,
+      sort_order     INTEGER NOT NULL DEFAULT 0,
+      vision_support INTEGER NOT NULL DEFAULT 0
     );
     """
   )
@@ -140,6 +141,13 @@ def _ensure_settings_tables(conn: sqlite3.Connection) -> None:
       conn.commit()
     except sqlite3.OperationalError:
       pass
+
+  # Migration: add vision_support column to llm_models if it doesn't exist
+  try:
+    conn.execute('ALTER TABLE llm_models ADD COLUMN vision_support INTEGER NOT NULL DEFAULT 0')
+    conn.commit()
+  except sqlite3.OperationalError:
+    pass
 
 
 def _ensure_stats_tables(conn: sqlite3.Connection) -> None:
@@ -350,13 +358,14 @@ def get_default_llm2_model() -> Optional[dict]:
   _ensure_split_ready()
   conn = _get_settings_conn()
   row = conn.execute(
-    'SELECT model_id, display_name, description FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC LIMIT 1'
+    'SELECT model_id, display_name, description, vision_support FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC LIMIT 1'
   ).fetchone()
   if row:
     _default_llm2_model_cache = {
       'model_id': row['model_id'],
       'display_name': row['display_name'],
       'description': row['description'],
+      'vision_support': bool(row['vision_support']),
     }
   return _default_llm2_model_cache
 
@@ -377,6 +386,34 @@ def get_llm2_model(chat_id: str) -> Optional[str]:
   with _cache_lock:
     _llm2_model_cache[chat_id] = value
   return value
+
+
+def get_model_vision_support(chat_id: str) -> bool:
+  """Return True if the active model for chat_id supports vision (multimodal input).
+
+  Resolves the chat-specific model first, then falls back to the default model.
+  Returns False if no model is configured or if the model does not support vision.
+  """
+  model_id = get_llm2_model(chat_id)
+  default_model = get_default_llm2_model()
+
+  # Determine which model is active
+  active_model_id = model_id if model_id else (default_model['model_id'] if default_model else None)
+  if not active_model_id:
+    return False
+
+  # If using chat-specific model, look it up
+  if model_id and model_id != (default_model['model_id'] if default_model else None):
+    _ensure_split_ready()
+    conn = _get_settings_conn()
+    row = conn.execute(
+      'SELECT vision_support FROM llm_models WHERE model_id = ? AND is_active = 1',
+      (model_id,),
+    ).fetchone()
+    return bool(row['vision_support']) if row else False
+
+  # Using default model
+  return bool(default_model.get('vision_support', False)) if default_model else False
 
 
 def set_llm2_model(chat_id: str, model_id: Optional[str]) -> None:
@@ -403,7 +440,7 @@ def get_all_active_models() -> list[dict]:
   _ensure_split_ready()
   conn = _get_settings_conn()
   rows = conn.execute(
-    'SELECT model_id, display_name, description, sort_order FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC'
+    'SELECT model_id, display_name, description, sort_order, vision_support FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC'
   ).fetchall()
   return [
     {
@@ -411,6 +448,7 @@ def get_all_active_models() -> list[dict]:
       'display_name': row['display_name'],
       'description': row['description'],
       'sort_order': row['sort_order'],
+      'vision_support': bool(row['vision_support']),
     }
     for row in rows
   ]
@@ -421,7 +459,7 @@ def get_all_models() -> list[dict]:
   _ensure_split_ready()
   conn = _get_settings_conn()
   rows = conn.execute(
-    'SELECT model_id, display_name, description, is_active, sort_order FROM llm_models ORDER BY sort_order ASC'
+    'SELECT model_id, display_name, description, is_active, sort_order, vision_support FROM llm_models ORDER BY sort_order ASC'
   ).fetchall()
   return [
     {
@@ -430,6 +468,7 @@ def get_all_models() -> list[dict]:
       'description': row['description'],
       'is_active': bool(row['is_active']),
       'sort_order': row['sort_order'],
+      'vision_support': bool(row['vision_support']),
     }
     for row in rows
   ]
@@ -477,7 +516,7 @@ def reset_settings_connection() -> None:
   logger.debug('Settings DB connection reset; caches cleared')
 
 
-def add_model(model_id: str, display_name: str, description: str = '', sort_order: Optional[int] = None) -> bool:
+def add_model(model_id: str, display_name: str, description: str = '', sort_order: Optional[int] = None, vision_support: bool = False) -> bool:
   """Add a new model. Returns False if model_id already exists."""
   global _default_llm2_model_cache
   _default_llm2_model_cache = None
@@ -489,19 +528,19 @@ def add_model(model_id: str, display_name: str, description: str = '', sort_orde
   try:
     conn.execute(
       """
-      INSERT INTO llm_models (model_id, display_name, description, sort_order)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO llm_models (model_id, display_name, description, sort_order, vision_support)
+      VALUES (?, ?, ?, ?, ?)
       """,
-      (model_id, display_name, description, sort_order),
+      (model_id, display_name, description, sort_order, 1 if vision_support else 0),
     )
     conn.commit()
-    logger.info('DB add_model model_id=%s display_name=%s', model_id, display_name)
+    logger.info('DB add_model model_id=%s display_name=%s vision_support=%s', model_id, display_name, vision_support)
     return True
   except sqlite3.IntegrityError:
     return False
 
 
-def update_model(model_id: str, display_name: Optional[str] = None, description: Optional[str] = None, is_active: Optional[bool] = None, sort_order: Optional[int] = None) -> bool:
+def update_model(model_id: str, display_name: Optional[str] = None, description: Optional[str] = None, is_active: Optional[bool] = None, sort_order: Optional[int] = None, vision_support: Optional[bool] = None) -> bool:
   """Update a model. Returns False if model_id not found."""
   global _default_llm2_model_cache
   _default_llm2_model_cache = None
@@ -524,6 +563,9 @@ def update_model(model_id: str, display_name: Optional[str] = None, description:
   if sort_order is not None:
     updates.append('sort_order = ?')
     values.append(sort_order)
+  if vision_support is not None:
+    updates.append('vision_support = ?')
+    values.append(1 if vision_support else 0)
   if not updates:
     return True
   values.append(model_id)

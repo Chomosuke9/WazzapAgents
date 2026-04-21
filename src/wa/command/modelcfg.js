@@ -20,19 +20,19 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
   if (!subcommand) {
     const modelRows = getAllActiveModels().map((m) => ({
       id: `modelcfg_default:${m.modelId}`,
-      title: m.displayName,
-      description: m.description || '',
+      title: m.displayName + (m.visionSupport ? ' 👁' : ''),
+      description: m.description || (m.visionSupport ? 'Vision support' : ''),
     }));
     
     const allModelRows = getAllModels().map((m) => ({
       id: `modelcfg_remove:${m.modelId}`,
-      title: m.displayName + (m.isActive ? '' : ' (inactive)'),
+      title: m.displayName + (m.isActive ? '' : ' (inactive)') + (m.visionSupport ? ' 👁' : ''),
       description: m.description || `ID: ${m.modelId}`,
     }));
 
     const editModelRows = getAllModels().map((m) => ({
       id: `/modelcfg edit ${m.modelId}`,
-      title: m.displayName + (m.isActive ? '' : ' (inactive)'),
+      title: m.displayName + (m.isActive ? '' : ' (inactive)') + (m.visionSupport ? ' 👁' : ''),
       description: m.description || `ID: ${m.modelId}`,
     }));
 
@@ -92,7 +92,7 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
       {
         title: 'Select Model to Remove',
         rows: models.map((m) => ({
-          title: m.displayName + (m.isActive ? '' : ' (inactive)'),
+          title: m.displayName + (m.isActive ? '' : ' (inactive)') + (m.visionSupport ? ' 👁' : ''),
           description: m.description || `ID: ${m.modelId}`,
           id: `modelcfg_remove:${m.modelId}`,
         })),
@@ -131,7 +131,8 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
       for (const m of models) {
         const isDefault = defaultModel?.modelId === m.modelId;
         const status = m.isActive ? '✓' : '✗';
-        lines.push(`${status} ${m.displayName} (${m.modelId})${isDefault ? ' [DEFAULT]' : ''}`);
+        const vision = m.visionSupport ? '👁' : '';
+        lines.push(`${status} ${m.displayName} (${m.modelId})${isDefault ? ' [DEFAULT]' : ''}${vision ? ` ${vision}` : ''}`);
         if (m.description) lines.push(`   ${m.description}`);
       }
       try {
@@ -143,18 +144,28 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
     case 'add': {
       if (subArgs.length < 2) {
         try {
-          await sock.sendMessage(chatId, { text: 'Usage: `/modelcfg` add <model_id> <display_name> [description]' });
+          await sock.sendMessage(chatId, { text: 'Usage: `/modelcfg` add <model_id> <display_name> [description] [vision=true|false]' });
         } catch (err) { /* ignore */ }
         return;
       }
-      const [modelId, displayName, ...descParts] = subArgs;
+      const [modelId, displayName, ...restParts] = subArgs;
+      let visionSupport = false;
+      const descParts = [];
+      for (const part of restParts) {
+        if (part.toLowerCase().startsWith('vision=')) {
+          const val = part.split('=')[1].toLowerCase();
+          visionSupport = val === 'true' || val === '1' || val === 'yes';
+        } else {
+          descParts.push(part);
+        }
+      }
       const description = descParts.join(' ');
-      const success = addModel(modelId, displayName, description);
+      const success = addModel(modelId, displayName, description, null, visionSupport);
       if (success) {
         wsClient.sendReliable({ type: 'invalidate_default_model' });
       }
       try {
-        await sock.sendMessage(chatId, { text: success ? `Model "${displayName}" added.` : `Model "${modelId}" already exists.` });
+        await sock.sendMessage(chatId, { text: success ? `Model "${displayName}" added.${visionSupport ? ' (Vision enabled)' : ''}` : `Model "${modelId}" already exists.` });
       } catch (err) { /* ignore */ }
       break;
     }
@@ -162,20 +173,21 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
     case 'edit': {
       if (subArgs.length < 1) {
         try {
-          await sock.sendMessage(chatId, { text: 'Usage: `/modelcfg` edit <model_id> [name=<name>] [desc=<desc>] [active=0|1] [order=<n>]' });
+          await sock.sendMessage(chatId, { text: 'Usage: `/modelcfg` edit <model_id> [name=<name>] [desc=<desc>] [active=0|1] [order=<n>] [vision=true|false]' });
         } catch (err) { /* ignore */ }
         return;
       }
       const [modelId, ...editParts] = subArgs;
       const updates = {};
       for (const part of editParts) {
-        const match = part.match(/^(name|desc|active|order)=(.+)$/);
+        const match = part.match(/^(name|desc|active|order|vision)=(.+)$/);
         if (match) {
           const [, key, value] = match;
           if (key === 'name') updates.displayName = value;
           else if (key === 'desc') updates.description = value;
           else if (key === 'active') updates.isActive = value === '1' || value === 'true';
           else if (key === 'order') updates.sortOrder = parseInt(value, 10);
+          else if (key === 'vision') updates.visionSupport = value === 'true' || value === '1' || value === 'yes';
         }
       }
       const success = updateModel(modelId, updates);

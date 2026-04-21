@@ -14,7 +14,7 @@ try:
   from ..history import WhatsAppMessage, assistant_name, format_history
   from ..log import setup_logging, trunc, dump_json, env_flag
   from ..media import build_visual_parts, llm2_media_enabled, redact_multimodal_content
-  from ..db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute, get_llm2_model as db_get_llm2_model, get_default_llm2_model
+  from ..db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute, get_llm2_model as db_get_llm2_model, get_default_llm2_model, get_model_vision_support
   from .schemas import build_llm2_tools
   from ..config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int
   from .prompt import _truncate_message
@@ -25,7 +25,7 @@ except ImportError:  # allow running as script
   from bridge.history import WhatsAppMessage, assistant_name, format_history  # type: ignore
   from bridge.log import setup_logging, trunc, dump_json, env_flag  # type: ignore
   from bridge.media import build_visual_parts, llm2_media_enabled, redact_multimodal_content  # type: ignore
-  from bridge.db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute  # type: ignore
+  from bridge.db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute, get_model_vision_support  # type: ignore
   from bridge.llm.schemas import build_llm2_tools  # type: ignore
   from bridge.config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int  # type: ignore
   from bridge.llm.prompt import _truncate_message  # type: ignore
@@ -523,7 +523,8 @@ async def generate_reply(
   )
   media_parts: list[dict] = []
   media_notes: list[str] = []
-  if llm2_media_enabled():
+  model_has_vision = get_model_vision_support(log_chat_id) if log_chat_id else False
+  if llm2_media_enabled() and model_has_vision:
     media_parts, media_notes = build_visual_parts(current_payload)
   if media_notes:
     messages_content_text += "\n\nVisual attachments:\n" + "\n".join(

@@ -103,13 +103,20 @@ function initSettingsTables(db) {
 
   db.run(`
     CREATE TABLE IF NOT EXISTS llm_models (
-      model_id     TEXT PRIMARY KEY,
-      display_name TEXT NOT NULL,
-      description  TEXT,
-      is_active    INTEGER NOT NULL DEFAULT 1,
-      sort_order   INTEGER NOT NULL DEFAULT 0
+      model_id       TEXT PRIMARY KEY,
+      display_name   TEXT NOT NULL,
+      description    TEXT,
+      is_active      INTEGER NOT NULL DEFAULT 1,
+      sort_order     INTEGER NOT NULL DEFAULT 0,
+      vision_support INTEGER NOT NULL DEFAULT 0
     )
   `);
+
+  // Migration: add vision_support column if it doesn't exist
+  const columns = getColumns(db, 'llm_models');
+  if (!columns.has('vision_support')) {
+    db.run('ALTER TABLE llm_models ADD COLUMN vision_support INTEGER NOT NULL DEFAULT 0');
+  }
 }
 
 function initStatsTables(db) {
@@ -244,17 +251,19 @@ function migrateFromLegacyIfNeeded() {
     }
 
     if (_settingsState.db && !hasRows(_settingsState.db, 'llm_models') && tableExists(legacy, 'llm_models')) {
+      const legacyLlmColumns = getColumns(legacy, 'llm_models');
+      const hasVisionSupport = legacyLlmColumns.has('vision_support');
       const llmRows = queryRows(legacy, `
-        SELECT model_id, display_name, description, COALESCE(is_active, 1) AS is_active, COALESCE(sort_order, 0) AS sort_order
+        SELECT model_id, display_name, description, COALESCE(is_active, 1) AS is_active, COALESCE(sort_order, 0) AS sort_order${hasVisionSupport ? ', COALESCE(vision_support, 0) AS vision_support' : ', 0 AS vision_support'}
         FROM llm_models
       `);
       _settingsState.db.run('BEGIN TRANSACTION');
       try {
         for (const row of llmRows) {
           _settingsState.db.run(`
-            INSERT OR REPLACE INTO llm_models (model_id, display_name, description, is_active, sort_order)
-            VALUES (?, ?, ?, ?, ?)
-          `, [row.model_id, row.display_name, row.description, row.is_active, row.sort_order]);
+            INSERT OR REPLACE INTO llm_models (model_id, display_name, description, is_active, sort_order, vision_support)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `, [row.model_id, row.display_name, row.description, row.is_active, row.sort_order, row.vision_support]);
         }
         _settingsState.db.run('COMMIT');
       } catch (err) {
@@ -524,9 +533,9 @@ function getDefaultLlm2Model() {
   const row = getOneFromState(
     _settingsState,
     initSettingsTables,
-    'SELECT model_id, display_name, description FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC LIMIT 1'
+    'SELECT model_id, display_name, description, vision_support FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC LIMIT 1'
   );
-  if (row) return { modelId: row.model_id, displayName: row.display_name, description: row.description };
+  if (row) return { modelId: row.model_id, displayName: row.display_name, description: row.description, visionSupport: Boolean(row.vision_support) };
   return null;
 }
 
@@ -551,13 +560,14 @@ function getAllActiveModels() {
   const rows = getAllFromState(
     _settingsState,
     initSettingsTables,
-    'SELECT model_id, display_name, description, sort_order FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC'
+    'SELECT model_id, display_name, description, sort_order, vision_support FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC'
   );
   return rows.map((row) => ({
     modelId: row.model_id,
     displayName: row.display_name,
     description: row.description,
     sortOrder: row.sort_order,
+    visionSupport: Boolean(row.vision_support),
   }));
 }
 
@@ -565,7 +575,7 @@ function getAllModels() {
   const rows = getAllFromState(
     _settingsState,
     initSettingsTables,
-    'SELECT model_id, display_name, description, is_active, sort_order FROM llm_models ORDER BY sort_order ASC'
+    'SELECT model_id, display_name, description, is_active, sort_order, vision_support FROM llm_models ORDER BY sort_order ASC'
   );
   return rows.map((row) => ({
     modelId: row.model_id,
@@ -573,24 +583,26 @@ function getAllModels() {
     description: row.description,
     isActive: Boolean(row.is_active),
     sortOrder: row.sort_order,
+    visionSupport: Boolean(row.vision_support),
   }));
 }
 
-function addModel(modelId, displayName, description = '', sortOrder = null) {
+function addModel(modelId, displayName, description = '', sortOrder = null, visionSupport = false) {
   if (sortOrder === null) {
     const maxOrder = getOneFromState(_settingsState, initSettingsTables, 'SELECT MAX(sort_order) as max_order FROM llm_models');
     sortOrder = (maxOrder?.max_order ?? -1) + 1;
   }
   try {
     runSettingsQuery(
-      'INSERT INTO llm_models (model_id, display_name, description, sort_order) VALUES (?, ?, ?, ?)',
+      'INSERT INTO llm_models (model_id, display_name, description, sort_order, vision_support) VALUES (?, ?, ?, ?, ?)',
       modelId,
       displayName,
       description,
-      sortOrder
+      sortOrder,
+      visionSupport ? 1 : 0
     );
     saveDb(_settingsState);
-    logger.info({ modelId, displayName }, 'DB add_model');
+    logger.info({ modelId, displayName, visionSupport }, 'DB add_model');
     return true;
   } catch (err) {
     if (err.message?.includes('UNIQUE constraint failed') || err.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return false;
@@ -598,7 +610,7 @@ function addModel(modelId, displayName, description = '', sortOrder = null) {
   }
 }
 
-function updateModel(modelId, { displayName, description, isActive, sortOrder } = {}) {
+function updateModel(modelId, { displayName, description, isActive, sortOrder, visionSupport } = {}) {
   const existing = getOneFromState(_settingsState, initSettingsTables, 'SELECT model_id FROM llm_models WHERE model_id = ?', modelId);
   if (!existing) return false;
   const updates = [];
@@ -618,6 +630,10 @@ function updateModel(modelId, { displayName, description, isActive, sortOrder } 
   if (sortOrder !== undefined) {
     updates.push('sort_order = ?');
     values.push(sortOrder);
+  }
+  if (visionSupport !== undefined) {
+    updates.push('vision_support = ?');
+    values.push(visionSupport ? 1 : 0);
   }
   if (updates.length === 0) return true;
   values.push(modelId);

@@ -49,8 +49,8 @@ async function handleSettings({ chatId, chatType, senderId, senderIsAdmin, sende
           title: 'Select Model',
           rows: getAllActiveModels().map((m) => ({
             id: `model_select:${m.modelId}`,
-            title: m.displayName,
-            description: m.description || '',
+            title: m.displayName + (m.visionSupport ? ' 👁' : ''),
+            description: m.description || (m.visionSupport ? 'Vision support' : ''),
           })),
         }],
       }),
