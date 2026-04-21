@@ -15,4 +15,4 @@ export { handleDashboard } from './dashboard.js';
 export { handleModel } from './model.js';
 export { handleModelcfg } from './modelcfg.js';
 export { handleSettings } from './setting.js';
-export { handleGroupStatus } from './groupStatus.js';
+export { handleGroupStatus, sendGroupStatus } from './groupStatus.js';

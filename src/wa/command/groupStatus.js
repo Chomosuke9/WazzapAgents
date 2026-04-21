@@ -1,6 +1,6 @@
 import path from 'path';
 import fs from 'fs-extra';
-import { proto, generateWAMessageContent, generateWAMessageFromContent } from 'baileys';
+import { generateWAMessageContent, generateWAMessageFromContent } from 'baileys';
 import logger from '../../logger.js';
 import { getSock } from '../connection.js';
 import { unwrapMessage } from '../../messageParser.js';
@@ -18,14 +18,6 @@ import { withTimeout } from '../utils.js';
  */
 function getCleanJid(jid) {
   return jid.split(':')[0].split('/')[0] + '@s.whatsapp.net';
-}
-
-/**
- * Wrap an inner Message inside a groupStatusMessage (FutureProofMessage)
- * so it renders as a Group Status inside the group chat.
- */
-function createGroupStatusMessage(innerMessage) {
-  return { groupStatusMessage: { message: innerMessage } };
 }
 
 /**
@@ -65,88 +57,55 @@ async function downloadMediaContent(content, contentType, messageId) {
 }
 
 // ---------------------------------------------------------------------------
-// Send helpers — relayMessage + groupStatusMessage proto wrapper
+// Send helper — unified group status via groupStatusMessageV2
 // ---------------------------------------------------------------------------
 
 /**
- * Send a text-only group status message.
+ * Send a group status message (text, image, or video) to a group.
  *
- * Structure:
- *   groupStatusMessage.message {
- *     messageContextInfo: { deviceListMetadata, deviceListMetadataVersion },
- *     extendedTextMessage: {
- *       text,
- *       contextInfo: { isGroupStatus: true, statusAttributions: [...] }
- *     }
- *   }
- */
-async function sendTextGroupStatus(sock, jid, text, authorJid) {
-  const contextInfo = createGroupStatusContextInfo(authorJid);
-  const innerMessage = {
-    messageContextInfo: {
-      deviceListMetadata: {},
-      deviceListMetadataVersion: 2,
-    },
-    extendedTextMessage: {
-      text,
-      contextInfo,
-    },
-  };
-
-  const wrapper = createGroupStatusMessage(innerMessage);
-
-  const msg = generateWAMessageFromContent(jid, wrapper, {
-    userJid: sock.user.id,
-  });
-
-  await sock.relayMessage(jid, msg.message, {
-    messageId: msg.key.id,
-  });
-
-  return msg;
-}
-
-/**
- * Send an image or video group status message.
+ * Uses groupStatusMessageV2 (FutureProofMessage wrapper, proto field tag 826)
+ * which is the newer version replacing groupStatusMessage (tag 770).
  *
- * 1. Upload media via generateWAMessageContent (uses sock.waUploadToServer)
- * 2. Inject contextInfo (isGroupStatus + statusAttributions) into the
- *    resulting imageMessage/videoMessage proto
- * 3. Add messageContextInfo with deviceListMetadata to the inner message
- * 4. Wrap inside groupStatusMessage FutureProofMessage
- * 5. Relay via relayMessage
+ * Flow:
+ *   1. generateWAMessageContent — uploads media (if any) and builds the proto
+ *   2. Inject contextInfo (isGroupStatus + statusAttributions) for attribution
+ *   3. Add messageContextInfo with device metadata
+ *   4. Wrap inside groupStatusMessageV2 FutureProofMessage
+ *   5. generateWAMessageFromContent + relayMessage (same pattern as sendInteractive.js)
+ *
+ * @param {object} sock - Baileys socket instance
+ * @param {string} jid - Target group JID (e.g., '120363xxx@g.us')
+ * @param {object} content - { text } | { image: { url }, caption? } | { video: { url }, caption? }
+ * @param {string} authorJid - Bot's JID for status attribution
+ * @returns {Promise<object>} Generated message object
  */
-async function sendMediaGroupStatus(sock, jid, mediaPath, mediaKind, caption, authorJid) {
-  const contextInfo = createGroupStatusContextInfo(authorJid);
-
-  // Step 1 — upload media and get the proto object
-  const contentKey = mediaKind; // 'image' or 'video'
-  const uploaded = await generateWAMessageContent({
-    [contentKey]: { url: mediaPath },
-    caption: caption || '',
-  }, {
+async function sendGroupStatus(sock, jid, content, authorJid) {
+  // Step 1 — generate message content (handles text, image, video uniformly)
+  const waMsgContent = await generateWAMessageContent(content, {
     upload: sock.waUploadToServer,
   });
 
-  // Step 2 — inject contextInfo into the media message
-  const msgKey = mediaKind === 'image' ? 'imageMessage' : 'videoMessage';
-  if (uploaded[msgKey]) {
-    uploaded[msgKey].contextInfo = contextInfo;
-    if (caption) {
-      uploaded[msgKey].caption = caption;
+  // generateWAMessageContent may wrap the inner Message in a .message field
+  const innerMsg = waMsgContent.message || waMsgContent;
+
+  // Step 2 — inject contextInfo for attribution into applicable message types
+  const contextInfo = createGroupStatusContextInfo(authorJid);
+  for (const key of Object.keys(innerMsg)) {
+    if (key === 'imageMessage' || key === 'videoMessage' || key === 'extendedTextMessage') {
+      innerMsg[key].contextInfo = contextInfo;
     }
   }
 
   // Step 3 — add messageContextInfo with device metadata
-  uploaded.messageContextInfo = {
+  innerMsg.messageContextInfo = {
     deviceListMetadata: {},
     deviceListMetadataVersion: 2,
   };
 
-  // Step 4 — wrap in groupStatusMessage
-  const wrapper = createGroupStatusMessage(uploaded);
+  // Step 4 — wrap in groupStatusMessageV2 (FutureProofMessage)
+  const wrapper = { groupStatusMessageV2: { message: innerMsg } };
 
-  // Step 5 — generate and relay
+  // Step 5 — generate full message and relay (same pattern as sendInteractive.js)
   const msg = generateWAMessageFromContent(jid, wrapper, {
     userJid: sock.user.id,
   });
@@ -205,10 +164,14 @@ async function handleGroupStatus({ chatId, chatType, senderIsAdmin, senderIsOwne
 
   try {
     if (mediaResult) {
-      await sendMediaGroupStatus(sock, chatId, mediaResult.filepath, mediaResult.mediaKind, caption, authorJid);
+      const content = {
+        [mediaResult.mediaKind]: { url: mediaResult.filepath },
+        caption: caption || '',
+      };
+      await sendGroupStatus(sock, chatId, content, authorJid);
       logger.info({ chatId, mediaKind: mediaResult.mediaKind, hasCaption: !!caption }, 'group-status sent with media');
     } else if (caption) {
-      await sendTextGroupStatus(sock, chatId, caption, authorJid);
+      await sendGroupStatus(sock, chatId, { text: caption }, authorJid);
       logger.info({ chatId }, 'group-status sent as text');
     } else {
       try {
@@ -230,4 +193,4 @@ async function handleGroupStatus({ chatId, chatType, senderIsAdmin, senderIsOwne
   }
 }
 
-export { handleGroupStatus };
+export { handleGroupStatus, sendGroupStatus };
