@@ -13,7 +13,24 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
     return;
   }
 
-  const parts = (args || '').trim().split(/\s+/);
+  // If args contains |, use | as field separator; otherwise fall back to whitespace
+  const rawArgs = (args || '').trim();
+  let parts;
+  let pipeMode = false;
+  if (rawArgs.includes('|')) {
+    pipeMode = true;
+    parts = rawArgs.split('|').map(p => p.trim()).filter(Boolean);
+    // Extract subcommand from first field: "add|kimi-k2.6|..." → subcommand="add", rest starts at index 1
+    const firstField = parts[0] || '';
+    const firstSpace = firstField.indexOf(' ');
+    if (firstSpace > 0) {
+      const sub = firstField.slice(0, firstSpace).trim();
+      const rest = firstField.slice(firstSpace + 1).trim();
+      parts = [sub, rest, ...parts.slice(1)];
+    }
+  } else {
+    parts = rawArgs.split(/\s+/);
+  }
   const subcommand = parts[0]?.toLowerCase() || '';
   const subArgs = parts.slice(1);
 
@@ -144,22 +161,38 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
     case 'add': {
       if (subArgs.length < 2) {
         try {
-          await sock.sendMessage(chatId, { text: 'Usage: `/modelcfg` add <model_id> <display_name> [description] [vision=true|false]' });
+          await sock.sendMessage(chatId, { text: 'Usage:\n`/modelcfg add model_id|display_name|[description]|[vision=true]`\n`/modelcfg add model_id display_name [description] [vision=true]`' });
         } catch (err) { /* ignore */ }
         return;
       }
-      const [modelId, displayName, ...restParts] = subArgs;
+      let modelId, displayName, restParts;
+      if (pipeMode) {
+        // pipe mode: fields are already split by |, subArgs = [model_id, display_name, ...rest]
+        modelId = subArgs[0];
+        displayName = subArgs[1];
+        restParts = subArgs.slice(2);
+      } else {
+        // space mode: all subArgs are space-split tokens
+        modelId = subArgs[0];
+        displayName = subArgs[1];
+        restParts = subArgs.slice(2);
+      }
       let visionSupport = false;
       const descParts = [];
       for (const part of restParts) {
-        if (part.toLowerCase().startsWith('vision=')) {
-          const val = part.split('=')[1].toLowerCase();
-          visionSupport = val === 'true' || val === '1' || val === 'yes';
+        const lowerPart = part.toLowerCase();
+        if (lowerPart.startsWith('vision=') || lowerPart === 'true' || lowerPart === 'false') {
+          if (lowerPart === 'true') visionSupport = true;
+          else if (lowerPart === 'false') visionSupport = false;
+          else if (lowerPart.startsWith('vision=')) {
+            const val = part.split('=')[1].toLowerCase();
+            visionSupport = val === 'true' || val === '1' || val === 'yes';
+          }
         } else {
           descParts.push(part);
         }
       }
-      const description = descParts.join(' ');
+      const description = descParts.join(pipeMode ? ' ' : ' ');
       const success = addModel(modelId, displayName, description, null, visionSupport);
       if (success) {
         wsClient.sendReliable({ type: 'invalidate_default_model' });
@@ -173,13 +206,14 @@ async function handleModelcfg({ chatId, senderId, senderIsOwner, args }) {
     case 'edit': {
       if (subArgs.length < 1) {
         try {
-          await sock.sendMessage(chatId, { text: 'Usage: `/modelcfg` edit <model_id> [name=<name>] [desc=<desc>] [active=0|1] [order=<n>] [vision=true|false]' });
+          await sock.sendMessage(chatId, { text: 'Usage:\n`/modelcfg edit model_id|name=New Name|desc=New desc|vision=true`\n`/modelcfg edit model_id name=New Name vision=true`' });
         } catch (err) { /* ignore */ }
         return;
       }
-      const [modelId, ...editParts] = subArgs;
+      const modelId = subArgs[0];
       const updates = {};
-      for (const part of editParts) {
+      for (let i = 1; i < subArgs.length; i++) {
+        const part = subArgs[i];
         const match = part.match(/^(name|desc|active|order|vision)=(.+)$/);
         if (match) {
           const [, key, value] = match;
