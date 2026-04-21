@@ -455,6 +455,28 @@ def clear_default_llm2_model_cache() -> None:
   logger.debug('Cleared default LLM2 model cache')
 
 
+def reset_settings_connection() -> None:
+  """Close and discard the settings DB connection so it is re-opened from disk on next access.
+
+  This is needed when Node.js writes changes to settings.db (model additions,
+  deletions, etc.) that Python's cached SQLite connection may not see due to
+  WAL snapshot staleness.  Closing the connection forces a fresh read.
+  """
+  conn: sqlite3.Connection | None = getattr(_LOCAL, 'settings_conn', None)
+  if conn is not None:
+    try:
+      conn.close()
+    except Exception:
+      pass
+    _LOCAL.settings_conn = None
+  # Also clear in-memory caches so next reads go to the (fresh) DB
+  global _default_llm2_model_cache
+  _default_llm2_model_cache = None
+  with _cache_lock:
+    _llm2_model_cache.clear()
+  logger.debug('Settings DB connection reset; caches cleared')
+
+
 def add_model(model_id: str, display_name: str, description: str = '', sort_order: Optional[int] = None) -> bool:
   """Add a new model. Returns False if model_id already exists."""
   global _default_llm2_model_cache

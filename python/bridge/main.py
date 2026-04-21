@@ -36,6 +36,7 @@ try:
     set_llm2_model as db_set_llm2_model,
     clear_llm2_model_cache as db_clear_llm2_model_cache,
     clear_default_llm2_model_cache as db_clear_default_llm2_model_cache,
+    reset_settings_connection as db_reset_settings_connection,
   )
   from .dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop
   from .stickers import resolve_sticker
@@ -113,6 +114,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     set_llm2_model as db_set_llm2_model,
     clear_llm2_model_cache as db_clear_llm2_model_cache,
     clear_default_llm2_model_cache as db_clear_default_llm2_model_cache,
+    reset_settings_connection as db_reset_settings_connection,
   )
   from bridge.dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop  # type: ignore
   from bridge.stickers import resolve_sticker  # type: ignore
@@ -1172,8 +1174,8 @@ async def handle_socket(ws):
 
       # Handle invalidate_default_model message from Node.js (after modelcfg changes)
       if event_type == "invalidate_default_model":
-        db_clear_default_llm2_model_cache()
-        logger.info("Default LLM2 model cache cleared via invalidate_default_model message")
+        db_reset_settings_connection()
+        logger.info("Settings DB connection reset and caches cleared via invalidate_default_model message")
         continue
 
       if event_type != "incoming_message":
