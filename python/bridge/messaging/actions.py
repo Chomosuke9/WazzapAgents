@@ -344,7 +344,15 @@ def _extract_actions(
   flush_sticker_block()
 
   orphan_text = "\n".join(orphan_lines).strip()
-  if orphan_text:
+  if orphan_text and not actions:
+    # LLM2 gave a plain-text response without calling any tools
+    # or using any control lines → send it as a message directly.
+    actions.append({
+      "type": "send_message",
+      "text": orphan_text,
+      "replyTo": fallback_reply_to,
+    })
+  elif orphan_text:
     logger.info(
       "dropping llm2 text outside REPLY_TO block",
       extra={
