@@ -119,6 +119,8 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     clear_llm2_model_cache as db_clear_llm2_model_cache,
     clear_default_llm2_model_cache as db_clear_default_llm2_model_cache,
     reset_settings_connection as db_reset_settings_connection,
+    close_all_connections as db_close_all_connections,
+    checkpoint_all_dbs as db_checkpoint_all_dbs,
   )
   from bridge.dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop  # type: ignore
   from bridge.stickers import resolve_sticker  # type: ignore
