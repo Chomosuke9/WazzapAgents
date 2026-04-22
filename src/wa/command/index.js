@@ -16,3 +16,4 @@ export { handleModel } from './model.js';
 export { handleModelcfg } from './modelcfg.js';
 export { handleSettings } from './setting.js';
 export { handleGroupStatus, sendGroupStatus } from './groupStatus.js';
+export { handleCatch } from './catch.js';

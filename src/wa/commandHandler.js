@@ -16,6 +16,7 @@ import {
   handleModelcfg,
   handleSettings,
   handleGroupStatus,
+  handleCatch,
 } from './command/index.js';
 
 async function handleCommandListener(msg, context) {
@@ -106,6 +107,10 @@ async function handleCommandListener(msg, context) {
 
     case 'group-status':
       await handleGroupStatus({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args, msg });
+      return true;
+
+    case 'catch':
+      await handleCatch({ chatId, quotedMessageId });
       return true;
 
     default:
