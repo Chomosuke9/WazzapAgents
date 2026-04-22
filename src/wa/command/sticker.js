@@ -102,9 +102,9 @@ async function createStickerFile(mediaPath, upperText = null, lowerText = null) 
     throw new Error(`Unsupported format: ${ext}`);
   }
 
-  await fs.ensureDir(config.stickersDir);
+  await fs.ensureDir(config.mediaDir);
   const shortId = randomUUID().slice(0, 8);
-  const outPath = path.join(config.stickersDir, `sticker_${shortId}.webp`);
+  const outPath = path.join(config.mediaDir, `sticker_${shortId}.webp`);
 
   const img = sharp(mediaPath).resize(STICKER_SIZE, STICKER_SIZE, {
     fit: 'contain',
@@ -166,9 +166,9 @@ async function createAnimatedStickerFile(inputPath, options = {}) {
     throw new Error(`Unsupported video format: ${ext}`);
   }
 
-  await fs.ensureDir(config.stickersDir);
+  await fs.ensureDir(config.mediaDir);
   const shortId = randomUUID().slice(0, 8);
-  const outPath = path.join(config.stickersDir, `sticker_${shortId}.webp`);
+  const outPath = path.join(config.mediaDir, `sticker_${shortId}.webp`);
 
   // Level 1: Best quality (512px, configurable fps/quality, up to maxDuration seconds)
   await convertVideoToWebp(inputPath, outPath, {
@@ -181,7 +181,7 @@ async function createAnimatedStickerFile(inputPath, options = {}) {
 
   // Level 2 fallback: reduced fps, quality, shorter duration
   if (currentSize > maxBytes) {
-    const fallbackPath = path.join(config.stickersDir, `sticker_${shortId}_f1.webp`);
+    const fallbackPath = path.join(config.mediaDir, `sticker_${shortId}_f1.webp`);
     try {
       await convertVideoToWebp(inputPath, fallbackPath, {
         maxDuration: Math.min(maxDuration, 3),
@@ -205,7 +205,7 @@ async function createAnimatedStickerFile(inputPath, options = {}) {
 
   // Level 3 fallback: small (320px), low fps, short duration, heavy compression
   if (currentSize > maxBytes) {
-    const smallPath = path.join(config.stickersDir, `sticker_${shortId}_f2.webp`);
+    const smallPath = path.join(config.mediaDir, `sticker_${shortId}_f2.webp`);
     try {
       await convertVideoToWebp(inputPath, smallPath, {
         maxDuration: 2,
