@@ -1,23 +1,60 @@
-# WazzapAgents Gateway (Baileys -> LLM)
+# WazzapAgents
 
-Node.js (ESM) gateway that connects a WhatsApp account via Baileys v7 and forwards messages to an external LLM service over an outbound WebSocket. It accepts structured moderation commands from the LLM bridge.
+[![Node 18+](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
+[![Python 3.10+](https://img.shields.io/badge/python-%3E%3D3.10-blue)](https://python.org/)
+[![License](https://img.shields.io/badge/license-ISC-lightgrey)](./package.json)
+
+WhatsApp AI agent system: a Node.js gateway (Baileys v7) connects a WhatsApp account and forwards messages to a Python LLM bridge over WebSocket. The bridge runs a two-stage LLM pipeline (routing + response generation) and sends moderation/action commands back to the gateway.
+
+> **For full architecture, concepts, and developer context**, see [AGENTS.md](./AGENTS.md).
+
+## Architecture
+
+```
+WhatsApp (phone)
+      ↕  Baileys v7 socket
+┌─────────────────────────────┐
+│  Node.js Gateway  (src/)    │   Python Bridge  (python/bridge/)
+│  WhatsApp ↔ WS bridge       │   LLM1 routing → LLM2 response
+│  Slash commands, actions     │   Debounce, tool calls, dispatch
+└──────────┬──────────────────┘
+           │ WebSocket
+┌──────────▼──────────────────┐
+│  Python LLM Bridge          │
+│  Message batching, LLM1/2, │
+│  tool extraction, actions   │
+└─────────────────────────────┘
+```
+
+See [AGENTS.md](./AGENTS.md) for ADRs, terminology, and detailed module descriptions.
 
 ## Prerequisites
 - Node.js 18+ (tested with Node 25).
+- Python 3.10+.
 - pnpm 9+ (`npm i -g pnpm` or `corepack enable pnpm`).
-- Internet access to install dependencies (`pnpm install`).
+- Internet access to install dependencies.
 
-## Setup
+## Quick Start
+1. Copy `.env.example` to `.env` and set **required** `LLM_WS_ENDPOINT` (e.g., `ws://localhost:8080/ws`). Adjust other values as needed.
+2. Install Node deps: `pnpm install`.
+3. Install Python deps: `pip install -r requirements.txt`.
+4. Start the Python bridge: `python -m python.bridge.main`.
+5. Start the Node gateway: `pnpm dev`.
+6. Scan the QR code in the terminal to pair your WhatsApp account (auth stored in `data/auth`).
+
+## Detailed Setup
 1. Copy `.env.example` to `.env`, fill required `LLM_WS_ENDPOINT` first, then adjust optional values as needed.
-2. Install deps with `pnpm install` (Baileys v7 is ESM-only; this project is `type: module`).
-3. Run the gateway: `pnpm dev`.
-4. Scan the QR in the terminal to pair the WhatsApp account (auth is stored in `data/auth`).
+2. Install Node deps: `pnpm install` (Baileys v7 is ESM-only; this project is `type: module`).
+3. Install Python deps: `pip install -r requirements.txt` (Python 3.10+).
+4. Run the gateway: `pnpm dev`.
+5. Run the Python bridge: `python -m python.bridge.main`.
+6. Scan the QR in the terminal to pair the WhatsApp account (auth is stored in `data/auth`).
 
 ## Runtime folders
 - `data/auth`: WhatsApp session files.
 - `data/media`: Media downloaded from incoming messages; paths are sent to the LLM.
 
-## WebSocket protocol (gateway <-> LLM)
+## WebSocket protocol (gateway ↔ LLM)
 
 ### Gateway -> LLM: `incoming_message`
 ```json
@@ -216,6 +253,8 @@ Notes:
 - If the WhatsApp session logs out, delete `data/auth` and re-run to re-pair.
 - Multi-account: run multiple gateway instances with different `INSTANCE_ID` and separate `DATA_DIR`/`MEDIA_DIR`.
 - Baileys version pinned to `7.0.0-rc.9` (package name `baileys`); ensure Node 18+ with ESM support.
+- **Interactive messages** (`viewOnceMessage` + `additionalNodes`) only render on mobile clients, not WhatsApp Web.
+- **LLM1 is skipped in private chats** — all DMs get a full LLM2 response (confidence 100).
 
 ## Example LLM WebSocket (Python)
 See `examples/llm_ws_echo.py` for a minimal server that:

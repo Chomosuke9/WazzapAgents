@@ -1,17 +1,20 @@
 # LLM Architecture Docs (WazzapAgents)
 
-Dokumentasi ini ditujukan untuk dibaca **LLM / agent developer** agar cepat paham cara kerja project.
+Architecture documentation for **LLM / agent developers** who need to understand the runtime flow, module responsibilities, and data contracts.
 
-## Urutan baca
-1. `00-overview.md` – gambaran sistem end-to-end.
-2. `01-runtime-flow.md` – alur runtime per event.
-3. `02-modules-map.md` – peta modul penting dan tanggung jawabnya.
-4. `03-commands-and-permissions.md` – command, role, dan behavior.
-5. `04-protocol-and-actions.md` – kontrak WebSocket antar komponen.
-6. `05-state-data-and-db.md` – state, cache, dan storage (SQLite).
+> **Start with [AGENTS.md](../../AGENTS.md)** for full project context, terminology, and ADRs.
+> These docs dive deeper into specific subsystems.
 
-## Prinsip penting
-- Node.js gateway menangani koneksi WhatsApp, interactive UI, parsing slash command, dan relay WS.
-- Python bridge menangani batching pesan, LLM routing (LLM1/LLM2), aksi moderation, dan penulisan stats.
-- `/dashboard` dibaca dari Node (query DB), sedangkan stats ditulis oleh Python (flush periodik).
-- Event WS penting sekarang dikirim lewat jalur reliable (`sendReliable`) agar tidak hilang saat reconnect.
+## Reading order
+1. `00-overview.md` — End-to-end system overview
+2. `01-runtime-flow.md` — Runtime flow per event type
+3. `02-modules-map.md` — Module map and responsibilities
+4. `03-commands-and-permissions.md` — Commands, roles, and permission model
+5. `04-protocol-and-actions.md` — WebSocket contract between Node and Python
+6. `05-state-data-and-db.md` — State, caching, and SQLite storage
+
+## Key principles
+- **Node.js gateway** handles WhatsApp connection, interactive UI, slash command parsing, and WS relay.
+- **Python bridge** handles message batching, LLM routing (LLM1/LLM2), moderation actions, and stats writing.
+- **Dashboard** reads from Node (DB query), while stats are written by Python (periodic flush).
+- **Critical WS events** are sent via `sendReliable()` to survive reconnects (see ADR-4 in AGENTS.md).

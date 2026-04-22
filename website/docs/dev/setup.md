@@ -101,7 +101,7 @@ python examples/llm_ws_echo.py
 | `GROUP_METADATA_TIMEOUT_MS` | `8000` | Timeout fetch metadata grup |
 | `DOWNLOAD_TIMEOUT_MS` | `60000` | Timeout download media |
 | `SEND_TIMEOUT_MS` | `60000` | Timeout kirim pesan |
-| `UPSERT_CONCURRENCY` | `5` | Concurrency pemrosesan pesan |
+| `UPSERT_CONCURRENCY` | `2` | Concurrency pemrosesan pesan |
 | `BOT_OWNER_JIDS` | *(kosong)* | JID owner, pisahkan koma |
 
 ### Bridge (Python)
@@ -111,7 +111,11 @@ python examples/llm_ws_echo.py
 | `HISTORY_LIMIT` | `20` | Jumlah pesan history per chat |
 | `INCOMING_DEBOUNCE_SECONDS` | `5` | Debounce window untuk batching |
 | `INCOMING_BURST_MAX_SECONDS` | `20` | Maksimum durasi burst window |
-| `BOT_DB_PATH` | `data/bot.db` | Path database SQLite |
+| `HISTORY_LIMIT` | `20` | Jumlah pesan history per chat |
+| `INCOMING_DEBOUNCE_SECONDS` | `5` | Debounce window untuk batching |
+| `INCOMING_BURST_MAX_SECONDS` | `20` | Maksimum durasi burst window |
+| `ASSISTANT_NAME` | `LLM` | Nama tampilan bot di konteks |
+| `CONTEXT_TIME_UTC_OFFSET_HOURS` | *(auto)* | UTC offset untuk timestamp |
 | `ASSISTANT_NAME` | `LLM` | Nama tampilan bot di konteks |
 | `CONTEXT_TIME_UTC_OFFSET_HOURS` | *(auto)* | UTC offset untuk timestamp |
 
@@ -135,7 +139,7 @@ python examples/llm_ws_echo.py
 | Variabel | Default | Deskripsi |
 |----------|---------|-----------|
 | `LLM2_ENDPOINT` | *(OpenAI default)* | Endpoint API LLM2 |
-| `LLM2_MODEL` | `gpt-4.1` | Model untuk responder |
+| `LLM2_MODEL` | `gpt-5.3` | Model untuk responder |
 | `LLM2_API_KEY` | *(kosong)* | API key LLM2 |
 | `LLM2_TEMPERATURE` | `0.5` | Temperature untuk LLM2 |
 | `LLM2_TIMEOUT` | `20` | Timeout dalam detik |
@@ -182,40 +186,83 @@ npm start        # Dev server lokal
 
 ```
 WazzapAgents/
-├── src/                    # Node.js Gateway
-│   ├── index.js            # Entry point
-│   ├── waClient.js         # WhatsApp client
-│   ├── wsClient.js         # WebSocket client
-│   ├── config.js           # Konfigurasi
-│   ├── messageParser.js    # Parser pesan
-│   ├── mediaHandler.js     # Handler media
-│   ├── identifiers.js      # contextMsgId & senderRef
-│   ├── participants.js     # Data partisipan
-│   ├── groupContext.js     # Konteks grup
-│   ├── caches.js           # In-memory caches
-│   ├── logger.js           # Logging
-│   └── utils.js            # Utilitas
+├── src/                        # Node.js Gateway
+│   ├── index.js                # Entry point
+│   ├── wsClient.js             # WebSocket client (auto-reconnect)
+│   ├── config.js               # Konfigurasi
+│   ├── logger.js                # Logging
+│   ├── messageParser.js         # Parser pesan Baileys
+│   ├── mediaHandler.js          # Handler media
+│   ├── identifiers.js           # contextMsgId & senderRef
+│   ├── participants.js          # Data partisipan
+│   ├── groupContext.js           # Konteks grup
+│   ├── caches.js                # In-memory caches
+│   ├── db.js                    # SQLite (settings, models, stats)
+│   ├── utils.js                 # Utilitas
+│   └── wa/                      # WhatsApp modules
+│       ├── connection.js        # Socket lifecycle
+│       ├── inbound.js           # Pesan masuk → payload
+│       ├── outbound.js          # Kirim pesan/media
+│       ├── actions.js           # React & delete
+│       ├── moderation.js       # Kick members
+│       ├── presence.js          # Mark read & typing
+│       ├── commandHandler.js    # Command dispatcher
+│       ├── commands.js          # Alias normalization
+│       ├── events.js            # Synthetic context events
+│       ├── utils.js              # Concurrency helpers
+│       ├── command/             # Per-command handlers
+│       │   ├── help.js, prompt.js, reset.js, permission.js
+│       │   ├── mode.js, trigger.js, dashboard.js, model.js
+│       │   ├── broadcast.js, info.js, debug.js, join.js
+│       │   ├── sticker.js, modelcfg.js, setting.js
+│       │   └── groupStatus.js, catch.js
+│       └── interactive/        # NativeFlow messages
+│           ├── sendInteractive.js
+│           ├── sendButtons.js
+│           └── sendCarousel.js
 ├── python/
-│   ├── bridge/             # Python LLM Bridge
-│   │   ├── main.py         # Entry point
-│   │   ├── llm1.py         # LLM1 gating
-│   │   ├── llm2.py         # LLM2 responder
-│   │   ├── commands.py     # Slash commands
-│   │   ├── config.py       # Konfigurasi
-│   │   ├── db.py           # Database
-│   │   ├── history.py      # History management
-│   │   ├── media.py        # Media processing
-│   │   └── log.py          # Logging
-│   ├── systemprompt.txt    # Template system prompt LLM2
-│   └── tests/              # Unit tests
+│   ├── bridge/                  # Python LLM Bridge
+│   │   ├── main.py              # Entry point + WS server
+│   │   ├── config.py            # Konfigurasi
+│   │   ├── db.py                # Database (3 SQLite files)
+│   │   ├── history.py           # History management
+│   │   ├── media.py             # Media processing
+│   │   ├── stickers.py          # Sticker catalog
+│   │   ├── commands.py           # Slash commands
+│   │   ├── dashboard.py          # Stats buffer + flush
+│   │   ├── log.py                # Logging
+│   │   ├── llm/                  # LLM pipeline
+│   │   │   ├── llm1.py          # Gating decision
+│   │   │   ├── llm2.py          # Response generation
+│   │   │   ├── schemas.py        # Tool schemas
+│   │   │   ├── prompt.py         # Prompt assembly
+│   │   │   ├── client.py         # Client factory
+│   │   │   ├── metadata.py       # Context metadata
+│   │   │   └── tool_utils.py     # Tool extraction
+│   │   ├── messaging/            # Message pipeline
+│   │   │   ├── processing.py    # Burst building
+│   │   │   ├── filtering.py     # Trigger logic
+│   │   │   ├── actions.py        # Action parsing
+│   │   │   ├── gateway.py       # WS actions
+│   │   │   └── moderation.py    # Permission checks
+│   │   └── tools/
+│   │       └── sticker.py        # PIL sticker creation
+│   └── systemprompt.txt          # Template system prompt LLM2
 ├── examples/
-│   └── llm_ws_echo.py      # Echo server contoh
-├── website/                # Docusaurus docs
-├── data/                   # Runtime data (auto-created)
-│   ├── auth/               # Session WhatsApp
-│   ├── media/              # Media files
-│   └── bot.db              # SQLite database
-├── .env.example            # Template env
-├── package.json            # Node.js deps
-└── requirements.txt        # Python deps
+│   └── llm_ws_echo.py          # Echo server contoh
+├── docs/llm-architecture/       # Architecture docs
+├── website/                     # Docusaurus docs (Indonesian + English)
+├── data/                        # Runtime data (auto-created, git-ignored)
+│   ├── auth/                    # Session WhatsApp
+│   ├── media/                   # Media files
+│   ├── stickers/                # Sticker catalog
+│   ├── settings.db              # Chat settings & model configs
+│   ├── stats.db                 # Dashboard statistics
+│   └── moderation.db            # Mute state
+├── .env.example                  # Template env
+├── AGENTS.md                     # Developer context for AI agents
+├── llms.txt                      # LLM-friendly project summary
+├── README.md                     # Protocol contract & setup guide
+├── package.json                  # Node.js deps
+└── requirements.txt              # Python deps
 ```

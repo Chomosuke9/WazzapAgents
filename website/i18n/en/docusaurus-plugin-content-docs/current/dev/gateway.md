@@ -39,7 +39,7 @@ wsClient.on('message', async (msg) => {
 
 Each action returns an `action_ack` to the bridge. For `send_message`, a legacy `send_ack` is also emitted.
 
-## WhatsApp Client (`waClient.js`)
+## WhatsApp Client (`connection.js`)
 
 ### Connection
 

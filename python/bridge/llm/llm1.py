@@ -1,4 +1,31 @@
 # File: python/bridge/llm/llm1.py
+"""
+LLM1 — Decision Router (Should the bot respond?)
+
+This module implements the first stage of the two-LLM pipeline. LLM1 is a
+cheap, fast model call that runs on every incoming message burst in group chats.
+It produces exactly one of two tool-call decisions:
+
+  1. `llm_should_response(should_response, confidence, reason)` —
+     The primary routing decision. If `should_response=True`, the burst is
+     forwarded to LLM2 for a full response. If `False`, the burst is skipped.
+
+  2. `llm_express(expression, context_msg_id, confidence, reason)` —
+     An "express-only" reaction (emoji or sticker) instead of a text reply.
+     Used for brief acknowledgements where a full LLM2 response would be wasteful.
+
+Why a separate router instead of a tool within LLM2?
+  - Cost: ~70-80% of group messages don't need a full LLM2 response.
+  - Latency: LLM1 is tuned for sub-2s; LLM2 can take 5-20s.
+  - Isolation: LLM1's prompt is specialized for routing/confidence scoring.
+
+If LLM1_ENDPOINT is empty, LLM1 is disabled and all messages go directly to LLM2.
+Private chats always bypass LLM1 (confidence 100).
+
+Fallback behavior: If the primary endpoint fails (timeout, error, invalid response),
+the module tries the fallback endpoint (LLM1_FALLBACK_ENDPOINT). If both fail,
+the message is skipped (should_response=False, confidence=10).
+"""
 from __future__ import annotations
 
 import json

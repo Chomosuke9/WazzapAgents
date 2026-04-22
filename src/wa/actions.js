@@ -1,3 +1,17 @@
+/**
+ * actions.js — WhatsApp message reactions and deletions.
+ *
+ * Provides reactToMessage() and deleteMessageByContextId() which map contextMsgId
+ * to WhatsApp message keys and send the appropriate action via sock.sendMessage().
+ *
+ * Both functions emit synthetic action log events via emitBotActionContextEvent()
+ * so the Python bridge can record the action in conversation context.
+ *
+ * Error handling: Throws actionError() with stable code values:
+ *   - 'not_found'        — contextMsgId not in index (message expired or from a different chat)
+ *   - 'invalid_target'   — missing contextMsgId, emoji, or cross-chat reference
+ *   - 'send_failed'      — socket not ready or WhatsApp API error
+ */
 import logger from '../logger.js';
 import {
   normalizeContextMsgId,

@@ -1,42 +1,43 @@
 # 01 - Runtime Flow
 
 ## A. Startup flow
-1. Node bootstrap (`src/index.js`): init DB, start WhatsApp, connect WS client.
+1. Node bootstrap (`src/index.js`): init DB, start WhatsApp socket, connect WS client.
 2. Python bridge (`python/bridge/main.py`): start WS server, init in-memory state.
-3. Node kirim `hello` ke Python setelah WS open.
+3. Node sends `hello` to Python after WS connection opens.
 
-## B. Incoming message flow (WA -> Node -> Python)
-1. Node menerima event `messages.upsert`.
-2. Node command listener memproses slash command/button terlebih dulu.
-3. Node inbound pipeline membentuk payload `incoming_message`.
-4. Node kirim payload ke Python via WS.
-5. Python menaruh payload ke pending buffer per chat.
-6. Setelah debounce/burst window, Python proses batch:
-   - trigger check
-   - LLM1 decision
-   - LLM2 generation/tool calls
-7. Python kirim action ke Node.
-8. Node eksekusi action ke WA, kirim `action_ack` / `error` balik.
+## B. Incoming message flow (WhatsApp → Node → Python)
+1. Node receives `messages.upsert` event from Baileys.
+2. Node command listener processes slash commands and button responses first.
+3. Node inbound pipeline builds the normalized `incoming_message` payload.
+4. Node sends payload to Python via WS (`wsClient.send()` — best-effort).
+5. Python places the payload into a per-chat pending buffer.
+6. After the debounce/burst window expires, Python processes the batch:
+   - Trigger check (prefix/hybrid/auto mode)
+   - LLM1 decision (should-respond / express-only / skip)
+   - LLM2 generation + tool calls (if LLM1 decides to respond)
+7. Python sends action commands to Node.
+8. Node executes actions on WhatsApp and sends `action_ack`/`error` back to Python.
 
 ## C. Model switching flow
-1. User pilih model dari interactive menu (`model_select:<modelId>`).
-2. Node set `chat_settings.llm2_model` di DB lokal.
-3. Node kirim WS control event reliable:
+1. User selects model from interactive menu (`model_select:<modelId>`).
+2. Node sets `chat_settings.llm2_model` in the local SQLite DB.
+3. Node sends WS control events via `sendReliable()`:
    - `set_llm2_model` (authoritative sync)
    - `invalidate_llm2_model` (fallback cache clear)
-4. Python update DB/cache model chat.
-5. Request LLM berikutnya memakai model baru.
+4. Python updates its DB/cache for the chat's model.
+5. Subsequent LLM requests use the new model.
 
 ## D. Dashboard flow
-1. Python record counters (RAM buffer) selama pemrosesan.
-2. Python flush ke DB periodik.
-3. `/dashboard` di Node membaca tabel stats dan mengirim ringkasan ke chat.
+1. Python records counters (in-memory buffer) during message processing.
+2. Python periodically flushes counters to the `stats` SQLite DB.
+3. `/dashboard` command in Node reads the stats table and sends a summary to the chat.
 
 ## E. Reset flow
-1. User jalankan `/reset`.
-2. Node kirim `clear_history` via `sendReliable()`.
-3. Python clear history per chat.
+1. User runs `/reset`.
+2. Node sends `clear_history` via `sendReliable()`.
+3. Python clears the per-chat history buffer.
 
-## F. Failure/reconnect behavior
-- Saat WS drop, event non-reliable bisa hilang.
-- Event reliable disimpan queue lalu dikirim ulang saat koneksi open.
+## F. Failure / reconnect behavior
+- If WS drops, non-reliable events (`incoming_message`) may be lost — the next burst will include newer state anyway.
+- Reliable events are stored in an in-memory queue and re-sent when the connection reopens.
+- If the WhatsApp session is logged out, the gateway stops reconnecting and logs `"Logged out from WhatsApp"`. Delete `data/auth/` and restart to re-pair.

@@ -16,41 +16,55 @@
 - `model`
 - `modelcfg`
 - `setting`
+- `group-status`
+- `catch`
 
-## Alias singular/plural
-Parser menormalisasi command ke bentuk canonical.
+## Singular/plural aliases
+The command parser normalizes aliases to the canonical form.
 
-Contoh alias:
-- `/setting`, `/settings` -> `setting`
-- `/model`, `/models` -> `model`
-- `/prompt`, `/prompts` -> `prompt`
-- `/dashboard`, `/dashboards` -> `dashboard`
-- dst (semua command utama punya pasangan singular/plural).
+Examples:
+- `/setting`, `/settings` → `setting`
+- `/model`, `/models` → `model`
+- `/prompt`, `/prompts` → `prompt`
+- `/dashboard`, `/dashboards` → `dashboard`
 
-## Permission model (umum)
-- Private chat: sebagian besar command diizinkan.
-- Group chat: butuh admin/owner untuk command konfigurasi.
+Every canonical command has a singular/plural pair.
+
+## Permission model
+
+### General
+- **Private chat**: Most commands are allowed.
+- **Group chat**: Configuration commands require admin or owner role.
 
 ### Moderation level (`/permission`)
-- `0`: moderation forbidden
-- `1`: delete allowed
-- `2`: delete + mute allowed
-- `3`: delete + mute + kick allowed
+- `0`: Moderation forbidden (no tools available).
+- `1`: Delete allowed.
+- `2`: Delete + mute allowed.
+- `3`: Delete + mute + kick allowed.
 
-Catatan:
-- Untuk level > 0, bot harus punya role admin di grup.
+> **Note**: For levels > 0, the bot must have admin role in the group.
 
-## Command behavior ringkas
-- `/prompt [text|clear]` – set/lihat/hapus prompt override chat.
-- `/reset` – clear memory/history chat di Python.
-- `/mode [auto|prefix|hybrid]` – mode trigger respon.
-- `/trigger [...]` – set trigger prefix mode.
-- `/model` – pilih model LLM2 per chat.
-- `/modelcfg ...` – CRUD daftar model (owner only).
-- `/setting` – menu interaktif untuk mode/model/permission/misc.
-- `/dashboard` – tampilkan statistik pemakaian.
-- `/broadcast` – kirim broadcast (owner only).
-- `/info` – info user/chat/grup.
-- `/debug` – kirim payload test interactive.
-- `/join <invite link>` – join grup via invite.
-- `/sticker` – buat sticker dari media.
+### Available LLM2 tools by permission level
+
+| Tool | Level 0 | Level 1 | Level 2 | Level 3 |
+|------|---------|---------|---------|---------|
+| `reply_message` | ✅ | ✅ | ✅ | ✅ |
+| `llm_express` | ✅ | ✅ | ✅ | ✅ |
+| `delete_messages` | ❌ | ✅ | ✅ | ✅ |
+| `mute_member` | ❌ | ❌ | ✅ | ✅ |
+| `kick_members` | ❌ | ❌ | ❌ | ✅ |
+
+## Command summary
+- `/prompt [text|clear]` — Set/view/clear per-chat prompt override.
+- `/reset` — Clear chat history in Python.
+- `/mode [auto|prefix|hybrid]` — Set trigger mode for group chats.
+- `/trigger [...]` — Set trigger prefixes for prefix/hybrid mode.
+- `/model` — Select LLM2 model per chat (interactive menu).
+- `/modelcfg ...` — CRUD model list (owner only).
+- `/setting` — Interactive settings menu (mode/model/permission/misc).
+- `/dashboard` — Display usage statistics.
+- `/broadcast` — Send broadcast to all chats (owner only).
+- `/info` — Show user/chat/group info.
+- `/debug` — Send test interactive payload.
+- `/join <invite link>` — Join a group via invite link.
+- `/sticker` — Create sticker from image/video.

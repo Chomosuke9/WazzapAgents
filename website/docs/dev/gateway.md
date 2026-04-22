@@ -39,7 +39,7 @@ wsClient.on('message', async (msg) => {
 
 Setiap aksi mengembalikan `action_ack` ke bridge. Untuk `send_message`, juga mengirim `send_ack` legacy.
 
-## WhatsApp Client (`waClient.js`)
+## WhatsApp Client (`connection.js`)
 
 ### Koneksi
 

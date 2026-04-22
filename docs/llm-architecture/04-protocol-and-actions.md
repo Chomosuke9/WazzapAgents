@@ -1,44 +1,57 @@
 # 04 - Protocol and Actions
 
-## Node -> Python events
+## Node → Python events
 
 ### `incoming_message`
-Event utama berisi payload chat/message ter-normalisasi.
+The primary event containing a normalized chat message payload.
 
-Field penting:
-- `chatId`, `chatType`, `chatName`
-- `senderId`, `senderRef`, `senderName`
-- `contextMsgId`, `messageId`, `timestampMs`
-- `text`, `quoted`, `attachments`, `mentionedJids`
-- `botMentioned`, `repliedToBot`
-- `slashCommand`, `commandHandled`
+Key fields:
+- `chatId`, `chatType`, `chatName` — Chat identification
+- `senderId`, `senderRef`, `senderName` — Sender identification (senderRef is the short LLM-friendly reference)
+- `contextMsgId`, `messageId`, `timestampMs` — Message identification (contextMsgId is 6-digit per-chat sequence)
+- `text`, `quoted`, `attachments`, `mentionedJids` — Message content
+- `botMentioned`, `repliedToBot` — Bot-mention and reply signals for LLM1 routing
+- `slashCommand`, `commandHandled` — Slash command detection and whether it was already handled by Node
+- `groupDescription` — Group description for LLM context
+- `location` — Location data if present
 
-### Control events
-- `clear_history` – minta Python reset history per chat.
-- `set_llm2_model` – set model chat (authoritative sync).
-- `invalidate_llm2_model` – clear cache model chat.
-- `invalidate_default_model` – clear cache default model.
-- `whatsapp_status` – status open/closed dari socket WA.
+### Control events (sent via `sendReliable()`)
 
-## Python -> Node actions
-- `send_message`
-- `react_message`
-- `delete_message`
-- `kick_member`
-- `mark_read`
-- `send_presence`
-- `send_buttons`
-- `send_carousel`
+| Event | Direction | Purpose |
+|-------|-----------|---------|
+| `clear_history` | Node → Python | Clear per-chat history |
+| `set_llm2_model` | Node → Python | Authoritative model sync for a chat |
+| `invalidate_llm2_model` | Node → Python | Clear cached model for a chat |
+| `invalidate_default_model` | Node → Python | Clear cached default model |
+| `whatsapp_status` | Node → Python | WhatsApp connection state (open/closed) |
+| `hello` | Node → Python | Handshake after WS connection opens |
 
-## Ack/Error balik ke Python
-- `action_ack`
-- `send_ack` (legacy compatibility)
-- `error`
+## Python → Node actions
+
+| Action | Required fields | Description |
+|--------|----------------|-------------|
+| `send_message` | `chatId`, `text` | Send text/media reply |
+| `react_message` | `chatId`, `contextMsgId`, `emoji` | React to a message |
+| `delete_message` | `chatId`, `contextMsgId` | Delete a message |
+| `kick_member` | `chatId`, `targets[]` | Remove members from group |
+| `mark_read` | `chatId`, `messageId` | Mark messages as read |
+| `send_presence` | `chatId`, `type` | Send typing/paused indicator |
+| `send_buttons` | `chatId`, `text`, `buttons` | NativeFlow button message |
+| `send_carousel` | `chatId`, `cards[]` | Carousel card message |
+
+## Ack/Error responses (Node → Python)
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `action_ack` | `requestId`, `action`, `ok`, `detail`, `result?` | Action result confirmation |
+| `send_ack` | `requestId` | Legacy `send_message` confirmation |
+| `error` | `message`, `detail`, `code`, `requestId?`, `action?` | Action failure (stable codes: `not_found`, `not_group`, `permission_denied`, `invalid_target`, `send_failed`) |
 
 ## Reliability contract
-- Event kontrol penting dari Node ke Python sebaiknya pakai `sendReliable`.
-- Jika WS belum open, event disimpan di queue memory.
-- Queue akan diflush saat koneksi kembali open.
+- Critical control events from Node to Python **must** use `sendReliable()` to survive WS reconnects.
+- If WS is not open, reliable events are stored in an in-memory queue (max 1000 entries, oldest dropped on overflow).
+- The queue is flushed when the connection reopens.
+- Regular `incoming_message` events use `send()` (best-effort) because they're transient.
 
-## Referensi
-- Kontrak payload lengkap ada di root `README.md`.
+## Full payload reference
+See `README.md` for the complete `incoming_message` and `send_message` payload contracts.

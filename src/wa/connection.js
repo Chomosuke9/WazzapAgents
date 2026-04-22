@@ -1,3 +1,19 @@
+/**
+ * connection.js — Baileys v7 WhatsApp socket lifecycle.
+ *
+ * This module is the central hub for WhatsApp connectivity:
+ *   - Creates the WASocket with multi-file auth state
+ *   - Handles QR code display for pairing
+ *   - Manages reconnection on disconnect (except logged-out sessions)
+ *   - Registers two listeners on `messages.upsert`:
+ *     1. Command handler: processes slash commands and interactive button responses
+ *     2. Chatbot handler: forwards messages to the Python bridge via WebSocket
+ *   - Handles group metadata invalidation on group updates
+ *   - Emits `whatsapp_status` events via sendReliable() on connect/disconnect
+ *
+ * Lazy imports are used for `inbound.js` and `events.js` to avoid circular
+ * dependencies (connection exports getSock which those modules import).
+ */
 import { spawn } from 'child_process';
 import makeWASocket, {
   fetchLatestBaileysVersion,
@@ -235,6 +251,24 @@ function printQrInTerminal(qr) {
   }
 }
 
+/**
+ * Initialize and start the WhatsApp socket.
+ *
+ * Creates a Baileys WASocket with multi-file auth state, registers event handlers
+ * for credentials, connection updates, group changes, and two message listeners:
+ *
+ * Listener 1 (command handler): Processes slash commands and button/form responses.
+ *   - Button responses can trigger model selection, settings changes, or command routing.
+ *   - Pending forms (model edit/add) are handled inline.
+ *
+ * Listener 2 (chatbot handler): Forwards `notify`-type messages to the Python bridge
+ *   via `handleIncomingMessage()`. Non-notify messages are scanned for group-join stubs.
+ *
+ * Reconnection: On connection close (unless logged out), recursively calls startWhatsApp().
+ * On open, sends a reliable `whatsapp_status` event to the Python bridge.
+ *
+ * @returns {Promise<import('baileys').WASocket>} The connected socket instance
+ */
 async function startWhatsApp() {
   // Lazy import to avoid circular dependency: inbound/events import getSock from connection,
   // and connection imports handlers from inbound/events at call time only.
@@ -505,8 +539,8 @@ async function startWhatsApp() {
         const chatId = msg?.key?.remoteJid;
         if (!chatId || chatId === 'status@broadcast') continue;
         if (!msg?.message) continue;
-        // Bot messages are allowed to trigger commands, loop prevention is handled in inbound.js + python bridge
-        // if (msg?.key?.fromMe) continue;
+        // Bot messages are forwarded as contextOnly=true in inbound.js;
+        // the Python bridge won't trigger LLM1 on them, preventing response loops.
 
         const fromId = msg.key.participant || msg.key.remoteJid;
         const senderId = normalizeJid(fromId) || fromId;

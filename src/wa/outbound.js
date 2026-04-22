@@ -1,3 +1,19 @@
+/**
+ * outbound.js — Send messages, media, and mentions to WhatsApp.
+ *
+ * The main entry point is sendOutgoing() which handles:
+ *   - Attachment sending (image, video, audio, sticker, document)
+ *   - Mention resolution: @Name (senderRef) → actual JIDs
+ *   - Interactive mode (sendRichMessage) vs plain text (sock.sendMessage)
+ *   - Reply quoting via contextMsgId → WhatsApp message key lookup
+ *
+ * Mention format: "Hello @Alice (u8k2d1) @Bob (u3m9x7)"
+ * The renderOutboundMentions() function resolves senderRef tokens to JIDs and
+ * produces the WhatsApp mentions array. Invalid senderRef tokens are silently
+ * stripped (the rest of the message still sends).
+ *
+ * Special mention: @everyone (everyone) → resolves to all group participants.
+ */
 import path from 'path';
 import logger from '../logger.js';
 import {
@@ -19,6 +35,21 @@ import { actionError } from './actions.js';
 import { sendRichMessage } from './interactive/index.js';
 import config from '../config.js';
 
+/**
+ * Resolve @Name (senderRef) mention tokens in outbound text to WhatsApp JIDs.
+ *
+ * Supports three mention types:
+ *   - @Name (senderRef)   → resolved to a phone JID via senderRefRegistry
+ *   - @everyone (everyone) → resolved to all group participant JIDs
+ *   - @Name (bot)         → rendered as @Name without JID (bot self-mention)
+ *
+ * Invalid senderRef tokens are left as-is (silently skipped for mention array).
+ *
+ * @param {string} chatId - Group or DM JID
+ * @param {string} rawText - Text with @Name (senderRef) tokens
+ * @param {object|null} groupContext - Cached group metadata (refreshed if needed)
+ * @returns {Promise<{text: string, mentions: string[], groupContext: object|null}>}
+ */
 async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   if (typeof rawText !== 'string') {
     return { text: rawText, mentions: [], groupContext };
@@ -98,6 +129,20 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   };
 }
 
+/**
+ * Send a message (text, media, or both) to WhatsApp.
+ *
+ * Handles attachment sending (image/video/audio/sticker/document with optional caption),
+ * mention resolution, reply quoting, and interactive mode fallback.
+ *
+ * If config.llmReplyInteractive is true, text replies use sendRichMessage (NativeFlow)
+ * which renders nicely on mobile but is invisible on WhatsApp Web.
+ * If false (default), plain sock.sendMessage is used (works everywhere).
+ *
+ * @param {{chatId: string, text?: string, attachments?: Array, replyTo?: string}} params
+ * @returns {Promise<{sent: Array, replyTo: string|null}>}
+ * @throws {Error} If socket not ready, chatId missing, or nothing to send
+ */
 async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
   const sock = getSock();
   if (!sock) throw actionError('send_failed', 'WhatsApp socket not ready');

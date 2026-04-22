@@ -1,3 +1,21 @@
+/**
+ * identifiers.js — Canonical message and sender reference system.
+ *
+ * This module manages two core abstractions that the rest of the codebase depends on:
+ *
+ * 1. **contextMsgId**: A 6-digit per-chat monotonically increasing sequence number
+ *    (000000–999999, wraps after 999999). Replaces WhatsApp's opaque `wamid-*` IDs
+ *    so LLMs can reliably reference messages in tool calls (e.g., reply_message("000125")).
+ *    Only unique within a single chat.
+ *
+ * 2. **senderRef**: A short deterministic reference per sender per chat (e.g., "u8k2d1").
+ *    Derived from SHA1(chatId|senderId) → base-36 → first 6 chars. LLM moderation uses
+ *    these instead of raw JIDs because JIDs leak phone numbers and are hard to parse.
+ *
+ * Both registries live in-memory (caches.js) and are rebuilt from WhatsApp events on reconnect.
+ * They are NOT persisted across restarts — contextMsgId counters reset and senderRefs are
+ * re-derived from incoming messages.
+ */
 import { createHash } from 'crypto';
 import { jidNormalizedUser } from 'baileys';
 import {
@@ -11,6 +29,10 @@ import {
   cacheSetBounded,
 } from './caches.js';
 
+/**
+ * Normalize a WhatsApp JID to its canonical form (device+agent stripped).
+ * Returns null if the input is falsy or not a string.
+ */
 function normalizeJid(jid) {
   if (!jid || typeof jid !== 'string') return null;
   try {
@@ -20,6 +42,10 @@ function normalizeJid(jid) {
   }
 }
 
+/**
+ * Parse a contextMsgId from a raw value. Accepts "000125" or "<000125>"
+ * (LLMs sometimes wrap IDs in angle brackets). Returns null if invalid.
+ */
 function normalizeContextMsgId(value) {
   if (typeof value !== 'string' && typeof value !== 'number') return null;
   const raw = String(value).trim();
@@ -36,6 +62,11 @@ function messageIdIndexKey(chatId, messageId) {
   return `${chatId}::${messageId}`;
 }
 
+/**
+ * Allocate the next contextMsgId for a chat. Counter wraps at 1,000,000.
+ * This is the only function that creates new contextMsgIds — all other functions
+ * either look up existing ones or normalize/parse them.
+ */
 function nextContextMsgId(chatId) {
   const current = contextCounterByChat.get(chatId) || 0;
   const bounded = current % 1_000_000;
@@ -67,6 +98,20 @@ function isPhoneJid(jid) {
     && (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us'));
 }
 
+/**
+ * Register or look up a senderRef for a given sender in a chat.
+ *
+ * senderRefs are derived from SHA1(chatId|senderId|attempt) → base-36 prefix.
+ * If a collision occurs (different sender, same ref), it increments the attempt.
+ *
+ * Also tracks the mapping from senderId → participantJid (for mention resolution).
+ * Phone JIDs (@s.whatsapp.net) are preferred over non-phone JIDs.
+ *
+ * @param {string} chatId   - Group or DM JID
+ * @param {string} senderId - Normalized sender JID
+ * @param {string|null} participantJid - Group participant JID (may differ from sender on mobile)
+ * @returns {string|null} The 6-char senderRef, or null if inputs are invalid
+ */
 function rememberSenderRef(chatId, senderId, participantJid = null) {
   if (!chatId || !senderId) return null;
   const canonicalSenderId = normalizeJid(senderId) || senderId;
@@ -193,6 +238,16 @@ function ensureContextMsgId(chatId, messageId) {
   return nextContextMsgId(chatId);
 }
 
+/**
+ * Store a message in the cache and index it by contextMsgId and messageId.
+ *
+ * Two indexes are maintained:
+ *   - contextIndexKey(chatId, contextMsgId) → message metadata
+ *   - messageIdIndexKey(chatId, messageId)   → contextMsgId
+ *
+ * Used for reply-target resolution (resolveQuotedMessage) and action targeting
+ * (react/delete/kick refer to messages by contextMsgId).
+ */
 function rememberMessage(msg, {
   chatId = msg?.key?.remoteJid || null,
   contextMsgId = null,

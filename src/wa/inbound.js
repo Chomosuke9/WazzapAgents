@@ -1,3 +1,19 @@
+/**
+ * inbound.js — Transform WhatsApp messages into normalized payloads for the Python bridge.
+ *
+ * This module handles the critical step between Baileys' raw message events and the
+ * structured `incoming_message` payload that the Python bridge processes:
+ *
+ *   1. Parse group join stubs (emit as synthetic context events instead of forwarding)
+ *   2. Normalize sender identity: JID → senderRef, resolve display names
+ *   3. Determine bot-mention and replied-to-bot signals for LLM1 routing
+ *   4. Download and validate media attachments (image/video/audio/document/sticker)
+ *   5. Extract quoted (replied-to) messages with full metadata
+ *   6. Build the final payload with all context needed by the LLM pipeline
+ *
+ * Bot messages (fromMe=true) are forwarded with `contextOnly=true` and
+ * `triggerLlm1=false` so they enrich context without causing response loops.
+ */
 import logger from '../logger.js';
 import config from '../config.js';
 import wsClient from '../wsClient.js';
@@ -116,6 +132,23 @@ async function handleGroupParticipantsUpdate(update) {
   });
 }
 
+/**
+ * Handle a single incoming WhatsApp message.
+ *
+ * Builds a normalized `incoming_message` payload and sends it to the Python
+ * bridge via `wsClient.send()`. Key behaviors:
+ *
+ *   - Bot's own messages are sent with `contextOnly=true`, `triggerLlm1=false`
+ *   - Reaction messages are sent as `contextOnly=true` (no need for LLM response)
+ *   - Interactive message replies are marked `contextOnly=true` (already handled by button handler)
+ *   - Slash commands are detected and included in the payload for context enrichment,
+ *     but command execution is handled in connection.js before this runs
+ *
+ * Performance: Logs slow processing if total time exceeds PERF_LOG_THRESHOLD_MS.
+ *
+ * @param {object} msg - Raw Baileys message object
+ * @param {{precomputedContextMsgId?: string}} [options] - Pre-computed contextMsgId if known
+ */
 async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {}) {
   const sock = getSock();
   if (!sock) return;

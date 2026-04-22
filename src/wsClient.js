@@ -1,15 +1,31 @@
+/**
+ * wsClient.js — WebSocket client for Node ↔ Python communication.
+ *
+ * Two send modes:
+ *   - send(message)     — best-effort, drops if disconnected. Used for
+ *                         transient events like `incoming_message` (the next
+ *                         burst will re-send newer state anyway).
+ *   - sendReliable(msg)  — queues if disconnected, flushes on reconnect. Used
+ *                         for state-sync events that must not be lost:
+ *                         `whatsapp_status`, `clear_history`, `set_llm2_model`,
+ *                         `invalidate_llm2_model`, `invalidate_default_model`.
+ *
+ * See ADR-4 in AGENTS.md for the rationale behind this split.
+ */
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import logger from './logger.js';
 import config from './config.js';
 
 class LLMWebSocket extends EventEmitter {
+  /** Maximum number of queued reliable messages before dropping oldest. */
+  static MAX_RELIABLE_QUEUE = 1000;
+
   constructor() {
     super();
     this.ws = null;
     this.reconnectTimer = null;
     this.reliableQueue = [];
-    this.maxReliableQueue = 1000;
   }
 
   connect() {
@@ -90,7 +106,7 @@ class LLMWebSocket extends EventEmitter {
       return;
     }
     this.reliableQueue.push(message);
-    if (this.reliableQueue.length > this.maxReliableQueue) {
+    if (this.reliableQueue.length > LLMWebSocket.MAX_RELIABLE_QUEUE) {
       this.reliableQueue.shift();
       logger.warn({ queueSize: this.reliableQueue.length }, 'reliable ws queue overflow; oldest message dropped');
     }

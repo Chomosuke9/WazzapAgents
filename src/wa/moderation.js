@@ -1,3 +1,21 @@
+/**
+ * moderation.js — Kick members from WhatsApp groups.
+ *
+ * Handles the `kick_member` action from the Python bridge.
+ *
+ * Validation chain:
+ *   1. Must be a group chat (not DM)
+ *   2. Bot must be admin in the group
+ *   3. Each target is validated:
+ *      - senderRef must resolve to a known participant
+ *      - anchorContextMsgId must belong to the same senderRef
+ *      - Cannot kick yourself (bot), admins, or super-admins
+ *   4. Calls sock.groupParticipantsUpdate() with 'remove' action
+ *
+ * Returns per-target results with ok/error/detail fields.
+ * If `autoReplyAnchor=true`, posts a confirmation message replying to the
+ * anchor message for each successfully kicked target.
+ */
 import logger from '../logger.js';
 import {
   normalizeJid,

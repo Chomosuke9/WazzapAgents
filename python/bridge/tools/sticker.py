@@ -1,4 +1,19 @@
-"""Sticker creation tool: generate image stickers with text overlay."""
+"""Sticker creation tool: generate WhatsApp-compatible stickers from images/videos.
+
+Why Pillow instead of ffmpeg-only?
+  - Text rendering: ffmpeg's drawtext filter doesn't support multi-line word
+    wrapping with per-line measurement. Pillow's ImageDraw.textbbox allows
+    precise layout with outlined text.
+  - EXIF metadata: WhatsApp stickers require a custom EXIF payload containing
+    sticker-pack-id and sticker-pack-name. Pillow can embed this binary TIFF
+    structure via img.save(..., exif=bytes); ffmpeg cannot.
+  - The Node sticker path (src/wa/command/sticker.js) uses sharp + ffmpeg for
+    animated stickers. Both paths converge on the same 512×512 WebP + EXIF format,
+    but they're independent implementations.
+
+Output format: 512×512 WebP with WhatsApp sticker EXIF metadata containing
+sticker-pack-id, sticker-pack-name, and emoji fields.
+"""
 from __future__ import annotations
 
 import json

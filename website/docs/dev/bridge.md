@@ -212,12 +212,12 @@ CREATE TABLE chat_settings (
 
 ### Permission Levels
 
-| Level | Delete | Kick | Deskripsi |
-|-------|--------|------|-----------|
-| 0 | Tidak | Tidak | Default — moderasi dinonaktifkan |
-| 1 | Ya | Tidak | Hanya delete pesan |
-| 2 | Tidak | Ya | Hanya kick member |
-| 3 | Ya | Ya | Moderasi penuh |
+| Level | Delete | Mute | Kick | Deskripsi |
+|-------|--------|------|------|-----------|
+| 0 | Tidak | Tidak | Tidak | Default — moderasi dinonaktifkan |
+| 1 | Ya | Tidak | Tidak | Hanya delete pesan |
+| 2 | Ya | Ya | Tidak | Delete + mute member |
+| 3 | Ya | Ya | Ya | Moderasi penuh (delete + mute + kick) |
 
 ## History (`history.py`)
 
