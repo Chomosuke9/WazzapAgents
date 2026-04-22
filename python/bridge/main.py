@@ -895,7 +895,7 @@ async def handle_socket(ws):
         )
 
         # Resolve quoted message media for vision-capable models
-        resolved_atts = _resolve_quoted_media_attachments(media_paths_by_chat, llm2_payload, p_chat_id)
+        resolved_atts = _resolve_quoted_media_attachments(media_paths_by_chat, llm2_payload, chat_id)
         if resolved_atts != (llm2_payload.get("attachments") or []):
           llm2_payload["attachments"] = resolved_atts
 
