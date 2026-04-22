@@ -100,12 +100,75 @@ def _resolve_moderation_db_path() -> Path:
   return _MODERATION_DB_PATH
 
 
+def _recover_corrupt_db(db_path: Path) -> None:
+  """Attempt to recover a corrupt SQLite database by removing WAL/SHM files.
+
+  If WAL files are stale from an unclean shutdown, deleting them allows SQLite
+  to fall back to the main database file which is often intact.
+  If the main database file itself is corrupt, it is renamed as a backup and
+  recreated so the application can continue operating.
+  """
+  for ext in ('-wal', '-shm'):
+    p = db_path.with_suffix(db_path.suffix + ext)
+    if p.exists():
+      try:
+        p.unlink()
+        logger.warning('DB recovery: removed stale WAL file %s', p)
+      except OSError as exc:
+        logger.warning('DB recovery: could not remove %s: %s', p, exc)
+
+  # Test whether the database is now usable
+  try:
+    test_conn = sqlite3.connect(str(db_path), timeout=5)
+    test_conn.execute('PRAGMA integrity_check').fetchall()
+    test_conn.close()
+    logger.info('DB recovery: %s recovered after WAL cleanup', db_path.name)
+  except Exception:
+    # Main database file is corrupt — back it up and recreate
+    logger.warning('DB recovery: %s still corrupt after WAL cleanup, recreating', db_path.name)
+    backup = db_path.with_suffix(db_path.suffix + '.corrupted.bak')
+    if backup.exists():
+      i = 1
+      while backup.with_suffix(f'.corrupted.{i}.bak').exists():
+        i += 1
+      backup = backup.with_suffix(f'.corrupted.{i}.bak')
+    try:
+      db_path.rename(backup)
+      logger.warning('DB recovery: corrupt %s renamed to %s', db_path.name, backup.name)
+    except OSError as exc:
+      logger.error('DB recovery: could not rename %s: %s', db_path, exc)
+      # Last resort — delete the corrupt file
+      try:
+        db_path.unlink()
+        logger.warning('DB recovery: deleted corrupt %s', db_path.name)
+      except OSError:
+        pass
+
+
 def _new_conn(db_path: Path) -> sqlite3.Connection:
-  conn = sqlite3.connect(str(db_path), timeout=5)
-  conn.execute('PRAGMA journal_mode=WAL')
-  conn.execute('PRAGMA busy_timeout=3000')
-  conn.row_factory = sqlite3.Row
-  return conn
+  """Open a SQLite connection with WAL mode and busy timeout.
+
+  If the database file is corrupt (e.g. stale WAL from unclean shutdown),
+  automatically attempts recovery before raising.
+  """
+  try:
+    conn = sqlite3.connect(str(db_path), timeout=5)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=3000')
+    # Quick integrity probe — catches "database disk image is malformed"
+    conn.execute('PRAGMA integrity_check').fetchone()
+    conn.row_factory = sqlite3.Row
+    return conn
+  except sqlite3.DatabaseError:
+    logger.warning('DB: %s appears corrupt, attempting recovery', db_path.name)
+    _recover_corrupt_db(db_path)
+    # Retry after recovery
+    conn = sqlite3.connect(str(db_path), timeout=5)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA busy_timeout=3000')
+    conn.execute('PRAGMA integrity_check').fetchone()
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def _ensure_settings_tables(conn: sqlite3.Connection) -> None:
@@ -519,6 +582,45 @@ def reset_settings_connection() -> None:
   with _cache_lock:
     _llm2_model_cache.clear()
   logger.debug('Settings DB connection reset; caches cleared')
+
+
+def close_all_connections() -> None:
+  """Gracefully close all thread-local SQLite connections.
+
+  Should be called on shutdown to ensure WAL files are checkpointed and
+  connections are released cleanly, preventing "database disk image is malformed"
+  errors on the next startup.
+  """
+  conn_names = ('settings_conn', 'stats_conn', 'moderation_conn')
+  for name in conn_names:
+    conn: sqlite3.Connection | None = getattr(_LOCAL, name, None)
+    if conn is not None:
+      try:
+        # Attempt WAL checkpoint before closing so the main DB file is up-to-date
+        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+        conn.close()
+      except Exception:
+        try:
+          conn.close()
+        except Exception:
+          pass
+      setattr(_LOCAL, name, None)
+  logger.info('All SQLite connections closed')
+
+
+def checkpoint_all_dbs() -> None:
+  """Checkpoint WAL files for all databases to keep them small and reduce
+  the risk of corruption after unclean shutdowns.
+  """
+  conn_getters = (_get_settings_conn, _get_stats_conn, _get_moderation_conn)
+  db_names = ('settings', 'stats', 'moderation')
+  for getter, name in zip(conn_getters, db_names):
+    try:
+      conn = getter()
+      conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+      logger.debug('WAL checkpoint completed for %s.db', name)
+    except Exception as exc:
+      logger.warning('WAL checkpoint failed for %s: %s', name, exc)
 
 
 def add_model(model_id: str, display_name: str, description: str = '', sort_order: Optional[int] = None, vision_support: bool = False) -> bool:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import os
+import signal
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -37,6 +39,8 @@ try:
     clear_llm2_model_cache as db_clear_llm2_model_cache,
     clear_default_llm2_model_cache as db_clear_default_llm2_model_cache,
     reset_settings_connection as db_reset_settings_connection,
+    close_all_connections as db_close_all_connections,
+    checkpoint_all_dbs as db_checkpoint_all_dbs,
   )
   from .dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop
   from .stickers import resolve_sticker
@@ -1379,8 +1383,10 @@ async def handle_socket(ws):
   except websockets.ConnectionClosed:
     logger.info("Gateway disconnected")
   finally:
-    # Flush dashboard stats before shutting down
+    # Flush dashboard stats and checkpoint DBs before shutting down
     flush_to_db()
+    db_checkpoint_all_dbs()
+    db_close_all_connections()
     for task in tasks:
       task.cancel()
     if tasks:
@@ -1398,6 +1404,19 @@ async def main():
   endpoint = os.getenv("LLM_WS_ENDPOINT", "ws://0.0.0.0:8080/ws")
   host, port = _parse_endpoint(endpoint)
   logger.info("Listening for gateway on %s (host=%s port=%s)", endpoint, host, port)
+
+  # Register cleanup handlers so SQLite connections are closed cleanly on exit,
+  # preventing WAL file corruption from unclean shutdowns.
+  atexit.register(db_close_all_connections)
+
+  loop = asyncio.get_running_loop()
+  for sig in (signal.SIGINT, signal.SIGTERM):
+    try:
+      loop.add_signal_handler(sig, _shutdown_signal_handler, sig)
+    except NotImplementedError:
+      # Windows doesn't support add_signal_handler
+      pass
+
   server = await websockets.serve(
     handle_socket,
     host=host,
@@ -1407,6 +1426,16 @@ async def main():
     ping_timeout=20,
   )
   await server.wait_closed()
+
+
+def _shutdown_signal_handler(sig: int) -> None:
+  """Handle SIGINT/SIGTERM by checkpointing and closing databases."""
+  logger.info('Received signal %s, shutting down gracefully', sig)
+  try:
+    db_checkpoint_all_dbs()
+    db_close_all_connections()
+  except Exception as exc:
+    logger.error('Error during shutdown cleanup: %s', exc)
 
 
 if __name__ == "__main__":
