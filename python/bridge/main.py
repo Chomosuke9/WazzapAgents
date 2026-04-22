@@ -1411,10 +1411,16 @@ async def main():
   # preventing WAL file corruption from unclean shutdowns.
   atexit.register(db_close_all_connections)
 
+  stop_event = asyncio.Event()
   loop = asyncio.get_running_loop()
+
+  def _handle_signal(sig):
+    logger.info('Received signal %s, triggering shutdown...', sig)
+    stop_event.set()
+
   for sig in (signal.SIGINT, signal.SIGTERM):
     try:
-      loop.add_signal_handler(sig, _shutdown_signal_handler, sig)
+      loop.add_signal_handler(sig, _handle_signal, sig)
     except NotImplementedError:
       # Windows doesn't support add_signal_handler
       pass
@@ -1427,11 +1433,27 @@ async def main():
     ping_interval=20,
     ping_timeout=20,
   )
+
+  # Wait until stop_event is set (via signal) or server closes on its own
+  await stop_event.wait()
+
+  logger.info("Shutting down WebSocket server...")
+  server.close()
   await server.wait_closed()
+
+  # Final cleanup
+  try:
+    # Explicitly call checkpoint and close
+    db_checkpoint_all_dbs()
+    db_close_all_connections()
+    # Unregister atexit since we already closed them
+    atexit.unregister(db_close_all_connections)
+  except Exception as exc:
+    logger.error('Error during final cleanup: %s', exc)
 
 
 def _shutdown_signal_handler(sig: int) -> None:
-  """Handle SIGINT/SIGTERM by checkpointing and closing databases."""
+  """Legacy signal handler. No longer used by main() loop but kept for reference."""
   logger.info('Received signal %s, shutting down gracefully', sig)
   try:
     db_checkpoint_all_dbs()
