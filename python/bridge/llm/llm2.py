@@ -63,16 +63,6 @@ def _llm2_sdk_max_retries() -> int:
   return _parse_non_negative_int(os.getenv("LLM2_SDK_MAX_RETRIES"), 0)
 
 
-def _llm2_reasoning_effort() -> str | None:
-  raw = os.getenv("LLM2_REASONING_EFFORT")
-  if raw is None:
-    return "medium"
-  cleaned = raw.strip().lower()
-  if not cleaned:
-    return None
-  return cleaned
-
-
 def get_llm2_model_for_chat(chat_id: str) -> str:
   """Get model_id for chat, or default if not set."""
   model_id = db_get_llm2_model(chat_id)
@@ -427,13 +417,11 @@ def get_llm2(
   model: str | None = None,
   base_url: str | None = None,
   api_key: str | None = None,
-  include_reasoning: bool = True,
 ) -> ChatOpenAI:
   resolved_model = model or (_clean_env(os.getenv("LLM2_MODEL")) or "gpt-4.1")
   temperature = float(os.getenv("LLM2_TEMPERATURE", "0.5"))
   timeout = _llm2_timeout()
   max_retries = _llm2_sdk_max_retries()
-  reasoning_effort = _llm2_reasoning_effort() if include_reasoning else None
   resolved_base_url = base_url if base_url is not None else _clean_env(os.getenv("LLM2_ENDPOINT"))
   resolved_api_key = api_key if api_key is not None else (_clean_env(os.getenv("LLM2_API_KEY")) or "")
   kwargs = {
@@ -444,8 +432,6 @@ def get_llm2(
     "timeout": timeout,
     "max_retries": max_retries,
   }
-  if reasoning_effort:
-    kwargs["reasoning_effort"] = reasoning_effort
   return ChatOpenAI(
     **kwargs,
   )
@@ -480,7 +466,6 @@ async def generate_reply(
   retry_max = _llm2_retry_max()
   retry_backoff_s = _llm2_retry_backoff_seconds()
   sdk_max_retries = _llm2_sdk_max_retries()
-  reasoning_effort = _llm2_reasoning_effort()
   # Compute moderation permissions for dynamic tool/prompt injection
   admin_ok = bool(bot_is_admin or bot_is_super_admin)
   perm_level = db_get_permission(log_chat_id) if log_chat_id else 0
@@ -586,16 +571,10 @@ async def generate_reply(
       model=resolved_model,
       base_url=target.base_url,
       api_key=target.api_key,
-      include_reasoning=bool(reasoning_effort),
     )
     if tools:
-      # Thinking/reasoning mode (reasoning_effort) does not support
-      # tool_choice="required" or tool_choice="object" on some
-      # providers (e.g. Qwen/Alibaba).  Fall back to "auto" so the
-      # model can still decide whether to call a tool.
-      tool_choice_val = "auto" if reasoning_effort else "required"
       try:
-        llm = llm.bind_tools(tools, tool_choice=tool_choice_val)
+        llm = llm.bind_tools(tools, tool_choice="required")
       except Exception:
         llm = llm.bind_tools(tools)
 
@@ -615,7 +594,6 @@ async def generate_reply(
         "retry_max": retry_max,
         "retry_backoff_s": retry_backoff_s,
         "sdk_max_retries": sdk_max_retries,
-        "reasoning_effort": reasoning_effort,
       },
     )
 

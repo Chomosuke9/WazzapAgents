@@ -142,7 +142,6 @@ python examples/llm_ws_echo.py
 | `LLM2_RETRY_MAX` | `0` | Maks retry saat timeout |
 | `LLM2_RETRY_BACKOFF_SECONDS` | `0.8` | Backoff antar retry |
 | `LLM2_ENABLE_MEDIA_INPUT` | `1` | Aktifkan input multimodal LLM2 |
-| `LLM2_REASONING_EFFORT` | `medium` | Level reasoning (low/medium/high) |
 | `LLM2_FALLBACK_ENDPOINT` | *(reuse LLM2)* | Endpoint fallback |
 | `LLM2_FALLBACK_MODEL` | *(kosong)* | Model fallback |
 

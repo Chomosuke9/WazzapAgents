@@ -25,7 +25,6 @@ try:
     _llm1_sdk_max_retries,
     _llm1_temperature,
     _llm1_max_tokens,
-    _llm1_reasoning_effort,
     _clean_env,
     _endpoint_base_url,
     _chat_base_url,
@@ -58,7 +57,6 @@ except ImportError:  # allow running as script
     _llm1_sdk_max_retries,
     _llm1_temperature,
     _llm1_max_tokens,
-    _llm1_reasoning_effort,
     _clean_env,
     _endpoint_base_url,
     _chat_base_url,
@@ -113,34 +111,6 @@ def _error_chain(err: Exception, limit: int = 8) -> list[str]:
     current = current.__cause__ or current.__context__
     depth += 1
   return chain
-
-
-def _error_text_chain(err: Exception, limit: int = 8) -> str:
-  texts: list[str] = []
-  current: BaseException | None = err
-  depth = 0
-  while current is not None and depth < limit:
-    text = str(current).strip()
-    if text:
-      texts.append(text.lower())
-    current = current.__cause__ or current.__context__
-    depth += 1
-  return " | ".join(texts)
-
-
-def _is_reasoning_unsupported_error(err: Exception) -> bool:
-  text = _error_text_chain(err)
-  if "reasoning_effort" not in text and "reasoning effort" not in text:
-    return False
-  unsupported_markers = (
-    "unsupported",
-    "not supported",
-    "unknown",
-    "invalid",
-    "not allowed",
-    "unrecognized",
-  )
-  return any(marker in text for marker in unsupported_markers)
 
 
 def _llm1_ctx(
@@ -313,7 +283,6 @@ async def call_llm1(
 
   for idx, target in enumerate(targets):
     has_next_target = idx < (total_targets - 1)
-    reasoning_effort = _llm1_reasoning_effort()
     t0 = time.perf_counter()
     ctx = _llm1_ctx(
       current,
@@ -327,7 +296,6 @@ async def call_llm1(
       base_url=target.base_url,
       api_key=target.api_key,
       timeout=timeout,
-      include_reasoning=bool(reasoning_effort),
     )
 
     if env_flag("BRIDGE_LOG_PROMPT_FULL"):
@@ -340,7 +308,6 @@ async def call_llm1(
           "message_max_chars": message_max_chars,
           "base_url": target.base_url,
           "media_parts": len(current_media_parts),
-          "reasoning_effort": reasoning_effort,
           "messages": _redact_messages_for_log(prompt),
         },
       )
@@ -355,7 +322,6 @@ async def call_llm1(
         "media_parts": len(current_media_parts),
         "temperature": llm1_temperature,
         "max_tokens": llm1_max_tokens,
-        "reasoning_effort": reasoning_effort,
       },
     )
 
@@ -373,20 +339,15 @@ async def call_llm1(
         "base_url": target.base_url,
         "temperature": llm1_temperature,
         "max_tokens": llm1_max_tokens,
-        "reasoning_effort": reasoning_effort,
         "tool_names": [t["function"]["name"] for t in LLM1_TOOLS],
       },
     )
 
     async def _invoke_once(llm_client: ChatOpenAI):
-      # Thinking/reasoning mode does not support tool_choice="required"
-      # on some providers (e.g. Qwen/Alibaba).  Use "auto" instead so
-      # the model can still decide whether to call a tool.
-      tool_choice_val = "auto" if reasoning_effort else "required"
       try:
         llm_with_tool = llm_client.bind_tools(
           LLM1_TOOLS,
-          tool_choice=tool_choice_val,
+          tool_choice="required",
         )
       except Exception as err:
         logger.warning(
@@ -404,93 +365,34 @@ async def call_llm1(
     try:
       response = await _invoke_once(llm)
     except Exception as err:
-      # Some providers reject `reasoning_effort`. Retry once without it when using
-      # internally created client.
-      if (
-        client is None
-        and reasoning_effort
-        and _is_reasoning_unsupported_error(err)
-      ):
+      elapsed_ms = int((time.perf_counter() - t0) * 1000)
+      timeout_error = _is_timeout_error(err)
+      logger.error(
+        "LLM1 invoke failed",
+        exc_info=True,
+        extra={
+          **ctx,
+          "elapsed_ms": elapsed_ms,
+          "error_type": type(err).__name__,
+          "error_chain": _error_chain(err),
+          "will_try_fallback_target": has_next_target,
+        },
+      )
+      last_failure = LLM1Decision(
+        should_response=False,
+        confidence=10,
+        reason="llm1_unreachable" if timeout_error else "llm1_exception",
+      )
+      if has_next_target:
         logger.warning(
-          "LLM1 invoke rejected reasoning_effort; retrying without reasoning",
-          exc_info=True,
+          "LLM1 provider failed; trying fallback target",
           extra={
             **ctx,
-            "reasoning_effort": reasoning_effort,
-            "error_type": type(err).__name__,
-            "error_chain": _error_chain(err),
+            "next_provider": targets[idx + 1].name,
           },
         )
-        llm = get_llm1(
-          model=target.model,
-          base_url=target.base_url,
-          api_key=target.api_key,
-          timeout=timeout,
-          include_reasoning=False,
-        )
-        reasoning_effort = None
-        try:
-          response = await _invoke_once(llm)
-        except Exception as retry_err:
-          elapsed_ms = int((time.perf_counter() - t0) * 1000)
-          timeout_error = _is_timeout_error(retry_err)
-          logger.error(
-            "LLM1 invoke failed after reasoning fallback",
-            exc_info=True,
-            extra={
-              **ctx,
-              "elapsed_ms": elapsed_ms,
-              "reasoning_effort": reasoning_effort,
-              "error_type": type(retry_err).__name__,
-              "error_chain": _error_chain(retry_err),
-              "will_try_fallback_target": has_next_target,
-            },
-          )
-          last_failure = LLM1Decision(
-            should_response=False,
-            confidence=10,
-            reason="llm1_unreachable" if timeout_error else "llm1_exception",
-          )
-          if has_next_target:
-            logger.warning(
-              "LLM1 provider failed; trying fallback target",
-              extra={
-                **ctx,
-                "next_provider": targets[idx + 1].name,
-              },
-            )
-            continue
-          return last_failure
-      else:
-        elapsed_ms = int((time.perf_counter() - t0) * 1000)
-        timeout_error = _is_timeout_error(err)
-        logger.error(
-          "LLM1 invoke failed",
-          exc_info=True,
-          extra={
-            **ctx,
-            "elapsed_ms": elapsed_ms,
-            "reasoning_effort": reasoning_effort,
-            "error_type": type(err).__name__,
-            "error_chain": _error_chain(err),
-            "will_try_fallback_target": has_next_target,
-          },
-        )
-        last_failure = LLM1Decision(
-          should_response=False,
-          confidence=10,
-          reason="llm1_unreachable" if timeout_error else "llm1_exception",
-        )
-        if has_next_target:
-          logger.warning(
-            "LLM1 provider failed; trying fallback target",
-            extra={
-              **ctx,
-              "next_provider": targets[idx + 1].name,
-            },
-          )
-          continue
-        return last_failure
+        continue
+      return last_failure
 
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
     response_metadata = getattr(response, "response_metadata", None)
@@ -513,7 +415,6 @@ async def call_llm1(
       extra={
         **ctx,
         "elapsed_ms": elapsed_ms,
-        "reasoning_effort": reasoning_effort,
         "response_metadata": response_metadata,
         "usage": usage_metadata,
         "tool_calls_count": len(raw_tool_calls),
@@ -540,7 +441,6 @@ async def call_llm1(
             "LLM1 response missing tool call; parsed JSON fallback",
             extra={
               **ctx,
-              "reasoning_effort": reasoning_effort,
               "response_metadata": response_metadata,
               "fallback_args": parsed_fallback,
             },
@@ -560,7 +460,6 @@ async def call_llm1(
         "LLM1 response missing tool call",
         extra={
           **ctx,
-          "reasoning_effort": reasoning_effort,
           "response_metadata": response_metadata,
           "will_try_fallback_target": has_next_target,
         },

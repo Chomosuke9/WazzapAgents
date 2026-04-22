@@ -61,16 +61,6 @@ def _llm1_max_tokens() -> int | None:
   return parsed if parsed > 0 else None
 
 
-def _llm1_reasoning_effort() -> str | None:
-  raw = os.getenv("LLM1_REASONING_EFFORT")
-  if raw is None:
-    return None
-  cleaned = raw.strip().lower()
-  if not cleaned:
-    return None
-  return cleaned
-
-
 def _clean_env(raw: str | None) -> str | None:
   if raw is None:
     return None
@@ -144,7 +134,6 @@ def get_llm1(
   base_url: str | None = None,
   api_key: str | None = None,
   timeout: float = 8.0,
-  include_reasoning: bool = True,
 ) -> ChatOpenAI:
   resolved_model = model or _clean_env(os.getenv("LLM1_MODEL")) or "gpt-4o-mini"
   resolved_base_url = base_url if base_url is not None else _chat_base_url()
@@ -161,9 +150,6 @@ def get_llm1(
     kwargs["max_tokens"] = max_tokens
   if resolved_base_url:
     kwargs["base_url"] = resolved_base_url
-  reasoning_effort = _llm1_reasoning_effort() if include_reasoning else None
-  if reasoning_effort:
-    kwargs["reasoning_effort"] = reasoning_effort
   return ChatOpenAI(
     **kwargs,
   )
