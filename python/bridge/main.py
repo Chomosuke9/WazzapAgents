@@ -208,14 +208,115 @@ def _parse_sticker_args(args: str) -> tuple[str | None, str | None]:
 
 
 def _store_media_path(media_paths_by_chat: dict, payload: dict) -> None:
-  """Record attachment file path keyed by (chat_id, context_msg_id) for later lookup."""
+  """Record attachment file paths keyed by (chat_id, context_msg_id) for later lookup.
+
+  Stores ALL visual (image/sticker) attachment paths, not just the first one.
+  """
   ctx_id = payload.get("contextMsgId")
   chat_id = payload.get("chatId")
   atts = payload.get("attachments") or []
-  if ctx_id and chat_id and atts and isinstance(atts[0], dict):
-    path = atts[0].get("path")
-    if path:
-      media_paths_by_chat.setdefault(chat_id, {})[ctx_id] = path
+  if not ctx_id or not chat_id:
+    return
+  visual_kinds = {"image", "sticker"}
+  paths = []
+  for att in atts:
+    if isinstance(att, dict) and str(att.get("kind", "")).lower() in visual_kinds:
+      p = att.get("path")
+      if p:
+        paths.append({"kind": str(att.get("kind", "")).lower(), "mime": att.get("mime", ""), "fileName": att.get("fileName", ""), "path": p})
+  if paths:
+    media_paths_by_chat.setdefault(chat_id, {})[ctx_id] = paths
+
+
+def _resolve_quoted_media_attachments(
+  media_paths_by_chat: dict,
+  payload: dict,
+  chat_id: str,
+) -> list[dict]:
+  """Resolve media attachments from the quoted message and the current payload.
+
+  If the current payload already has visual attachments, return those.
+  Otherwise, if the quoted message had previously-tracked media files,
+  build attachment dicts from the stored paths and return them.
+  """
+  # First: check if current payload already has visual attachments
+  atts = list(payload.get("attachments") or [])
+  visual_kinds = {"image", "sticker"}
+  has_visual = any(
+    isinstance(att, dict) and str(att.get("kind", "")).lower() in visual_kinds
+    for att in atts
+  )
+  if has_visual:
+    logger.debug(
+      "resolve_quoted_media: current payload has %d visual attachment(s), using those",
+      sum(1 for a in atts if isinstance(a, dict) and str(a.get("kind", "")).lower() in visual_kinds),
+      extra={"chat_id": chat_id},
+    )
+    return atts  # Already has visual attachments from the current message
+
+  # Second: check quoted message for previously tracked media
+  quoted = payload.get("quoted") or {}
+  quoted_ctx_id = quoted.get("contextMsgId")
+  if not quoted_ctx_id:
+    logger.debug(
+      "resolve_quoted_media: no current visual attachments and no quoted contextMsgId",
+      extra={"chat_id": chat_id},
+    )
+    return atts
+
+  stored = media_paths_by_chat.get(chat_id, {}).get(quoted_ctx_id)
+  if not stored:
+    logger.debug(
+      "resolve_quoted_media: no stored media for quoted contextMsgId=%s",
+      quoted_ctx_id,
+      extra={"chat_id": chat_id},
+    )
+    return atts
+
+  # stored can be a list of dicts (new format) or a single string path (legacy)
+  resolved = []
+  if isinstance(stored, list):
+    for entry in stored:
+      if isinstance(entry, dict) and entry.get("path") and os.path.isfile(entry["path"]):
+        resolved.append({
+          "kind": entry.get("kind", "image"),
+          "mime": entry.get("mime") or _guess_mime_from_path(entry["path"]),
+          "fileName": entry.get("fileName") or os.path.basename(entry["path"]),
+          "path": entry["path"],
+        })
+  elif isinstance(stored, str) and os.path.isfile(stored):
+    resolved.append({
+      "kind": "sticker" if stored.lower().endswith(".webp") else "image",
+      "mime": _guess_mime_from_path(stored),
+      "fileName": os.path.basename(stored),
+      "path": stored,
+    })
+
+  if not resolved:
+    logger.debug(
+      "resolve_quoted_media: stored media found but files missing on disk",
+      extra={"chat_id": chat_id, "quoted_ctx_id": quoted_ctx_id},
+    )
+    return atts
+
+  logger.info(
+    "resolve_quoted_media: resolving %d visual attachment(s) from quoted message (contextMsgId=%s)",
+    len(resolved),
+    quoted_ctx_id,
+    extra={"chat_id": chat_id},
+  )
+  return atts + resolved
+
+
+def _guess_mime_from_path(file_path: str) -> str:
+  """Guess MIME type from file path."""
+  import mimetypes as _mt
+  guessed = _mt.guess_type(file_path)[0]
+  if guessed and guessed.startswith("image/"):
+    return guessed
+  if file_path.lower().endswith(".webp"):
+    return "image/webp"
+  return "image/jpeg"
 
 
 def _resolve_sticker_media(
@@ -223,8 +324,7 @@ def _resolve_sticker_media(
   payload: dict,
   chat_id: str,
 ) -> str | None:
-  """
-  Find the media file path to use for sticker creation.
+  """Find the media file path to use for sticker creation.
   First checks the current payload's attachments; falls back to the
   quoted message's tracked path (populated when the original image arrived).
   """
@@ -237,9 +337,14 @@ def _resolve_sticker_media(
   quoted = payload.get("quoted") or {}
   quoted_ctx_id = quoted.get("contextMsgId")
   if quoted_ctx_id:
-    path = media_paths_by_chat.get(chat_id, {}).get(quoted_ctx_id)
-    if path and os.path.isfile(path):
-      return path
+    stored = media_paths_by_chat.get(chat_id, {}).get(quoted_ctx_id)
+    # stored can be a list of dicts (new format) or single string (legacy)
+    if isinstance(stored, list) and stored and isinstance(stored[0], dict):
+      path = stored[0].get("path")
+      if path and os.path.isfile(path):
+        return path
+    elif isinstance(stored, str) and os.path.isfile(stored):
+      return stored
   return None
 
 
@@ -788,6 +893,11 @@ async def handle_socket(ws):
             "llm1Reason": " ".join((decision.reason or "").split()),
           }
         )
+
+        # Resolve quoted message media for vision-capable models
+        resolved_atts = _resolve_quoted_media_attachments(media_paths_by_chat, llm2_payload, p_chat_id)
+        if resolved_atts != (llm2_payload.get("attachments") or []):
+          llm2_payload["attachments"] = resolved_atts
 
         # Keep typing indicator alive while LLM2 generates (refreshes every 8s)
         llm2_started = time.perf_counter()
