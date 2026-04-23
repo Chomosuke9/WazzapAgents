@@ -39,6 +39,7 @@ const COMMAND_ALIASES = new Map([
   ['gs', 'group-status'],
   ['catch', 'catch'],
   ['catches', 'catch'],
+  ['owner-contact', 'owner-contact'],
 ]);
 
 function parseSlashCommand(text) {

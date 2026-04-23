@@ -9,14 +9,18 @@ const HELP_TEXT = `*WazzapAgents - Daftar Perintah*
 • \`/dashboard\` — Statistik penggunaan bot
 • \`/join\` [link] — Masuk grup via link
 • \`/sticker\` — Buat stiker (balas gambar)
+• \`/owner-contact\` — Kirim kartu kontak owner
 
 *Pengaturan & Moderasi (Admin/Owner)*
-• \`/setting\` — Menu pengaturan interaktif
-• \`/prompt\` [teks] — Atur kepribadian bot
-• \`/reset\` — Hapus memori percakapan
-• \`/model\` — Pilih model AI
-• \`/mode\` [auto|prefix|hybrid] — Mode respon
-• \`/trigger\` [opsi] — Atur pemicu respon
+• `/setting` — Menu pengaturan interaktif
+• `/prompt` [teks] — Atur kepribadian bot
+• `/reset` — Hapus memori percakapan
+• `/model` — Pilih model AI
+• `/mode` [auto|prefix|hybrid] — Mode respon
+• `/trigger` [opsi] — Atur pemicu respon
+
+*Owner Saja*
+• \`/owner-contact set "nomor" "nama"\` — Atur kontak owner bot
 
 _Ketik perintah tanpa argumen untuk melihat status saat ini._`;
 

@@ -117,6 +117,15 @@ function initSettingsTables(db) {
   if (!columns.has('vision_support')) {
     db.run('ALTER TABLE llm_models ADD COLUMN vision_support INTEGER NOT NULL DEFAULT 0');
   }
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS owner_contact (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      phone_number TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
 }
 
 function initStatsTables(db) {
@@ -655,6 +664,26 @@ function deleteModel(modelId) {
   return { success: true, affectedChatIds };
 }
 
+function getOwnerContact() {
+  const row = getOneFromState(_settingsState, initSettingsTables,
+    'SELECT phone_number, display_name FROM owner_contact WHERE id = 1');
+  if (!row) return null;
+  return { phoneNumber: row.phone_number, displayName: row.display_name };
+}
+
+function setOwnerContact(phoneNumber, displayName) {
+  runSettingsQuery(`
+    INSERT INTO owner_contact (id, phone_number, display_name, updated_at)
+    VALUES (1, ?, ?, datetime('now'))
+    ON CONFLICT(id) DO UPDATE SET
+      phone_number = excluded.phone_number,
+      display_name = excluded.display_name,
+      updated_at = excluded.updated_at
+  `, phoneNumber, displayName);
+  saveDb(_settingsState);
+  logger.info({ phoneNumber, displayName }, 'DB set_owner_contact');
+}
+
 function getDbPath() {
   return getSettingsDbPath();
 }
@@ -684,6 +713,8 @@ export {
   addModel,
   updateModel,
   deleteModel,
+  getOwnerContact,
+  setOwnerContact,
   VALID_MODES,
   DEFAULT_MODE,
   VALID_TRIGGERS,
