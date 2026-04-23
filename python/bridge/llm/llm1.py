@@ -374,7 +374,7 @@ async def call_llm1(
       try:
         llm_with_tool = llm_client.bind_tools(
           LLM1_TOOLS,
-          tool_choice="required",
+          tool_choice="auto",
         )
       except Exception as err:
         logger.warning(

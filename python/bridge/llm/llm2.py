@@ -574,7 +574,7 @@ async def generate_reply(
     )
     if tools:
       try:
-        llm = llm.bind_tools(tools, tool_choice="required")
+        llm = llm.bind_tools(tools, tool_choice="auto")
       except Exception:
         llm = llm.bind_tools(tools)
 
