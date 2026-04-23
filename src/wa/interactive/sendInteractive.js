@@ -54,9 +54,12 @@ function buildInteractiveNodes(jid, badge = true) {
  * @param {object} [quoted] - Optional quoted message
  * @returns {Promise<object>} Generated message object
  */
-async function _sendInteractive(sock, jid, interactiveContent, quoted, badge = true, mentions = []) {
-  if (mentions.length > 0) {
-    interactiveContent.contextInfo = proto.ContextInfo.create({ mentionedJid: mentions });
+async function _sendInteractive(sock, jid, interactiveContent, quoted, badge = true, mentions = [], nonJidMentions = 0) {
+  const ctxFields = {};
+  if (mentions.length > 0) ctxFields.mentionedJid = mentions;
+  if (nonJidMentions > 0) ctxFields.nonJidMentions = nonJidMentions;
+  if (Object.keys(ctxFields).length > 0) {
+    interactiveContent.contextInfo = proto.ContextInfo.create(ctxFields);
   }
   const msg = generateWAMessageFromContent(jid, {
     viewOnceMessage: {
@@ -349,7 +352,7 @@ async function sendRichMessage(sock, jid, options = {}) {
     nativeFlowMessage: proto.Message.InteractiveMessage.NativeFlowMessage.create({
       buttons: options.buttons || [],
     }),
-  }), options.quoted, options.badge !== false, options.mentions || []);
+  }), options.quoted, options.badge !== false, options.mentions || [], options.nonJidMentions || 0);
 }
 
 export {

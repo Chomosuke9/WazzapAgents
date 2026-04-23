@@ -118,7 +118,8 @@ LLM2_REPLY_TOOL = {
     "name": "reply_message",
     "description": (
       "Send a text reply. Use context_msg_id to reply to a specific message, "
-      "or 'none' to send without quoting. Inline mentions as @Name (senderRef)."
+      "or 'none' to send without quoting. Inline mentions as @Name (senderRef). "
+      "Use @all (all) to mention everyone in the group."
     ),
     "parameters": {
       "type": "object",
@@ -131,7 +132,7 @@ LLM2_REPLY_TOOL = {
         },
         "text": {
           "type": "string",
-          "description": "The reply text. Use @Name (senderRef) for mentions.",
+          "description": "The reply text. Use @Name (senderRef) for mentions, @all (all) to tag everyone.",
           "minLength": 1,
         },
       },

@@ -19,7 +19,7 @@ Tool usage rules:
   - an exact sticker name from the <sticker> catalog (for sticker send).
 - Only use sticker names listed in <sticker>. If no stickers available, use emoji instead.
 - Do not mention raw context ids in user-facing text.
-- Mention syntax in reply text: `@Name (senderRef)` for one user, `@everyone (everyone)` for everyone.
+- Mention syntax in reply text: `@Name (senderRef)` for one user, `@all (all)` for everyone.
 - Reply to multiple people with separate `reply_message` calls, not one combined message
 - Prefer to use their tag instead of their display name.
 
@@ -30,7 +30,7 @@ Chat context format:
   Name (senderRef) (Role): [media] Message
 - [#system]/[#pending] = non-actionable context markers.
 - Roles: (admin), (superadmin), or (assistant). Normal members have no role label.
-- Inline mentions: @Name (senderRef), bot mention: @{{assistant_name}} (bot).
+- Inline mentions: @Name (senderRef), @all (all) for everyone, bot mention: @{{assistant_name}} (bot).
 - Two sections: `Older messages:` (background) and `Current messages (burst):` (trigger window, may include attachments).
 </action_rules>
 

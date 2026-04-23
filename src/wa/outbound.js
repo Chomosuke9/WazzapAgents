@@ -12,7 +12,8 @@
  * produces the WhatsApp mentions array. Invalid senderRef tokens are silently
  * stripped (the rest of the message still sends).
  *
- * Special mention: @everyone (everyone) → resolves to all group participants.
+ * Special mention: @all (all) → sets nonJidMentions in contextInfo so WhatsApp
+ * notifies all group participants without listing each JID individually.
  */
 import path from 'path';
 import logger from '../logger.js';
@@ -40,7 +41,7 @@ import config from '../config.js';
  *
  * Supports three mention types:
  *   - @Name (senderRef)   → resolved to a phone JID via senderRefRegistry
- *   - @everyone (everyone) → resolved to all group participant JIDs
+ *   - @all (all)          → sets nonJidMentions count (WhatsApp tags everyone)
  *   - @Name (bot)         → rendered as @Name without JID (bot self-mention)
  *
  * Invalid senderRef tokens are left as-is (silently skipped for mention array).
@@ -48,16 +49,16 @@ import config from '../config.js';
  * @param {string} chatId - Group or DM JID
  * @param {string} rawText - Text with @Name (senderRef) tokens
  * @param {object|null} groupContext - Cached group metadata (refreshed if needed)
- * @returns {Promise<{text: string, mentions: string[], groupContext: object|null}>}
+ * @returns {Promise<{text: string, mentions: string[], nonJidMentions: number, groupContext: object|null}>}
  */
 async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   if (typeof rawText !== 'string') {
-    return { text: rawText, mentions: [], groupContext };
+    return { text: rawText, mentions: [], nonJidMentions: 0, groupContext };
   }
   // Match @Name (senderRef) pattern — name can contain spaces, non-greedy to handle multiple mentions
   const tokens = Array.from(rawText.matchAll(/@(.+?)\s*\(([^)\r\n]+)\)/g));
   if (tokens.length === 0) {
-    return { text: rawText, mentions: [], groupContext };
+    return { text: rawText, mentions: [], nonJidMentions: 0, groupContext };
   }
 
   let resolvedGroup = groupContext;
@@ -65,6 +66,7 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   let cursor = 0;
   let rendered = '';
   const mentionSet = new Set();
+  let nonJidMentions = 0;
 
   for (const token of tokens) {
     const fullToken = token[0];
@@ -77,20 +79,14 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
     rendered += rawText.slice(cursor, index);
     let replacement = rawName ? `@${rawName}` : '@';
 
-    if (normalizedValue === 'everyone') {
+    if (normalizedValue === 'all') {
+      // @all (all) — tag everyone in the group using nonJidMentions
+      // instead of listing every participant JID individually.
+      // Only effective in group chats.
       if (chatId?.endsWith('@g.us')) {
-        let participants = Array.isArray(resolvedGroup?.participants) ? resolvedGroup.participants : [];
-        if (participants.length === 0) {
-          resolvedGroup = await getGroupContext(chatId, { forceRefresh: true });
-          participants = Array.isArray(resolvedGroup?.participants) ? resolvedGroup.participants : [];
-        }
-        for (const participantJid of participants) {
-          const normalizedParticipant = normalizeJid(participantJid) || participantJid;
-          if (!normalizedParticipant) continue;
-          mentionSet.add(normalizedParticipant);
-        }
+        nonJidMentions += 1;
       }
-      replacement = '@everyone';
+      replacement = '@all';
     } else if (normalizedValue === 'bot') {
       // Bot mention — render as display name, no JID resolution needed
       replacement = rawName ? `@${rawName}` : '@bot';
@@ -125,6 +121,7 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   return {
     text: rendered,
     mentions: mentionsArray,
+    nonJidMentions,
     groupContext: resolvedGroup,
   };
 }
@@ -185,6 +182,9 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
       if (renderedCaption.mentions.length > 0) {
         content.mentions = renderedCaption.mentions;
       }
+      if (renderedCaption.nonJidMentions > 0) {
+        content.contextInfo = { ...content.contextInfo, nonJidMentions: renderedCaption.nonJidMentions };
+      }
       group = renderedCaption.groupContext || group;
     }
 
@@ -219,11 +219,15 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
           footer: config.llmReplyFooter || undefined,
           quoted: quoted || undefined,
           mentions: renderedText.mentions,
+          nonJidMentions: renderedText.nonJidMentions,
         });
       } catch (err) {
         logger.warn({ err, chatId }, 'sendRichMessage failed, falling back to sendMessage');
         const textPayload = { text: renderedText.text };
         if (renderedText.mentions.length > 0) textPayload.mentions = renderedText.mentions;
+        if (renderedText.nonJidMentions > 0) {
+          textPayload.contextInfo = { ...textPayload.contextInfo, nonJidMentions: renderedText.nonJidMentions };
+        }
         sentMsg = await sock.sendMessage(chatId, textPayload, quoted ? { quoted } : {});
       }
     } else {
@@ -233,6 +237,9 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
         : renderedText.text;
       const textPayload = { text: bodyText };
       if (renderedText.mentions.length > 0) textPayload.mentions = renderedText.mentions;
+      if (renderedText.nonJidMentions > 0) {
+        textPayload.contextInfo = { ...textPayload.contextInfo, nonJidMentions: renderedText.nonJidMentions };
+      }
       sentMsg = await sock.sendMessage(chatId, textPayload, quoted ? { quoted } : {});
     }
 

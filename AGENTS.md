@@ -322,7 +322,9 @@ these for exact cost calculation.
   content.
 - **Mentions** in outbound text use the format `@Name (senderRef)`. The
   `renderOutboundMentions()` function resolves these to actual JIDs. Invalid
-  senderRef tokens are silently stripped.
+  senderRef tokens are silently stripped. Use `@all (all)` to tag everyone in a
+  group — this sets `nonJidMentions` in the WhatsApp `contextInfo` instead of
+  listing every participant JID individually.
 
 ### WebSocket reconnection
 
