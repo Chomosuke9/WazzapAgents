@@ -574,6 +574,8 @@ async def generate_reply(
     )
     if tools:
       try:
+        # Use "auto" instead of "required" — some providers (e.g. Moonshot/Kimi
+        # with thinking enabled) reject tool_choice="required" with a 400 error.
         llm = llm.bind_tools(tools, tool_choice="auto")
       except Exception:
         llm = llm.bind_tools(tools)

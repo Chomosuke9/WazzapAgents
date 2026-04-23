@@ -372,6 +372,8 @@ async def call_llm1(
 
     async def _invoke_once(llm_client: ChatOpenAI):
       try:
+        # Use "auto" instead of "required" — some providers (e.g. Moonshot/Kimi
+        # with thinking enabled) reject tool_choice="required" with a 400 error.
         llm_with_tool = llm_client.bind_tools(
           LLM1_TOOLS,
           tool_choice="auto",
