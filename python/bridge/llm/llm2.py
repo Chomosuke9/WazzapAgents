@@ -213,7 +213,8 @@ When calling the tool:
 - Pass `context_msg_ids` (array of 6-digit IDs from the chat context) for any
   messages whose media attachments the sub-agent needs as input. The bridge
   resolves each ID to the file path automatically — do NOT type file paths
-  into the instruction, and don't invent IDs.
+  into the instruction, and don't invent IDs. Pass `null` when no input
+  files are needed; this parameter is required even when empty.
 - Output files the sub-agent produces are auto-attached to the chat after
   your text reply; you don't need to mention paths or upload them yourself.
 
