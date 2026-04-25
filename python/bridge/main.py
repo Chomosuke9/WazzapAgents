@@ -179,14 +179,29 @@ except ImportError:  # allow running as `python python/bridge/main.py`
 load_dotenv()
 
 try:
-  from .subagent import SubTaskTracker, SubAgentClient, SubAgentWebhookServer
+  from .subagent import (
+    SubTaskTracker,
+    SubAgentClient,
+    SubAgentSubmitError,
+    SubAgentWebhookServer,
+  )
   from .subagent.models import SubTask
+  from .subagent.config import SUBAGENT_WAIT_TIMEOUT_S, SUBAGENT_REPORT_MAX_CHARS
 except ImportError:
   import sys
   from pathlib import Path
   sys.path.append(str(Path(__file__).resolve().parent.parent))
-  from bridge.subagent import SubTaskTracker, SubAgentClient, SubAgentWebhookServer  # type: ignore
+  from bridge.subagent import (  # type: ignore
+    SubTaskTracker,
+    SubAgentClient,
+    SubAgentSubmitError,
+    SubAgentWebhookServer,
+  )
   from bridge.subagent.models import SubTask  # type: ignore
+  from bridge.subagent.config import (  # type: ignore
+    SUBAGENT_WAIT_TIMEOUT_S,
+    SUBAGENT_REPORT_MAX_CHARS,
+  )
 
 try:
   from .config import (
@@ -1020,18 +1035,15 @@ async def handle_socket(ws):
         if resolved_atts != (llm2_payload.get("attachments") or []):
           llm2_payload["attachments"] = resolved_atts
 
-        # Inject subagent context into LLM2 history (if a task is running for this chat)
-        subagent_context = subagent_tracker.format_context(chat_id)
-        if subagent_context:
-          llm2_history.append(WhatsAppMessage(
-            timestamp_ms=int(time.time() * 1000),
-            sender="system",
-            text=subagent_context,
-            role="system",
-          ))
-
         # Determine whether subagent tool should be available for this chat
         allow_subagent = db_get_subagent_enabled(chat_id)
+
+        # Sub-agent context is now passed to generate_reply as a separate
+        # prompt slot (msg #4) instead of being smuggled into history as a
+        # role=system message. This makes the "task sub-agent" block visible
+        # to LLM2 as a standalone instruction rather than a regular history
+        # line that format_history flattens out.
+        subagent_context = subagent_tracker.format_context(chat_id) if allow_subagent else None
 
         # Inject file catalog into LLM2 history so LLM knows available files
         file_catalog = _build_file_catalog_for_chat(media_paths_by_chat, chat_id)
@@ -1075,6 +1087,7 @@ async def handle_socket(ws):
             bot_is_super_admin=bot_is_super_admin,
             result_validator=_validate_llm2_result,
             allow_subagent=allow_subagent,
+            subagent_context=subagent_context,
           )
 
         llm2_ms = int((time.perf_counter() - llm2_started) * 1000)
@@ -1293,9 +1306,31 @@ async def handle_socket(ws):
               extra={"chat_id": chat_id, "session_id": session_id, "input_files": input_files},
             )
 
-            # Submit to subagent (async, non-blocking)
+            # IMPORTANT: register the completion event BEFORE submit. If the
+            # SubAgent finishes very quickly (or returns synchronously), the
+            # webhook may arrive before we have a chance to register and the
+            # event would be lost — leading to a full timeout wait.
+            completion_event = asyncio.Event()
+            subagent_webhook.register_completion_event(session_id, completion_event)
+
             try:
               await subagent_client.submit(session_id, instruction, input_files)
+            except SubAgentSubmitError as submit_err:
+              # Submit retried internally and still failed — surface the
+              # error immediately instead of waiting on a webhook that will
+              # never come.
+              logger.error(
+                "execute_subtask: submit failed session=%s status=%s: %s",
+                session_id,
+                submit_err.status_code,
+                submit_err,
+                extra={"chat_id": chat_id, "session_id": session_id},
+              )
+              subagent_webhook.unregister_completion_event(session_id)
+              subagent_tracker.finalize(session_id, {
+                "success": False,
+                "report": f"Failed to submit task to sub-agent: {submit_err}",
+              })
             except Exception as submit_err:
               logger.exception(
                 "execute_subtask: submit failed session=%s: %s",
@@ -1303,69 +1338,94 @@ async def handle_socket(ws):
                 submit_err,
                 extra={"chat_id": chat_id},
               )
+              subagent_webhook.unregister_completion_event(session_id)
               subagent_tracker.finalize(session_id, {
                 "success": False,
                 "report": f"Failed to submit task to sub-agent: {submit_err}",
               })
-              action_counts[action_type] += 1
-              continue
-
-            # Setup wait for webhook completion
-            completion_event = asyncio.Event()
-            subagent_webhook.register_completion_event(session_id, completion_event)
-
-            # Wait for webhook completion (max 10 minutes) — no typing indicator
-            try:
-              await asyncio.wait_for(completion_event.wait(), timeout=600)
-            except asyncio.TimeoutError:
-              logger.warning(
-                "execute_subtask: webhook timeout session=%s, falling back to polling",
-                session_id,
-                extra={"chat_id": chat_id},
-              )
-              # Cleanup completion event to prevent memory leak
-              subagent_webhook.unregister_completion_event(session_id)
-              # Fallback polling
+            else:
+              # Submit succeeded — wait for webhook, releasing the per-chat
+              # lock so other bursts in the same chat are not blocked by an
+              # in-flight sub-agent task. Re-acquire before mutating shared
+              # state (history, send actions).
+              lock.release()
               try:
-                result = await subagent_client.poll_result(session_id)
-              except Exception as poll_err:
-                logger.exception(
-                  "execute_subtask: poll failed session=%s: %s",
-                  session_id,
-                  poll_err,
-                  extra={"chat_id": chat_id},
-                )
-                result = None
-              if result:
-                subagent_tracker.finalize(session_id, result)
-              else:
-                subagent_tracker.finalize(session_id, {
-                  "success": False,
-                  "report": "Timeout waiting for sub-agent result",
-                })
+                try:
+                  await asyncio.wait_for(completion_event.wait(), timeout=SUBAGENT_WAIT_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                  logger.warning(
+                    "execute_subtask: webhook timeout session=%s, falling back to polling",
+                    session_id,
+                    extra={"chat_id": chat_id},
+                  )
+                  # Cleanup completion event to prevent memory leak
+                  subagent_webhook.unregister_completion_event(session_id)
+                  # Fallback polling
+                  try:
+                    result = await subagent_client.poll_result(session_id)
+                  except Exception as poll_err:
+                    logger.exception(
+                      "execute_subtask: poll failed session=%s: %s",
+                      session_id,
+                      poll_err,
+                      extra={"chat_id": chat_id},
+                    )
+                    result = None
+                  if result:
+                    subagent_tracker.finalize(session_id, result)
+                  else:
+                    subagent_tracker.finalize(session_id, {
+                      "success": False,
+                      "report": "Timeout waiting for sub-agent result",
+                    })
+              finally:
+                await lock.acquire()
 
-            # Inject result into history as system message
+            # Inject result into history as a system message. Truncation is
+            # already applied by the tracker (SUBAGENT_REPORT_MAX_CHARS) so
+            # this line cannot blow up future LLM2 turns.
             finalized = subagent_tracker._history.get(chat_id)
             if finalized:
               final_task = finalized[-1]
+              report_text = final_task.report or "No report"
+              output_files_summary = ""
+              if isinstance(final_task.result, dict):
+                files = final_task.result.get("output_files") or []
+                if files:
+                  preview = "\n".join(f"- {f}" for f in files[:10])
+                  more = f"\n- ... ({len(files) - 10} more)" if len(files) > 10 else ""
+                  output_files_summary = f"\nOutput files ({len(files)}):\n{preview}{more}"
               history.append(WhatsAppMessage(
                 timestamp_ms=int(time.time() * 1000),
                 sender="system",
                 text=(
                   f"[SUBTASK FINISHED]\n"
-                  f"Result: {final_task.report or 'No report'}\n"
+                  f"Result: {report_text}\n"
                   f"Success: {final_task.status == 'completed'}"
+                  f"{output_files_summary}"
                 ),
                 role="system",
               ))
 
-            # Re-invoke LLM2 with the subtask result in history
-            # allow_subagent=False to prevent infinite loop
+            # Re-invoke LLM2 with the subtask result in history.
+            # allow_subagent=False prevents the model from immediately
+            # spawning another sub-task in the same turn (infinite loop).
+            # Build the re-invoke history from the live ``history`` plus
+            # the file_catalog system message we injected earlier so the
+            # LLM still knows which files are available to reference.
+            reinvoke_history = list(history)
+            if file_catalog:
+              reinvoke_history.append(WhatsAppMessage(
+                timestamp_ms=int(time.time() * 1000),
+                sender="system",
+                text=file_catalog,
+                role="system",
+              ))
             try:
               llm2_reinvoke_started = time.perf_counter()
               async with typing_indicator(ws, chat_id):
                 reply_msg = await generate_reply(
-                  list(history),
+                  reinvoke_history,
                   current,
                   current_payload=llm2_payload,
                   group_description=group_description,
