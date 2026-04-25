@@ -18,3 +18,4 @@ export { handleSettings } from './setting.js';
 export { handleGroupStatus, sendGroupStatus } from './groupStatus.js';
 export { handleCatch } from './catch.js';
 export { handleOwnerContact } from './ownerContact.js';
+export { handleSubagent } from './subagent.js';

@@ -14,6 +14,7 @@ let _sql = null;
 const _settingsState = { db: null, dbPath: null, lastLoadedMtimeMs: 0 };
 const _statsState = { db: null, dbPath: null, lastLoadedMtimeMs: 0 };
 const _moderationState = { db: null, dbPath: null, lastLoadedMtimeMs: 0 };
+const _subagentState = { db: null, dbPath: null, lastLoadedMtimeMs: 0 };
 
 function ensureParentDir(filePath) {
   const dir = path.dirname(filePath);
@@ -39,6 +40,13 @@ function getModerationDbPath() {
   _moderationState.dbPath = config.moderationDbPath;
   ensureParentDir(_moderationState.dbPath);
   return _moderationState.dbPath;
+}
+
+function getSubagentDbPath() {
+  if (_subagentState.dbPath) return _subagentState.dbPath;
+  _subagentState.dbPath = config.subagentDbPath;
+  ensureParentDir(_subagentState.dbPath);
+  return _subagentState.dbPath;
 }
 
 function getFileMtimeMs(filePath) {
@@ -161,6 +169,16 @@ function initModerationTables(db) {
       muted_at    TEXT NOT NULL DEFAULT (datetime('now')),
       duration_m  INTEGER NOT NULL,
       PRIMARY KEY (chat_id, sender_ref)
+    )
+  `);
+}
+
+function initSubagentTables(db) {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS subagent_enabled (
+      chat_id     TEXT PRIMARY KEY,
+      enabled     INTEGER NOT NULL DEFAULT 0,
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
 }
@@ -354,17 +372,19 @@ function migrateFromLegacyIfNeeded() {
 }
 
 async function init() {
-  if (_settingsState.db && _statsState.db && _moderationState.db) return;
+  if (_settingsState.db && _statsState.db && _moderationState.db && _subagentState.db) return;
 
   _sql = await initSqlJs();
 
   const settingsPath = getSettingsDbPath();
   const statsPath = getStatsDbPath();
   const moderationPath = getModerationDbPath();
+  const subagentPath = getSubagentDbPath();
 
   let settingsData = null;
   let statsData = null;
   let moderationData = null;
+  let subagentData = null;
   try {
     settingsData = loadDbDataFromDisk(settingsPath);
   } catch (err) {
@@ -380,13 +400,20 @@ async function init() {
   } catch (err) {
     logger.warn({ err, dbPath: moderationPath }, 'Could not read moderation DB, creating new');
   }
+  try {
+    subagentData = loadDbDataFromDisk(subagentPath);
+  } catch (err) {
+    logger.warn({ err, dbPath: subagentPath }, 'Could not read subagent DB, creating new');
+  }
 
   replaceDb(_settingsState, settingsData, initSettingsTables);
   replaceDb(_statsState, statsData, initStatsTables);
   replaceDb(_moderationState, moderationData, initModerationTables);
+  replaceDb(_subagentState, subagentData, initSubagentTables);
   _settingsState.lastLoadedMtimeMs = getFileMtimeMs(settingsPath) || Date.now();
   _statsState.lastLoadedMtimeMs = getFileMtimeMs(statsPath) || Date.now();
   _moderationState.lastLoadedMtimeMs = getFileMtimeMs(moderationPath) || Date.now();
+  _subagentState.lastLoadedMtimeMs = getFileMtimeMs(subagentPath) || Date.now();
 
   migrateFromLegacyIfNeeded();
 
@@ -401,6 +428,11 @@ function runSettingsQuery(sql, ...params) {
 function runStatsQuery(sql, ...params) {
   refreshDbFromDiskIfChanged(_statsState, initStatsTables);
   _statsState.db.run(sql, params);
+}
+
+function runSubagentQuery(sql, ...params) {
+  refreshDbFromDiskIfChanged(_subagentState, initSubagentTables);
+  _subagentState.db.run(sql, params);
 }
 
 function getOneFromState(state, initTablesFn, sql, ...params) {
@@ -684,6 +716,24 @@ function setOwnerContact(phoneNumber, displayName) {
   logger.info({ phoneNumber, displayName }, 'DB set_owner_contact');
 }
 
+function getSubagentEnabled(chatId) {
+  const row = getOneFromState(_subagentState, initSubagentTables, 'SELECT enabled FROM subagent_enabled WHERE chat_id = ?', chatId);
+  return row?.enabled === 1;
+}
+
+function setSubagentEnabled(chatId, enabled) {
+  const value = enabled ? 1 : 0;
+  runSubagentQuery(`
+    INSERT INTO subagent_enabled (chat_id, enabled, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(chat_id) DO UPDATE SET
+      enabled = excluded.enabled,
+      updated_at = excluded.updated_at
+  `, chatId, value);
+  saveDb(_subagentState);
+  logger.info({ chatId, enabled: value }, 'DB set_subagent_enabled');
+}
+
 function getDbPath() {
   return getSettingsDbPath();
 }
@@ -694,6 +744,7 @@ export {
   getSettingsDbPath,
   getStatsDbPath,
   getModerationDbPath,
+  getSubagentDbPath,
   getPrompt,
   setPrompt,
   getPermission,
@@ -715,6 +766,8 @@ export {
   deleteModel,
   getOwnerContact,
   setOwnerContact,
+  getSubagentEnabled,
+  setSubagentEnabled,
   VALID_MODES,
   DEFAULT_MODE,
   VALID_TRIGGERS,

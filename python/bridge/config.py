@@ -76,3 +76,22 @@ REPLY_DEDUP_MIN_CHARS = _parse_non_negative_int(
 ASSISTANT_ECHO_MERGE_WINDOW_MS = _parse_non_negative_int(
   os.getenv("BRIDGE_ASSISTANT_ECHO_MERGE_WINDOW_MS"), 180000
 )
+
+# ---------------------------------------------------------------------------
+# SubAgent configuration
+# ---------------------------------------------------------------------------
+SUBAGENT_URL = os.getenv("SUBAGENT_URL", "http://localhost:5000")
+SUBAGENT_WEBHOOK_PORT = _parse_non_negative_int(
+  os.getenv("SUBAGENT_WEBHOOK_PORT"), 8081
+)
+SUBAGENT_WEBHOOK_URL = os.getenv(
+  "SUBAGENT_WEBHOOK_URL",
+  f"http://localhost:{SUBAGENT_WEBHOOK_PORT}/subagent/callback",
+)
+SUBAGENT_POLL_INTERVAL = _parse_positive_float(
+  os.getenv("SUBAGENT_POLL_INTERVAL"), 5.0
+)
+SUBAGENT_MAX_POLL_ATTEMPTS = _parse_non_negative_int(
+  os.getenv("SUBAGENT_MAX_POLL_ATTEMPTS"), 120
+)
+SUBAGENT_ENABLED_DEFAULT = os.getenv("SUBAGENT_ENABLED_DEFAULT", "false").lower() == "true"

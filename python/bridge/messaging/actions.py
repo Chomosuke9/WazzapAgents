@@ -483,6 +483,25 @@ def _extract_actions_from_tool_calls(
         "durationMinutes": duration,
       })
 
+    elif name == "execute_subtask":
+      instruction = str(args.get("instruction") or "").strip()
+      if not instruction:
+        continue
+      ctx_ids = args.get("context_msg_ids") or []
+      if isinstance(ctx_ids, str):
+        ctx_ids = [ctx_ids]
+      # Normalize and validate context msg ids
+      valid_ids: list[str] = []
+      for raw in ctx_ids:
+        cid = _normalize_context_msg_id(raw)
+        if cid and cid.isdigit() and len(cid) == 6:
+          valid_ids.append(cid)
+      actions.append({
+        "type": "execute_subtask",
+        "instruction": instruction,
+        "contextMsgIds": valid_ids,
+      })
+
     else:
       logger.warning("unknown LLM2 tool call: %s", name)
 

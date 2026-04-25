@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import time
+import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Deque, Dict, Set
@@ -41,6 +42,8 @@ try:
     reset_settings_connection as db_reset_settings_connection,
     close_all_connections as db_close_all_connections,
     checkpoint_all_dbs as db_checkpoint_all_dbs,
+    get_subagent_enabled as db_get_subagent_enabled,
+    set_subagent_enabled as db_set_subagent_enabled,
   )
   from .dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop
   from .stickers import resolve_sticker
@@ -121,6 +124,8 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     reset_settings_connection as db_reset_settings_connection,
     close_all_connections as db_close_all_connections,
     checkpoint_all_dbs as db_checkpoint_all_dbs,
+    get_subagent_enabled as db_get_subagent_enabled,
+    set_subagent_enabled as db_set_subagent_enabled,
   )
   from bridge.dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop  # type: ignore
   from bridge.stickers import resolve_sticker  # type: ignore
@@ -174,6 +179,16 @@ except ImportError:  # allow running as `python python/bridge/main.py`
 load_dotenv()
 
 try:
+  from .subagent import SubTaskTracker, SubAgentClient, SubAgentWebhookServer
+  from .subagent.models import SubTask
+except ImportError:
+  import sys
+  from pathlib import Path
+  sys.path.append(str(Path(__file__).resolve().parent.parent))
+  from bridge.subagent import SubTaskTracker, SubAgentClient, SubAgentWebhookServer  # type: ignore
+  from bridge.subagent.models import SubTask  # type: ignore
+
+try:
   from .config import (
     SLOW_BATCH_LOG_MS,
     MAX_TRIGGER_BATCH_AGE_MS,
@@ -196,9 +211,32 @@ except ImportError:
 
 logger = setup_logging()
 
+# ---------------------------------------------------------------------------
+# SubAgent global instances
+# ---------------------------------------------------------------------------
+subagent_tracker = SubTaskTracker()
+subagent_client = SubAgentClient()
+subagent_webhook = SubAgentWebhookServer(subagent_tracker)
+
 # Backward compat re-exports (used by tests).
 # _quoted_preview, _build_burst_current, and _build_llm1_context_metadata
 # are imported above and are available as module-level names.
+
+
+# ---------------------------------------------------------------------------
+# Owner check helper
+# ---------------------------------------------------------------------------
+
+def _is_owner(sender_jid: str | None) -> bool:
+  """Check if sender JID is in BOT_OWNER_JIDS."""
+  if not sender_jid:
+    return False
+  raw = os.getenv("BOT_OWNER_JIDS", "")
+  if not raw.strip():
+    return False
+  owner_jids = {j.strip() for j in raw.split(",") if j.strip()}
+  normalized_sender = sender_jid.split("@")[0]
+  return normalized_sender in owner_jids or sender_jid in owner_jids
 
 
 # ---------------------------------------------------------------------------
@@ -216,20 +254,27 @@ def _parse_sticker_args(args: str) -> tuple[str | None, str | None]:
 def _store_media_path(media_paths_by_chat: dict, payload: dict) -> None:
   """Record attachment file paths keyed by (chat_id, context_msg_id) for later lookup.
 
-  Stores ALL visual (image/sticker) attachment paths, not just the first one.
+  Stores ALL attachment kinds (image, sticker, document, audio, video),
+  not just visual media. This enables LLM2 to reference any file path
+  when delegating tasks to the sub-agent.
   """
   ctx_id = payload.get("contextMsgId")
   chat_id = payload.get("chatId")
   atts = payload.get("attachments") or []
   if not ctx_id or not chat_id:
     return
-  visual_kinds = {"image", "sticker"}
   paths = []
   for att in atts:
-    if isinstance(att, dict) and str(att.get("kind", "")).lower() in visual_kinds:
+    if isinstance(att, dict):
       p = att.get("path")
       if p:
-        paths.append({"kind": str(att.get("kind", "")).lower(), "mime": att.get("mime", ""), "fileName": att.get("fileName", ""), "path": p})
+        paths.append({
+          "kind": str(att.get("kind", "")).lower(),
+          "mime": att.get("mime", ""),
+          "fileName": att.get("fileName", ""),
+          "path": p,
+          "received_at": time.time(),
+        })
   if paths:
     media_paths_by_chat.setdefault(chat_id, {})[ctx_id] = paths
 
@@ -323,6 +368,76 @@ def _guess_mime_from_path(file_path: str) -> str:
   if file_path.lower().endswith(".webp"):
     return "image/webp"
   return "image/jpeg"
+
+
+def _build_file_catalog_for_chat(
+  media_paths_by_chat: dict,
+  chat_id: str,
+  max_items: int = 8,
+  max_age_hours: float = 24.0,
+  max_chars: int = 800,
+) -> str | None:
+  """Build a compact catalog of recently received file attachments for this chat.
+
+  Filters by recency (default 24h) and enforces a character budget
+  (default 800 chars) to avoid bloating the LLM2 token window.
+  """
+  chat_store = media_paths_by_chat.get(chat_id)
+  if not chat_store:
+    return None
+
+  cutoff_ts = time.time() - (max_age_hours * 3600)
+
+  # Flatten all stored attachments, newest first (dict iteration order in Python 3.7+)
+  entries: list[dict] = []
+  for ctx_id, atts in reversed(list(chat_store.items())):
+    for att in atts:
+      if not isinstance(att, dict):
+        continue
+      p = att.get("path")
+      if not p or not os.path.isfile(p):
+        continue
+      received_at = att.get("received_at") or 0
+      if received_at < cutoff_ts:
+        continue
+      entries.append({
+        "path": p,
+        "kind": att.get("kind", "unknown"),
+        "file_name": att.get("fileName") or os.path.basename(p),
+        "context_msg_id": ctx_id,
+      })
+
+  if not entries:
+    return None
+
+  # Deduplicate by path, keep newest
+  seen_paths: set[str] = set()
+  deduped: list[dict] = []
+  for entry in entries:
+    if entry["path"] in seen_paths:
+      continue
+    seen_paths.add(entry["path"])
+    deduped.append(entry)
+
+  lines: list[str] = []
+  lines.append("## Available files")
+  lines.append("Use exact `path` values for `input_files` in `execute_subtask`.")
+  lines.append("")
+
+  for entry in deduped[:max_items]:
+    line = (
+      f'- [{entry["kind"]}] `{entry["path"]}`'
+      f' (name: {entry["file_name"]})'
+    )
+    # Stop if adding this line would exceed the character budget
+    if sum(len(l) for l in lines) + len(line) + 1 > max_chars:
+      break
+    lines.append(line)
+
+  if len(lines) <= 3:
+    return None
+
+  return "\n".join(lines)
 
 
 def _resolve_sticker_media(
@@ -905,6 +1020,29 @@ async def handle_socket(ws):
         if resolved_atts != (llm2_payload.get("attachments") or []):
           llm2_payload["attachments"] = resolved_atts
 
+        # Inject subagent context into LLM2 history (if a task is running for this chat)
+        subagent_context = subagent_tracker.format_context(chat_id)
+        if subagent_context:
+          llm2_history.append(WhatsAppMessage(
+            timestamp_ms=int(time.time() * 1000),
+            sender="system",
+            text=subagent_context,
+            role="system",
+          ))
+
+        # Determine whether subagent tool should be available for this chat
+        allow_subagent = db_get_subagent_enabled(chat_id)
+
+        # Inject file catalog into LLM2 history so LLM knows available files
+        file_catalog = _build_file_catalog_for_chat(media_paths_by_chat, chat_id)
+        if file_catalog:
+          llm2_history.append(WhatsAppMessage(
+            timestamp_ms=int(time.time() * 1000),
+            sender="system",
+            text=file_catalog,
+            role="system",
+          ))
+
         # Keep typing indicator alive while LLM2 generates (refreshes every 8s)
         llm2_started = time.perf_counter()
         async with typing_indicator(ws, chat_id):
@@ -936,6 +1074,7 @@ async def handle_socket(ws):
             bot_is_admin=bot_is_admin,
             bot_is_super_admin=bot_is_super_admin,
             result_validator=_validate_llm2_result,
+            allow_subagent=allow_subagent,
           )
 
         llm2_ms = int((time.perf_counter() - llm2_started) * 1000)
@@ -1122,6 +1261,235 @@ async def handle_socket(ws):
                   anchor_id,
                   request_id=_make_request_id("mute_del"),
                 )
+            action_counts[action_type] += 1
+            continue
+          if action_type == "execute_subtask":
+            session_id = f"{chat_id}_{uuid.uuid4().hex[:8]}_{int(time.time())}"
+            instruction = action["instruction"]
+            ctx_ids = action.get("contextMsgIds", [])
+
+            # Resolve contextMsgIds -> file paths from stored media
+            input_files: list[str] = []
+            chat_store = media_paths_by_chat.get(chat_id, {})
+            for cid in ctx_ids:
+              atts = chat_store.get(cid)
+              if isinstance(atts, list) and atts:
+                # Use first attachment's path
+                first_path = atts[0].get("path") if isinstance(atts[0], dict) else None
+                if first_path and os.path.isfile(first_path):
+                  input_files.append(first_path)
+              elif isinstance(atts, str) and os.path.isfile(atts):
+                # Legacy single-string storage
+                input_files.append(atts)
+
+            task = SubTask(session_id=session_id, instruction=instruction, chat_id=chat_id)
+            subagent_tracker.register(task)
+
+            logger.info(
+              "execute_subtask: submitting session=%s instruction=%s files=%d",
+              session_id,
+              instruction[:120],
+              len(input_files),
+              extra={"chat_id": chat_id, "session_id": session_id, "input_files": input_files},
+            )
+
+            # Submit to subagent (async, non-blocking)
+            try:
+              await subagent_client.submit(session_id, instruction, input_files)
+            except Exception as submit_err:
+              logger.exception(
+                "execute_subtask: submit failed session=%s: %s",
+                session_id,
+                submit_err,
+                extra={"chat_id": chat_id},
+              )
+              subagent_tracker.finalize(session_id, {
+                "success": False,
+                "report": f"Failed to submit task to sub-agent: {submit_err}",
+              })
+              action_counts[action_type] += 1
+              continue
+
+            # Setup wait for webhook completion
+            completion_event = asyncio.Event()
+            subagent_webhook.register_completion_event(session_id, completion_event)
+
+            # Wait for webhook completion (max 10 minutes) — no typing indicator
+            try:
+              await asyncio.wait_for(completion_event.wait(), timeout=600)
+            except asyncio.TimeoutError:
+              logger.warning(
+                "execute_subtask: webhook timeout session=%s, falling back to polling",
+                session_id,
+                extra={"chat_id": chat_id},
+              )
+              # Cleanup completion event to prevent memory leak
+              subagent_webhook.unregister_completion_event(session_id)
+              # Fallback polling
+              try:
+                result = await subagent_client.poll_result(session_id)
+              except Exception as poll_err:
+                logger.exception(
+                  "execute_subtask: poll failed session=%s: %s",
+                  session_id,
+                  poll_err,
+                  extra={"chat_id": chat_id},
+                )
+                result = None
+              if result:
+                subagent_tracker.finalize(session_id, result)
+              else:
+                subagent_tracker.finalize(session_id, {
+                  "success": False,
+                  "report": "Timeout waiting for sub-agent result",
+                })
+
+            # Inject result into history as system message
+            finalized = subagent_tracker._history.get(chat_id)
+            if finalized:
+              final_task = finalized[-1]
+              history.append(WhatsAppMessage(
+                timestamp_ms=int(time.time() * 1000),
+                sender="system",
+                text=(
+                  f"[SUBTASK FINISHED]\n"
+                  f"Result: {final_task.report or 'No report'}\n"
+                  f"Success: {final_task.status == 'completed'}"
+                ),
+                role="system",
+              ))
+
+            # Re-invoke LLM2 with the subtask result in history
+            # allow_subagent=False to prevent infinite loop
+            try:
+              llm2_reinvoke_started = time.perf_counter()
+              async with typing_indicator(ws, chat_id):
+                reply_msg = await generate_reply(
+                  list(history),
+                  current,
+                  current_payload=llm2_payload,
+                  group_description=group_description,
+                  prompt_override=db_prompt,
+                  chat_type=chat_type,
+                  bot_is_admin=bot_is_admin,
+                  bot_is_super_admin=bot_is_super_admin,
+                  allow_subagent=False,
+                )
+              llm2_reinvoke_ms = int((time.perf_counter() - llm2_reinvoke_started) * 1000)
+              logger.info(
+                "execute_subtask: re-invoke LLM2 completed in %dms session=%s",
+                llm2_reinvoke_ms,
+                session_id,
+                extra={"chat_id": chat_id},
+              )
+            except Exception as reinvoke_err:
+              logger.exception(
+                "execute_subtask: re-invoke LLM2 failed session=%s: %s",
+                session_id,
+                reinvoke_err,
+                extra={"chat_id": chat_id},
+              )
+              reply_msg = None
+
+            # Process the re-invoked LLM2 response actions
+            if reply_msg is not None:
+              _tool_calls = getattr(reply_msg, 'tool_calls', None) or []
+              if _tool_calls:
+                reinvoke_actions = _extract_actions_from_tool_calls(
+                  _tool_calls,
+                  fallback_reply_to=fallback_reply_to,
+                  allowed_context_ids=allowed_context_ids,
+                )
+              else:
+                reinvoke_actions = _extract_actions(
+                  reply_msg,
+                  fallback_reply_to=fallback_reply_to,
+                  allowed_context_ids=allowed_context_ids,
+                )
+              for reinvoke_action in reinvoke_actions:
+                reinvoke_type = reinvoke_action.get("type")
+                if reinvoke_type == "send_message":
+                  reinvoke_text = reinvoke_action.get("text") or ""
+                  if _is_duplicate_reply(chat_id, reinvoke_text):
+                    continue
+                  request_id = _make_request_id("send")
+                  await send_message(
+                    ws,
+                    chat_id,
+                    reinvoke_text,
+                    reinvoke_action.get("replyTo"),
+                    request_id=request_id,
+                  )
+                  record_stat(chat_id, "responses_sent")
+                  _append_history(
+                    history,
+                    WhatsAppMessage(
+                      timestamp_ms=int(time.time() * 1000),
+                      sender=assistant_name(),
+                      context_msg_id="pending",
+                      sender_ref=assistant_sender_ref(),
+                      sender_is_admin=False,
+                      text=reinvoke_text or None,
+                      media=None,
+                      quoted_message_id=_normalize_context_msg_id(reinvoke_action.get("replyTo")),
+                      quoted_sender=None,
+                      quoted_text=None,
+                      quoted_media=None,
+                      message_id=f"local-send-{request_id}",
+                      role="assistant",
+                    ),
+                  )
+                  action_counts["send_message"] += 1
+                elif reinvoke_type == "react_message":
+                  await send_react_message(
+                    ws,
+                    chat_id,
+                    reinvoke_action.get("contextMsgId"),
+                    reinvoke_action.get("emoji"),
+                    request_id=_make_request_id("react"),
+                  )
+                  action_counts["react_message"] += 1
+                elif reinvoke_type == "express_message":
+                  reinvoke_expression = str(reinvoke_action.get("expression") or "").strip()
+                  if reinvoke_expression:
+                    sticker_path = resolve_sticker(reinvoke_expression)
+                    if sticker_path:
+                      await send_sticker(
+                        ws,
+                        chat_id,
+                        sticker_path,
+                        reinvoke_action.get("contextMsgId"),
+                        request_id=_make_request_id("sticker"),
+                      )
+                      record_stat(chat_id, "stickers_sent")
+                    else:
+                      await send_react_message(
+                        ws,
+                        chat_id,
+                        reinvoke_action.get("contextMsgId"),
+                        reinvoke_expression,
+                        request_id=_make_request_id("react"),
+                      )
+                  action_counts["express_message"] += 1
+                elif reinvoke_type == "delete_message":
+                  await send_delete_message(
+                    ws,
+                    chat_id,
+                    reinvoke_action.get("contextMsgId"),
+                    request_id=_make_request_id("delete"),
+                  )
+                  action_counts["delete_message"] += 1
+                elif reinvoke_type == "kick_member":
+                  await send_kick_member(
+                    ws,
+                    chat_id,
+                    reinvoke_action.get("targets") or [],
+                    request_id=_make_request_id("kick"),
+                    mode=reinvoke_action.get("mode") or "partial_success",
+                    auto_reply_anchor=bool(reinvoke_action.get("autoReplyAnchor", False)),
+                  )
+                  action_counts["kick_member"] += 1
+
             action_counts[action_type] += 1
             continue
           logger.warning(
@@ -1434,12 +1802,18 @@ async def main():
     ping_timeout=20,
   )
 
+  # Start SubAgent webhook server for receiving callback/push from sub-agents
+  await subagent_webhook.start()
+
   # Wait until stop_event is set (via signal) or server closes on its own
   await stop_event.wait()
 
   logger.info("Shutting down WebSocket server...")
   server.close()
   await server.wait_closed()
+
+  # Stop SubAgent webhook server
+  await subagent_webhook.stop()
 
   # Final cleanup
   try:

@@ -35,6 +35,7 @@ _prompt_cache: dict[str, Optional[str]] = {}
 _permission_cache: dict[str, int] = {}
 _mode_cache: dict[str, str] = {}
 _triggers_cache: dict[str, str] = {}
+_subagent_enabled_cache: dict[str, bool] = {}
 # Mute cache: {chat_id: {sender_ref: {"muted_at": str, "duration_m": int, "notified": bool}}}
 _mute_cache: dict[str, dict[str, dict]] = {}
 _cache_lock = threading.Lock()
@@ -43,6 +44,7 @@ VALID_MODES = {'auto', 'prefix', 'hybrid'}
 DEFAULT_MODE = 'prefix'
 VALID_TRIGGERS = {'tag', 'reply', 'join', 'name'}
 DEFAULT_TRIGGERS = 'tag,reply,name'
+DEFAULT_SUBAGENT_ENABLED = False
 
 # Sentinel to distinguish "we looked it up and it was NULL/missing" from
 # "we haven't looked it up yet".
@@ -198,6 +200,7 @@ def _ensure_settings_tables(conn: sqlite3.Connection) -> None:
     ('mode', 'TEXT', f"'{DEFAULT_MODE}'"),
     ('triggers', 'TEXT', f"'{DEFAULT_TRIGGERS}'"),
     ('llm2_model', 'TEXT', 'NULL'),
+    ('subagent_enabled', 'INTEGER', '0'),
   ]:
     try:
       conn.execute(f'ALTER TABLE chat_settings ADD COLUMN {col} {col_type} DEFAULT {default}')
@@ -380,6 +383,7 @@ def clear_settings(chat_id: str) -> None:
     _mode_cache.pop(chat_id, None)
     _triggers_cache.pop(chat_id, None)
     _llm2_model_cache.pop(chat_id, None)
+    _subagent_enabled_cache.pop(chat_id, None)
 
 
 def permission_description(level: int) -> str:
@@ -784,6 +788,48 @@ def set_triggers(chat_id: str, triggers: set[str]) -> None:
   with _cache_lock:
     _triggers_cache[chat_id] = raw
   logger.info('DB set_triggers chat_id=%s triggers=%s', chat_id, raw)
+
+
+# ---------------------------------------------------------------------------
+# SubAgent toggle
+# ---------------------------------------------------------------------------
+
+def get_subagent_enabled(chat_id: str) -> bool:
+  """Return whether subagent is enabled for *chat_id*. Default False."""
+  with _cache_lock:
+    cached = _subagent_enabled_cache.get(chat_id, _MISSING)
+  if cached is not _MISSING:
+    return cached  # type: ignore[return-value]
+
+  _ensure_split_ready()
+  conn = _get_settings_conn()
+  row = conn.execute(
+    'SELECT subagent_enabled FROM chat_settings WHERE chat_id = ?', (chat_id,)
+  ).fetchone()
+  value = bool(row['subagent_enabled']) if row is not None else DEFAULT_SUBAGENT_ENABLED
+  with _cache_lock:
+    _subagent_enabled_cache[chat_id] = value
+  return value
+
+
+def set_subagent_enabled(chat_id: str, enabled: bool) -> None:
+  enabled = bool(enabled)
+  _ensure_split_ready()
+  conn = _get_settings_conn()
+  conn.execute(
+    """
+    INSERT INTO chat_settings (chat_id, subagent_enabled, updated_at)
+    VALUES (?, ?, datetime('now'))
+    ON CONFLICT(chat_id) DO UPDATE SET
+      subagent_enabled = excluded.subagent_enabled,
+      updated_at = excluded.updated_at
+    """,
+    (chat_id, 1 if enabled else 0),
+  )
+  conn.commit()
+  with _cache_lock:
+    _subagent_enabled_cache[chat_id] = enabled
+  logger.info('DB set_subagent_enabled chat_id=%s enabled=%s', chat_id, enabled)
 
 
 # ---------------------------------------------------------------------------

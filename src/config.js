@@ -16,6 +16,7 @@ const STICKERS_DIR = process.env.STICKERS_DIR || path.join(DATA_DIR, 'stickers')
 const SETTINGS_DB_PATH = process.env.SETTINGS_DB_PATH || path.join(DATA_DIR, 'settings.db');
 const STATS_DB_PATH = process.env.STATS_DB_PATH || path.join(DATA_DIR, 'stats.db');
 const MODERATION_DB_PATH = process.env.MODERATION_DB_PATH || path.join(DATA_DIR, 'moderation.db');
+const SUBAGENT_DB_PATH = process.env.SUBAGENT_DB_PATH || path.join(DATA_DIR, 'subagent.db');
 
 fs.ensureDirSync(AUTH_DIR);
 fs.ensureDirSync(MEDIA_DIR);
@@ -56,6 +57,7 @@ const config = {
   settingsDbPath: SETTINGS_DB_PATH,
   statsDbPath: STATS_DB_PATH,
   moderationDbPath: MODERATION_DB_PATH,
+  subagentDbPath: SUBAGENT_DB_PATH,
   reconnectIntervalMs: positiveInt(process.env.WS_RECONNECT_MS, 5000),
   authDir: AUTH_DIR,
   mediaDir: MEDIA_DIR,

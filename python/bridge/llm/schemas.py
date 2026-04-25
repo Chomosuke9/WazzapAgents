@@ -282,6 +282,46 @@ LLM2_KICK_TOOL = {
   },
 }
 
+LLM2_SUBAGENT_TOOL = {
+  "type": "function",
+  "function": {
+    "name": "execute_subtask",
+    "description": (
+      "Delegate a complex task to a sub-agent for execution. "
+      "The sub-agent will process the instruction and return a report. "
+      "Use this for tasks that require multi-step reasoning, file processing, "
+      "or operations that are too complex for a single LLM call."
+    ),
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "instruction": {
+          "type": "string",
+          "description": "Clear, detailed instruction for the sub-agent to execute.",
+          "minLength": 1,
+        },
+        "context_msg_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 6,
+            "maxLength": 6,
+          },
+          "description": (
+            "Optional list of 6-digit contextMsgIds whose messages contain media attachments "
+            "to provide as input to the sub-agent. The bridge will resolve each ID to the "
+            "corresponding file path automatically. Only include IDs that are explicitly "
+            "relevant to the instruction."
+          ),
+        },
+      },
+      "required": ["instruction"],
+      "additionalProperties": False,
+    },
+    "strict": True,
+  },
+}
+
 # Base tools always available to LLM2.
 LLM2_BASE_TOOLS = [LLM2_REPLY_TOOL, LLM2_EXPRESS_TOOL]
 
@@ -291,6 +331,7 @@ def build_llm2_tools(
   allow_delete: bool = False,
   allow_mute: bool = False,
   allow_kick: bool = False,
+  allow_subagent: bool = False,
 ) -> list[dict]:
   """Build the LLM2 tool list based on current chat permissions."""
   tools = list(LLM2_BASE_TOOLS)
@@ -300,6 +341,8 @@ def build_llm2_tools(
     tools.append(LLM2_MUTE_TOOL)
   if allow_kick:
     tools.append(LLM2_KICK_TOOL)
+  if allow_subagent:
+    tools.append(LLM2_SUBAGENT_TOOL)
   return tools
 
 

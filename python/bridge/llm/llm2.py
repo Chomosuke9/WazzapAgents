@@ -450,6 +450,7 @@ async def generate_reply(
   bot_is_admin: bool = False,
   bot_is_super_admin: bool = False,
   result_validator=None,
+  allow_subagent: bool = False,
 ):
   targets = _llm2_targets()
   payload = current_payload if isinstance(current_payload, dict) else {}
@@ -475,7 +476,12 @@ async def generate_reply(
 
   # Build tools dynamically: base tools always, moderation tools only when permitted
   if tools is None:
-    tools = build_llm2_tools(allow_delete=can_delete, allow_mute=can_mute, allow_kick=can_kick)
+    tools = build_llm2_tools(
+      allow_delete=can_delete,
+      allow_mute=can_mute,
+      allow_kick=can_kick,
+      allow_subagent=allow_subagent,
+    )
 
   base_system = (system or _load_system_prompt()).strip()
   rendered_system = _render_system_prompt(
