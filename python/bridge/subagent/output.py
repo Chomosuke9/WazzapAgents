@@ -19,8 +19,9 @@ sub-agent to operate on first gets copied into
     <SUBAGENT_INPUT_STAGING_DIR>/<session_id>/<basename>
 
 before being passed to `/execute`. The path must be reachable by the
-sub-agent process (in the docker-compose contract, both sides bind-mount
-`/storage` so the path is identical inside and out).
+sub-agent process. In the docker-compose contract both sides bind-mount
+`/storage` (set ``SUBAGENT_INPUT_STAGING_DIR=/storage/subagent_in``); for
+native deployments the default is ``<project_root>/data/subagent_in``.
 
 This module:
   - Stages output files into the Node sandbox dir, dropping files that are
@@ -77,15 +78,19 @@ def staging_root() -> Path:
 def input_staging_root() -> Path:
   """Root directory for staged sub-agent **inputs**.
 
-  This must be a path that the sub-agent process can read. The default
-  matches the docker-compose contract (`/storage/subagent_in`); override
-  via the ``SUBAGENT_INPUT_STAGING_DIR`` env var to share a different
-  host directory between the bridge and the sub-agent.
+  This must be a path that the sub-agent process can read. Set
+  ``SUBAGENT_INPUT_STAGING_DIR`` to a host directory shared with the
+  sub-agent — e.g. ``/storage/subagent_in`` for the docker-compose contract,
+  or any other path co-located with the sub-agent process.
+
+  When the env var is unset, fall back to ``<project_root>/data/subagent_in``,
+  which is writable for native (non-docker) deployments and avoids assuming
+  ``/storage`` exists with the right permissions on the host.
   """
   raw = os.getenv("SUBAGENT_INPUT_STAGING_DIR")
   if raw:
     return Path(raw).expanduser().resolve()
-  return Path("/storage/subagent_in").resolve()
+  return (_project_root() / "data" / "subagent_in").resolve()
 
 
 @dataclass(frozen=True)
@@ -253,8 +258,8 @@ def stage_input_files(
   Returns the list of staged absolute paths in input order, omitting files
   that are missing / unreadable / oversized. Used to bridge the filesystem
   gap between the bridge process and a containerised sub-agent: the staged
-  paths must live under a directory both sides have mounted (default
-  ``/storage/subagent_in``; see :func:`input_staging_root`).
+  paths must live under a directory both sides have mounted (configured via
+  ``SUBAGENT_INPUT_STAGING_DIR``; see :func:`input_staging_root`).
   """
   if not session_id:
     logger.warning("stage_input_files called with empty session_id; nothing staged")
