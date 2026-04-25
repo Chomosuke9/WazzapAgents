@@ -14,23 +14,28 @@
  * Lazy imports are used for `inbound.js` and `events.js` to avoid circular
  * dependencies (connection exports getSock which those modules import).
  */
-import { spawn } from 'child_process';
+import { spawn } from "child_process";
 import makeWASocket, {
   fetchLatestBaileysVersion,
   useMultiFileAuthState,
   DisconnectReason,
-} from 'baileys';
-import logger from '../logger.js';
-import config from '../config.js';
-import wsClient from '../wsClient.js';
-import { setSockAccessor, invalidateGroupMetadata } from '../groupContext.js';
-import { runWithConcurrency } from './utils.js';
-import { parseSlashCommand } from './command/index.js';
-import { handleCommandListener } from './commandHandler.js';
-import { isOwnerJid } from '../participants.js';
-import { roleFlagsForJid } from '../participants.js';
-import { getCachedGroupMetadata, defaultGroupContext, getGroupContext, currentBotAliases } from '../groupContext.js';
-import { normalizeJid } from '../identifiers.js';
+} from "baileys";
+import logger from "../logger.js";
+import config from "../config.js";
+import wsClient from "../wsClient.js";
+import { setSockAccessor, invalidateGroupMetadata } from "../groupContext.js";
+import { runWithConcurrency } from "./utils.js";
+import { parseSlashCommand } from "./command/index.js";
+import { handleCommandListener } from "./commandHandler.js";
+import { isOwnerJid } from "../participants.js";
+import { roleFlagsForJid } from "../participants.js";
+import {
+  getCachedGroupMetadata,
+  defaultGroupContext,
+  getGroupContext,
+  currentBotAliases,
+} from "../groupContext.js";
+import { normalizeJid } from "../identifiers.js";
 import {
   getLlm2Model,
   setLlm2Model,
@@ -39,9 +44,9 @@ import {
   getDefaultLlm2Model,
   deleteModel,
   updateModel,
-} from '../db.js';
-import { unwrapMessage, extractText } from '../messageParser.js';
-import { sendRichMessage, sendNativeFlow } from './interactive/index.js';
+} from "../db.js";
+import { unwrapMessage, extractText } from "../messageParser.js";
+import { sendRichMessage, sendNativeFlow } from "./interactive/index.js";
 
 const pendingForms = new Map();
 
@@ -53,38 +58,45 @@ function parseModelReply(chatId, text) {
   const form = pendingForms.get(chatId);
   if (!form) return null;
 
-  const fields = text.split('|').map(f => f.trim()).filter(Boolean);
+  const fields = text
+    .split("|")
+    .map((f) => f.trim())
+    .filter(Boolean);
 
-  if (form.type === 'edit_model') {
+  if (form.type === "edit_model") {
     const modelId = form.modelId;
     clearPendingForm(chatId);
 
     const updates = {};
 
     for (const field of fields) {
-      const eqIdx = field.indexOf('=');
+      const eqIdx = field.indexOf("=");
       if (eqIdx < 1) continue;
       const k = field.slice(0, eqIdx).trim().toLowerCase();
       const v = field.slice(eqIdx + 1).trim();
 
-      if (k === 'name') updates.displayName = v;
-      else if (k === 'desc') updates.description = v;
-      else if (k === 'active') updates.isActive = v === '1' || v === 'true' || v === 'yes';
-      else if (k === 'order') {
+      if (k === "name") updates.displayName = v;
+      else if (k === "desc") updates.description = v;
+      else if (k === "active")
+        updates.isActive = v === "1" || v === "true" || v === "yes";
+      else if (k === "order") {
         const n = parseInt(v, 10);
         if (!isNaN(n)) updates.sortOrder = n;
-      }
-      else if (k === 'vision') updates.visionSupport = v === 'true' || v === '1' || v === 'yes';
+      } else if (k === "vision")
+        updates.visionSupport = v === "true" || v === "1" || v === "yes";
     }
 
     const success = updateModel(modelId, updates);
-    return { action: 'edit_model', modelId, success, updates };
+    return { action: "edit_model", modelId, success, updates };
   }
 
-  if (form.type === 'add_model') {
+  if (form.type === "add_model") {
     clearPendingForm(chatId);
     if (fields.length < 2) {
-      return { action: 'add_model', error: 'Format: model_id|display_name|[description]|[vision=true]' };
+      return {
+        action: "add_model",
+        error: "Format: model_id|display_name|[description]|[vision=true]",
+      };
     }
     const modelId = fields[0];
     const displayName = fields[1];
@@ -97,25 +109,34 @@ function parseModelReply(chatId, text) {
       const field = fields[i];
       const lowerField = field.toLowerCase();
       // Check for key=value pairs (e.g. vision=true)
-      const eqIdx = field.indexOf('=');
+      const eqIdx = field.indexOf("=");
       if (eqIdx > 0) {
         const k = field.slice(0, eqIdx).trim().toLowerCase();
-        const v = field.slice(eqIdx + 1).trim().toLowerCase();
-        if (k === 'vision') {
-          visionSupport = v === 'true' || v === '1' || v === 'yes';
+        const v = field
+          .slice(eqIdx + 1)
+          .trim()
+          .toLowerCase();
+        if (k === "vision") {
+          visionSupport = v === "true" || v === "1" || v === "yes";
           continue;
         }
       }
       // Check for bare true/false as standalone vision flag
-      if (lowerField === 'true' || lowerField === 'false') {
-        visionSupport = lowerField === 'true';
+      if (lowerField === "true" || lowerField === "false") {
+        visionSupport = lowerField === "true";
         continue;
       }
       // Otherwise it's description text
       descParts.push(field);
     }
-    const description = descParts.join(' ');
-    return { action: 'add_model', modelId, displayName, description, visionSupport };
+    const description = descParts.join(" ");
+    return {
+      action: "add_model",
+      modelId,
+      displayName,
+      description,
+      visionSupport,
+    };
   }
 
   return null;
@@ -124,25 +145,34 @@ function parseModelReply(chatId, text) {
 async function showModelSelectionForEdit(sock, chatId) {
   const models = getAllModels();
   if (models.length === 0) {
-    await sock.sendMessage(chatId, { text: 'No models to edit.' });
+    await sock.sendMessage(chatId, { text: "No models to edit." });
     return;
   }
   const sections = [
     {
-      title: 'Select Model to Edit',
+      title: "Select Model to Edit",
       rows: models.map((m) => ({
         id: `/modelcfg edit ${m.modelId}`,
-        title: m.displayName + (m.isActive ? '' : ' (inactive)') + (m.visionSupport ? ' 👁' : ''),
+        title:
+          m.displayName +
+          (m.isActive ? "" : " (inactive)") +
+          (m.visionSupport ? " 👁" : ""),
         description: m.description || `ID: ${m.modelId}`,
       })),
     },
   ];
-  await sendNativeFlow(sock, chatId, 'Edit Model', [
-    {
-      name: 'single_select',
-      buttonParamsJson: JSON.stringify({ title: 'Select Model', sections }),
-    },
-  ], { footer: 'Select a model to edit' });
+  await sendNativeFlow(
+    sock,
+    chatId,
+    "Edit Model",
+    [
+      {
+        name: "single_select",
+        buttonParamsJson: JSON.stringify({ title: "Select Model", sections }),
+      },
+    ],
+    { footer: "Select a model to edit" },
+  );
 }
 
 async function showModelEditForm(sock, chatId, senderId, modelId) {
@@ -153,16 +183,16 @@ async function showModelEditForm(sock, chatId, senderId, modelId) {
     return;
   }
 
-  pendingForms.set(chatId, { type: 'edit_model', modelId, senderId });
+  pendingForms.set(chatId, { type: "edit_model", modelId, senderId });
 
   const helpText = `Edit Model: ${model.displayName}
 
 Current values:
 - name=${model.displayName}
-- desc=${model.description || ''}
-- active=${model.isActive ? '1' : '0'}
+- desc=${model.description || ""}
+- active=${model.isActive ? "1" : "0"}
 - order=${model.sortOrder}
-- vision=${model.visionSupport ? 'true' : 'false'}
+- vision=${model.visionSupport ? "true" : "false"}
 
 Send your changes using | as separator:
 name=New Name|desc=New description|vision=true
@@ -173,7 +203,7 @@ Or send "cancel" to cancel.`;
 }
 
 async function showModelAddForm(sock, chatId, senderId) {
-  pendingForms.set(chatId, { type: 'add_model', senderId });
+  pendingForms.set(chatId, { type: "add_model", senderId });
 
   const helpText = `Add New Model
 
@@ -193,25 +223,33 @@ Or send "cancel" to cancel.`;
 async function showModelSelectionForDefault(sock, chatId) {
   const models = getAllModels().filter((m) => m.isActive);
   if (models.length === 0) {
-    await sock.sendMessage(chatId, { text: 'No active models to set as default.' });
+    await sock.sendMessage(chatId, {
+      text: "No active models to set as default.",
+    });
     return;
   }
   const sections = [
     {
-      title: 'Select Default Model',
+      title: "Select Default Model",
       rows: models.map((m) => ({
         id: `/modelcfg default ${m.modelId}`,
-        title: m.displayName + (m.visionSupport ? ' 👁' : ''),
+        title: m.displayName + (m.visionSupport ? " 👁" : ""),
         description: m.description || `ID: ${m.modelId}`,
       })),
     },
   ];
-  await sendNativeFlow(sock, chatId, 'Set Default Model', [
-    {
-      name: 'single_select',
-      buttonParamsJson: JSON.stringify({ title: 'Select Default', sections }),
-    },
-  ], { footer: 'Model with smallest order will be used as default' });
+  await sendNativeFlow(
+    sock,
+    chatId,
+    "Set Default Model",
+    [
+      {
+        name: "single_select",
+        buttonParamsJson: JSON.stringify({ title: "Select Default", sections }),
+      },
+    ],
+    { footer: "Model with smallest order will be used as default" },
+  );
 }
 
 async function setDefaultModel(sock, chatId, modelId) {
@@ -224,8 +262,10 @@ async function setDefaultModel(sock, chatId, modelId) {
   const allModels = getAllModels();
   const minOrder = Math.min(...allModels.map((m) => m.sortOrder));
   updateModel(modelId, { sortOrder: minOrder - 1 });
-  wsClient.sendReliable({ type: 'invalidate_default_model' });
-  await sock.sendMessage(chatId, { text: `Model "${model.displayName}" set as default.` });
+  wsClient.sendReliable({ type: "invalidate_default_model" });
+  await sock.sendMessage(chatId, {
+    text: `Model "${model.displayName}" set as default.`,
+  });
 }
 
 let sock;
@@ -236,18 +276,20 @@ function getSock() {
 
 function printQrInTerminal(qr) {
   try {
-    const proc = spawn('qrencode', ['-t', 'ANSIUTF8', '-o', '-']);
+    const proc = spawn("qrencode", ["-t", "ANSIUTF8", "-o", "-"]);
     proc.stdin.write(qr);
     proc.stdin.end();
-    proc.stdout.on('data', (chunk) => process.stdout.write(chunk.toString()));
-    proc.stderr.on('data', (chunk) => logger.debug({ qrErr: chunk.toString() }, 'qrencode stderr'));
-    proc.on('error', (err) => {
-      logger.warn({ err }, 'qrencode not available; showing raw QR string');
-      console.log('QR:', qr);
+    proc.stdout.on("data", (chunk) => process.stdout.write(chunk.toString()));
+    proc.stderr.on("data", (chunk) =>
+      logger.debug({ qrErr: chunk.toString() }, "qrencode stderr"),
+    );
+    proc.on("error", (err) => {
+      logger.warn({ err }, "qrencode not available; showing raw QR string");
+      console.log("QR:", qr);
     });
   } catch (err) {
-    logger.warn({ err }, 'failed to render QR; showing raw');
-    console.log('QR:', qr);
+    logger.warn({ err }, "failed to render QR; showing raw");
+    console.log("QR:", qr);
   }
 }
 
@@ -272,51 +314,67 @@ function printQrInTerminal(qr) {
 async function startWhatsApp() {
   // Lazy import to avoid circular dependency: inbound/events import getSock from connection,
   // and connection imports handlers from inbound/events at call time only.
-  const { handleIncomingMessage, handleGroupParticipantsUpdate } = await import('./inbound.js');
-  const { emitGroupJoinContextEvent } = await import('./events.js');
-  const { ensureContextMsgId, messageIdIndexKey } = await import('../identifiers.js');
-  const { GROUP_JOIN_STUB_TYPES } = await import('../caches.js');
-  const { parseGroupJoinStub } = await import('../groupContext.js');
+  const { handleIncomingMessage, handleGroupParticipantsUpdate } =
+    await import("./inbound.js");
+  const { emitGroupJoinContextEvent } = await import("./events.js");
+  const { ensureContextMsgId, messageIdIndexKey } =
+    await import("../identifiers.js");
+  const { GROUP_JOIN_STUB_TYPES } = await import("../caches.js");
+  const { parseGroupJoinStub } = await import("../groupContext.js");
 
   const { state, saveCreds } = await useMultiFileAuthState(config.authDir);
   const { version } = await fetchLatestBaileysVersion();
-  logger.info({ version }, 'starting whatsapp socket');
+  logger.info({ version }, "starting whatsapp socket");
 
   sock = makeWASocket({
     version,
     auth: state,
     syncFullHistory: false,
-    browser: ['WazzapAgents', 'Chrome', '1.0'],
+    browser: ["WazzapAgents", "Chrome", "1.0"],
     markOnlineOnConnect: false,
     defaultQueryTimeoutMs: config.sendTimeoutMs,
   });
   setSockAccessor(() => sock);
 
-  sock.ev.on('creds.update', saveCreds);
+  sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on('connection.update', (update) => {
+  sock.ev.on("connection.update", (update) => {
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
-      logger.info('Scan QR to authenticate (valid for 20 seconds)');
+      logger.info("Scan QR to authenticate (valid for 20 seconds)");
       printQrInTerminal(qr);
     }
-    if (connection === 'close') {
+    if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const reason = lastDisconnect?.error;
-      logger.warn({ statusCode, reason }, 'connection closed, reconnecting');
-      wsClient.sendReliable({ type: 'whatsapp_status', payload: { status: 'closed', reason: statusCode, instanceId: config.instanceId } });
+      logger.warn({ statusCode, reason }, "connection closed, reconnecting");
+      wsClient.sendReliable({
+        type: "whatsapp_status",
+        payload: {
+          status: "closed",
+          reason: statusCode,
+          instanceId: config.instanceId,
+        },
+      });
       if (statusCode !== DisconnectReason.loggedOut) {
-        startWhatsApp().catch((err) => logger.error({ err }, 'reconnect failed'));
+        startWhatsApp().catch((err) =>
+          logger.error({ err }, "reconnect failed"),
+        );
       } else {
-        logger.error('Logged out from WhatsApp. Delete auth folder to re-pair.');
+        logger.error(
+          "Logged out from WhatsApp. Delete auth folder to re-pair.",
+        );
       }
-    } else if (connection === 'open') {
-      logger.info('WhatsApp socket connected');
-      wsClient.sendReliable({ type: 'whatsapp_status', payload: { status: 'open', instanceId: config.instanceId } });
+    } else if (connection === "open") {
+      logger.info("WhatsApp socket connected");
+      wsClient.sendReliable({
+        type: "whatsapp_status",
+        payload: { status: "open", instanceId: config.instanceId },
+      });
     }
   });
 
-  sock.ev.on('groups.update', (updates) => {
+  sock.ev.on("groups.update", (updates) => {
     if (!Array.isArray(updates)) return;
     for (const update of updates) {
       const jid = update?.id;
@@ -325,11 +383,14 @@ async function startWhatsApp() {
     }
   });
 
-  sock.ev.on('group-participants.update', async (update) => {
+  sock.ev.on("group-participants.update", async (update) => {
     try {
       await handleGroupParticipantsUpdate(update);
     } catch (err) {
-      logger.error({ err, update }, 'failed handling group participants update');
+      logger.error(
+        { err, update },
+        "failed handling group participants update",
+      );
     }
   });
 
@@ -337,31 +398,40 @@ async function startWhatsApp() {
     const buttonsResponse = msg?.message?.buttonsResponseMessage;
     const listResponse = msg?.message?.listResponseMessage;
     const interactiveResponse = msg?.message?.interactiveResponseMessage;
-    
+
     const nativeFlowParams = (() => {
       try {
-        const paramsStr = interactiveResponse?.nativeFlowResponseMessage?.paramsJson;
+        const paramsStr =
+          interactiveResponse?.nativeFlowResponseMessage?.paramsJson;
         if (paramsStr) return JSON.parse(paramsStr);
       } catch {}
       return null;
     })();
-    const selectedId = (buttonsResponse?.selectedButtonId) || 
-                       (listResponse?.singleSelectReply?.selectedRowId) ||
-                       (nativeFlowParams?.id);
-    
-    if (!selectedId) return false;
-    logger.info({ selectedId, chatId }, 'button selected');
+    const selectedId =
+      buttonsResponse?.selectedButtonId ||
+      listResponse?.singleSelectReply?.selectedRowId ||
+      nativeFlowParams?.id;
 
-    const isGroup = chatId.endsWith('@g.us');
-    const group = isGroup ? (getCachedGroupMetadata(chatId) || defaultGroupContext(chatId)) : null;
-    const senderRole = isGroup ? roleFlagsForJid(group?.participantRoles, senderId) : { isAdmin: false, isSuperAdmin: false };
+    if (!selectedId) return false;
+    logger.info({ selectedId, chatId }, "button selected");
+
+    const isGroup = chatId.endsWith("@g.us");
+    const group = isGroup
+      ? getCachedGroupMetadata(chatId) || defaultGroupContext(chatId)
+      : null;
+    const senderRole = isGroup
+      ? roleFlagsForJid(group?.participantRoles, senderId)
+      : { isAdmin: false, isSuperAdmin: false };
     const senderIsAdmin = senderRole.isAdmin || senderRole.isSuperAdmin;
     const senderIsOwner = isOwnerJid(senderId);
 
     try {
-      if (selectedId.startsWith('/')) {
-        logger.info({ selectedId, chatId, senderId }, 'button click -> slash command');
-        const { handleCommandListener } = await import('./commandHandler.js');
+      if (selectedId.startsWith("/")) {
+        logger.info(
+          { selectedId, chatId, senderId },
+          "button click -> slash command",
+        );
+        const { handleCommandListener } = await import("./commandHandler.js");
         const slashCommand = parseSlashCommand(selectedId);
         if (slashCommand) {
           const fakeMsg = {
@@ -372,12 +442,12 @@ async function startWhatsApp() {
           const context = {
             slashCommand,
             chatId,
-            chatType: isGroup ? 'group' : 'private',
+            chatType: isGroup ? "group" : "private",
             senderId,
             senderIsAdmin,
             senderIsOwner,
             senderRole,
-            senderDisplay: msg.pushName || '',
+            senderDisplay: msg.pushName || "",
             botIsAdmin: group?.botIsAdmin || false,
             botIsSuperAdmin: group?.botIsSuperAdmin || false,
             contextMsgId: null,
@@ -390,107 +460,140 @@ async function startWhatsApp() {
         return true;
       }
 
-      if (selectedId.startsWith('model_select:')) {
-        const modelId = selectedId.replace('model_select:', '');
+      if (selectedId.startsWith("model_select:")) {
+        const modelId = selectedId.replace("model_select:", "");
         const canUse = senderIsOwner || (isGroup && senderIsAdmin);
         if (!canUse) {
-          await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can change the model.' });
+          await sock.sendMessage(chatId, {
+            text: "Only group admins or bot owner can change the model.",
+          });
           return true;
         }
         setLlm2Model(chatId, modelId);
-        wsClient.sendReliable({ type: 'set_llm2_model', chatId, modelId });
-        wsClient.sendReliable({ type: 'invalidate_llm2_model', chatId });
+        wsClient.sendReliable({ type: "set_llm2_model", chatId, modelId });
+        wsClient.sendReliable({ type: "invalidate_llm2_model", chatId });
         const models = getAllActiveModels();
         const model = models.find((m) => m.modelId === modelId);
         const displayName = model?.displayName || modelId;
-        const visionNote = model?.visionSupport ? ' (Vision)' : '';
-        await sock.sendMessage(chatId, { text: `Model diubah ke: ${displayName}${visionNote}` });
+        const visionNote = model?.visionSupport ? " (Vision)" : "";
+        await sock.sendMessage(chatId, {
+          text: `Model diubah ke: ${displayName}${visionNote}`,
+        });
         return true;
       }
 
-      if (selectedId.startsWith('settings:')) {
-        const action = selectedId.replace('settings:', '');
+      if (selectedId.startsWith("settings:")) {
+        const action = selectedId.replace("settings:", "");
         const canUse = senderIsOwner || (isGroup && senderIsAdmin);
         if (!canUse) {
-          await sock.sendMessage(chatId, { text: 'Only group admins or bot owner can access settings.' });
+          await sock.sendMessage(chatId, {
+            text: "Only group admins or bot owner can access settings.",
+          });
           return true;
         }
-        if (action === 'model') {
+        if (action === "model") {
           const models = getAllActiveModels();
           if (models.length === 0) {
-            await sock.sendMessage(chatId, { text: 'No models available.' });
+            await sock.sendMessage(chatId, { text: "No models available." });
             return true;
           }
           const currentModelId = getLlm2Model(chatId);
           const defaultModel = getDefaultLlm2Model();
           const activeModelId = currentModelId || defaultModel?.modelId || null;
           const sections = models.map((m) => ({
-            title: m.displayName + (m.visionSupport ? ' 👁' : ''),
-            rows: [{
-              title: m.displayName + (m.modelId === activeModelId ? ' ✓' : ''),
-              description: m.description || (m.visionSupport ? 'Vision support' : ''),
-              id: `model_select:${m.modelId}`,
-            }],
+            title: m.displayName + (m.visionSupport ? " 👁" : ""),
+            rows: [
+              {
+                title:
+                  m.displayName + (m.modelId === activeModelId ? " ✓" : ""),
+                description:
+                  m.description || (m.visionSupport ? "Vision support" : ""),
+                id: `model_select:${m.modelId}`,
+              },
+            ],
           }));
-          await sendNativeFlow(sock, chatId, 'Pilih Model LLM', [
-            {
-              name: 'single_select',
-              buttonParamsJson: JSON.stringify({ title: 'Pilih Model', sections }),
-            },
-          ], { footer: 'Model saat ini: ' + (activeModelId || 'default') });
+          await sendNativeFlow(
+            sock,
+            chatId,
+            "Pilih Model LLM",
+            [
+              {
+                name: "single_select",
+                buttonParamsJson: JSON.stringify({
+                  title: "Pilih Model",
+                  sections,
+                }),
+              },
+            ],
+            { footer: "Model saat ini: " + (activeModelId || "default") },
+          );
           return true;
         }
-        if (action === 'prompt') {
-          await sock.sendMessage(chatId, { text: 'Gunakan `/prompt` <teks> untuk mengubah prompt.' });
+        if (action === "prompt") {
+          await sock.sendMessage(chatId, {
+            text: "Gunakan `/prompt` <teks> untuk mengubah prompt.",
+          });
           return true;
         }
-        if (action === 'permission') {
-          await sock.sendMessage(chatId, { text: 'Gunakan `/permission` <0-3> untuk mengubah level.' });
+        if (action === "permission") {
+          await sock.sendMessage(chatId, {
+            text: "Gunakan `/permission` <0-3> untuk mengubah level.",
+          });
           return true;
         }
         return true;
       }
 
-      if (selectedId.startsWith('modelcfg:') || selectedId.startsWith('modelcfg_')) {
+      if (
+        selectedId.startsWith("modelcfg:") ||
+        selectedId.startsWith("modelcfg_")
+      ) {
         if (!isOwnerJid(senderId)) {
-          await sock.sendMessage(chatId, { text: 'Only bot owner can manage models.' });
+          await sock.sendMessage(chatId, {
+            text: "Only bot owner can manage models.",
+          });
           return true;
         }
-        
-        const subcommand = selectedId.replace('modelcfg:', '').replace('modelcfg_', '');
-        const colonIdx = subcommand.indexOf(':');
-        const action = colonIdx >= 0 ? subcommand.slice(0, colonIdx) : subcommand;
-        const modelId = colonIdx >= 0 ? subcommand.slice(colonIdx + 1) : '';
 
-        if (action === 'list') {
+        const subcommand = selectedId
+          .replace("modelcfg:", "")
+          .replace("modelcfg_", "");
+        const colonIdx = subcommand.indexOf(":");
+        const action =
+          colonIdx >= 0 ? subcommand.slice(0, colonIdx) : subcommand;
+        const modelId = colonIdx >= 0 ? subcommand.slice(colonIdx + 1) : "";
+
+        if (action === "list") {
           const models = getAllModels();
           if (models.length === 0) {
-            await sock.sendMessage(chatId, { text: 'No models configured.' });
+            await sock.sendMessage(chatId, { text: "No models configured." });
             return true;
           }
-          const lines = ['*Daftar Model:*'];
+          const lines = ["*Daftar Model:*"];
           const defaultModel = getDefaultLlm2Model();
           for (const m of models) {
             const isDefault = defaultModel?.modelId === m.modelId;
-            const vision = m.visionSupport ? ' 👁' : '';
-            lines.push(`${isDefault ? '✓' : '○'} ${m.displayName} (${m.modelId})${isDefault ? ' [DEFAULT]' : ''}${vision}`);
+            const vision = m.visionSupport ? " 👁" : "";
+            lines.push(
+              `${isDefault ? "✓" : "○"} ${m.displayName} (${m.modelId})${isDefault ? " [DEFAULT]" : ""}${vision}`,
+            );
             if (m.description) lines.push(`   ${m.description}`);
           }
-          await sock.sendMessage(chatId, { text: lines.join('\n') });
+          await sock.sendMessage(chatId, { text: lines.join("\n") });
           return true;
         }
 
-        if (action === 'add') {
+        if (action === "add") {
           await showModelAddForm(sock, chatId, senderId);
           return true;
         }
 
-        if (action === 'edit') {
+        if (action === "edit") {
           await showModelSelectionForEdit(sock, chatId);
           return true;
         }
 
-        if (action === 'default') {
+        if (action === "default") {
           if (modelId) {
             await setDefaultModel(sock, chatId, modelId);
           } else {
@@ -499,23 +602,39 @@ async function startWhatsApp() {
           return true;
         }
 
-        if (action === 'remove') {
+        if (action === "remove") {
           if (modelId) {
             const result = deleteModel(modelId);
             if (result.success) {
-              wsClient.sendReliable({ type: 'invalidate_default_model' });
+              wsClient.sendReliable({ type: "invalidate_default_model" });
               for (const affectedChatId of result.affectedChatIds) {
-                wsClient.sendReliable({ type: 'set_llm2_model', chatId: affectedChatId, modelId: null });
-                wsClient.sendReliable({ type: 'clear_history', chatId: affectedChatId });
-                wsClient.sendReliable({ type: 'invalidate_llm2_model', chatId: affectedChatId });
+                wsClient.sendReliable({
+                  type: "set_llm2_model",
+                  chatId: affectedChatId,
+                  modelId: null,
+                });
+                wsClient.sendReliable({
+                  type: "clear_history",
+                  chatId: affectedChatId,
+                });
+                wsClient.sendReliable({
+                  type: "invalidate_llm2_model",
+                  chatId: affectedChatId,
+                });
               }
             }
             const models = getAllModels();
             const model = models.find((m) => m.modelId === modelId);
             const displayName = model?.displayName || modelId;
-            await sock.sendMessage(chatId, { text: result.success ? `Model "${displayName}" removed.` : `Model "${modelId}" not found.` });
+            await sock.sendMessage(chatId, {
+              text: result.success
+                ? `Model "${displayName}" removed.`
+                : `Model "${modelId}" not found.`,
+            });
           } else {
-            await sock.sendMessage(chatId, { text: 'Usage: `/modelcfg` remove <model_id>' });
+            await sock.sendMessage(chatId, {
+              text: "Usage: `/modelcfg` remove <model_id>",
+            });
           }
           return true;
         }
@@ -523,21 +642,24 @@ async function startWhatsApp() {
         return true;
       }
     } catch (err) {
-      logger.error({ err }, 'button response handler error');
+      logger.error({ err }, "button response handler error");
     }
     return false;
   }
 
   // Listener 1: Command handler (non-blocking, instant response)
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    logger.debug({ type, messageCount: messages?.length }, 'messages.upsert received');
-    
+  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    logger.debug(
+      { type, messageCount: messages?.length },
+      "messages.upsert received",
+    );
+
     if (!Array.isArray(messages) || messages.length === 0) return;
-    
+
     for (const msg of messages) {
       try {
         const chatId = msg?.key?.remoteJid;
-        if (!chatId || chatId === 'status@broadcast') continue;
+        if (!chatId || chatId === "status@broadcast") continue;
         if (!msg?.message) continue;
         // Bot messages are forwarded as contextOnly=true in inbound.js;
         // the Python bridge won't trigger LLM1 on them, preventing response loops.
@@ -545,7 +667,18 @@ async function startWhatsApp() {
         const fromId = msg.key.participant || msg.key.remoteJid;
         const senderId = normalizeJid(fromId) || fromId;
 
-        logger.info({ chatId, senderId, msgKey: msg?.key?.id, type, msgContentType: msg.message ? Object.keys(msg.message).join(',') : 'none' }, 'message received');
+        logger.info(
+          {
+            chatId,
+            senderId,
+            msgKey: msg?.key?.id,
+            type,
+            msgContentType: msg.message
+              ? Object.keys(msg.message).join(",")
+              : "none",
+          },
+          "message received",
+        );
 
         if (await handleButtonResponse(msg, chatId, senderId)) {
           continue;
@@ -554,51 +687,60 @@ async function startWhatsApp() {
         const { message: innerMessage } = unwrapMessage(msg.message);
         const text = extractText(innerMessage);
 
-        if (pendingForms.has(chatId) && senderId === pendingForms.get(chatId).senderId) {
+        if (
+          pendingForms.has(chatId) &&
+          senderId === pendingForms.get(chatId).senderId
+        ) {
           const normalizedText = text?.trim().toLowerCase();
-          if (normalizedText === 'cancel' || normalizedText === 'batal') {
+          if (normalizedText === "cancel" || normalizedText === "batal") {
             clearPendingForm(chatId);
-            await sock.sendMessage(chatId, { text: 'Operasi dibatalkan.' });
+            await sock.sendMessage(chatId, { text: "Operasi dibatalkan." });
             continue;
           }
 
           const result = parseModelReply(chatId, text);
           if (result) {
-            if (result.action === 'edit_model') {
+            if (result.action === "edit_model") {
               if (result.success) {
-                wsClient.sendReliable({ type: 'invalidate_default_model' });
+                wsClient.sendReliable({ type: "invalidate_default_model" });
               }
               await sock.sendMessage(chatId, {
                 text: result.success
                   ? `Model "${result.modelId}" diupdate.`
-                  : `Model "${result.modelId}" tidak ditemukan.`
+                  : `Model "${result.modelId}" tidak ditemukan.`,
               });
-            } else if (result.action === 'add_model') {
+            } else if (result.action === "add_model") {
               if (result.error) {
                 await sock.sendMessage(chatId, { text: result.error });
               } else {
-                const { addModel } = await import('../db.js');
-                const success = addModel(result.modelId, result.displayName, result.description, null, result.visionSupport);
+                const { addModel } = await import("../db.js");
+                const success = addModel(
+                  result.modelId,
+                  result.displayName,
+                  result.description,
+                  null,
+                  result.visionSupport,
+                );
                 if (success) {
-                  wsClient.sendReliable({ type: 'invalidate_default_model' });
+                  wsClient.sendReliable({ type: "invalidate_default_model" });
                 }
                 await sock.sendMessage(chatId, {
                   text: success
-                    ? `Model "${result.displayName}" ditambahkan.${result.visionSupport ? ' (Vision enabled)' : ''}`
-                    : `Model "${result.modelId}" sudah ada.`
+                    ? `Model "${result.displayName}" ditambahkan.${result.visionSupport ? " (Vision enabled)" : ""}`
+                    : `Model "${result.modelId}" sudah ada.`,
                 });
               }
             }
             continue;
           }
         }
-        if (!text || typeof text !== 'string') continue;
+        if (!text || typeof text !== "string") continue;
 
         const slashCommand = parseSlashCommand(text);
         if (!slashCommand) continue;
 
-        const isGroup = chatId.endsWith('@g.us');
-        const chatType = isGroup ? 'group' : 'private';
+        const isGroup = chatId.endsWith("@g.us");
+        const chatType = isGroup ? "group" : "private";
 
         let senderIsAdmin = false;
         let botIsAdmin = false;
@@ -620,11 +762,14 @@ async function startWhatsApp() {
           senderId,
           senderIsAdmin,
           senderIsOwner: isOwnerJid(senderId),
-          senderRole: isGroup ? roleFlagsForJid(group?.participantRoles, senderId) : { isAdmin: false, isSuperAdmin: false },
-          senderDisplay: msg.pushName || '',
+          senderRole: isGroup
+            ? roleFlagsForJid(group?.participantRoles, senderId)
+            : { isAdmin: false, isSuperAdmin: false },
+          senderDisplay: msg.pushName || "",
           botIsAdmin,
           botIsSuperAdmin,
           contextMsgId: msg.key.id,
+          fromMe: Boolean(msg.key.fromMe),
           text,
           group,
           msg,
@@ -632,77 +777,102 @@ async function startWhatsApp() {
 
         await handleCommandListener(msg, context);
       } catch (err) {
-        logger.error({ err }, 'command listener error');
+        logger.error({ err }, "command listener error");
       }
     }
   });
 
   // Listener 2: Chatbot handler (send to Python)
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+  sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (!Array.isArray(messages) || messages.length === 0) return;
     const batchStartMs = Date.now();
-    const isNotify = type === 'notify';
+    const isNotify = type === "notify";
     const precomputedContextByMessage = new Map();
 
     if (!isNotify) {
-      await runWithConcurrency(messages, config.upsertConcurrency, async (msg) => {
-        try {
-          const stubEvent = parseGroupJoinStub(msg);
-          if (stubEvent) {
-            await emitGroupJoinContextEvent(stubEvent);
+      await runWithConcurrency(
+        messages,
+        config.upsertConcurrency,
+        async (msg) => {
+          try {
+            const stubEvent = parseGroupJoinStub(msg);
+            if (stubEvent) {
+              await emitGroupJoinContextEvent(stubEvent);
+            }
+          } catch (err) {
+            logger.error({ err }, "failed handling message");
           }
-        } catch (err) {
-          logger.error({ err }, 'failed handling message');
-        }
-      });
+        },
+      );
     } else {
       const notifyGroups = new Map();
       for (const msg of messages) {
-        const chatId = msg?.key?.remoteJid || '__unknown_chat__';
+        const chatId = msg?.key?.remoteJid || "__unknown_chat__";
         const bucket = notifyGroups.get(chatId) || [];
         bucket.push(msg);
         notifyGroups.set(chatId, bucket);
 
         const messageId = msg?.key?.id;
-        if (!chatId || !messageId || chatId === 'status@broadcast') continue;
-        if (GROUP_JOIN_STUB_TYPES.has(msg?.messageStubType) || !msg?.message) continue;
+        if (!chatId || !messageId || chatId === "status@broadcast") continue;
+        if (GROUP_JOIN_STUB_TYPES.has(msg?.messageStubType) || !msg?.message)
+          continue;
         const contextMsgId = ensureContextMsgId(chatId, messageId);
-        precomputedContextByMessage.set(messageIdIndexKey(chatId, messageId), contextMsgId);
+        precomputedContextByMessage.set(
+          messageIdIndexKey(chatId, messageId),
+          contextMsgId,
+        );
       }
 
       const groupedMessages = Array.from(notifyGroups.values());
-      await runWithConcurrency(groupedMessages, config.upsertConcurrency, async (groupMessages) => {
-        for (const msg of groupMessages) {
-          try {
-            const chatId = msg?.key?.remoteJid;
-            const messageId = msg?.key?.id;
-            const precomputedContextMsgId = (chatId && messageId)
-              ? precomputedContextByMessage.get(messageIdIndexKey(chatId, messageId))
-              : null;
-            await handleIncomingMessage(msg, { precomputedContextMsgId });
-          } catch (err) {
-            logger.error({ err }, 'failed handling message');
+      await runWithConcurrency(
+        groupedMessages,
+        config.upsertConcurrency,
+        async (groupMessages) => {
+          for (const msg of groupMessages) {
+            try {
+              const chatId = msg?.key?.remoteJid;
+              const messageId = msg?.key?.id;
+              const precomputedContextMsgId =
+                chatId && messageId
+                  ? precomputedContextByMessage.get(
+                      messageIdIndexKey(chatId, messageId),
+                    )
+                  : null;
+              await handleIncomingMessage(msg, { precomputedContextMsgId });
+            } catch (err) {
+              logger.error({ err }, "failed handling message");
+            }
           }
-        }
-      });
+        },
+      );
     }
 
     const batchTotalMs = Date.now() - batchStartMs;
-    if (config.perfLogEnabled && messages.length > 1 && batchTotalMs >= config.perfLogThresholdMs) {
-      logger.info({
-        type,
-        messageCount: messages.length,
-        upsertConcurrency: config.upsertConcurrency,
-        chatGroups: isNotify ? new Set(messages.map((msg) => msg?.key?.remoteJid || '__unknown_chat__')).size : null,
-        batchTotalMs,
-      }, 'slow messages.upsert batch');
+    if (
+      config.perfLogEnabled &&
+      messages.length > 1 &&
+      batchTotalMs >= config.perfLogThresholdMs
+    ) {
+      logger.info(
+        {
+          type,
+          messageCount: messages.length,
+          upsertConcurrency: config.upsertConcurrency,
+          chatGroups: isNotify
+            ? new Set(
+                messages.map(
+                  (msg) => msg?.key?.remoteJid || "__unknown_chat__",
+                ),
+              ).size
+            : null,
+          batchTotalMs,
+        },
+        "slow messages.upsert batch",
+      );
     }
   });
 
   return sock;
 }
 
-export {
-  getSock,
-  startWhatsApp,
-};
+export { getSock, startWhatsApp };

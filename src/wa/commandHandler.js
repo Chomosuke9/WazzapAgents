@@ -1,4 +1,4 @@
-import { unwrapMessage } from '../messageParser.js';
+import { unwrapMessage } from "../messageParser.js";
 import {
   handleBroadcastCommand,
   handleInfoCommand,
@@ -19,10 +19,20 @@ import {
   handleCatch,
   handleOwnerContact,
   handleSubagent,
-} from './command/index.js';
+} from "./command/index.js";
 
 async function handleCommandListener(msg, context) {
-  const { slashCommand, chatId, chatType, senderIsAdmin, senderId, botIsAdmin, senderIsOwner, contextMsgId } = context;
+  const {
+    slashCommand,
+    chatId,
+    chatType,
+    senderIsAdmin,
+    senderId,
+    botIsAdmin,
+    senderIsOwner,
+    contextMsgId,
+    fromMe,
+  } = context;
 
   if (!slashCommand) return false;
 
@@ -30,38 +40,72 @@ async function handleCommandListener(msg, context) {
 
   // Extract quoted message ID if any
   const { message: innerMessage } = unwrapMessage(msg.message);
-  const quotedMessageId = innerMessage?.extendedTextMessage?.contextInfo?.stanzaId || null;
+  const quotedMessageId =
+    innerMessage?.extendedTextMessage?.contextInfo?.stanzaId || null;
 
   switch (command) {
-    case 'help':
+    case "help":
       await handleHelp({ chatId });
       return true;
 
-    case 'prompt':
-      await handlePrompt({ chatId, chatType, senderIsAdmin, senderIsOwner, args });
+    case "prompt":
+      await handlePrompt({
+        chatId,
+        chatType,
+        senderIsAdmin,
+        senderIsOwner,
+        args,
+      });
       return true;
 
-    case 'reset':
-      await handleReset({ chatId, chatType, senderIsAdmin, senderIsOwner, contextMsgId });
+    case "reset":
+      await handleReset({
+        chatId,
+        chatType,
+        senderIsAdmin,
+        senderIsOwner,
+        contextMsgId,
+      });
       return true;
 
-    case 'permission':
-      await handlePermission({ chatId, chatType, senderIsAdmin, senderIsOwner, botIsAdmin, args });
+    case "permission":
+      await handlePermission({
+        chatId,
+        chatType,
+        senderIsAdmin,
+        senderIsOwner,
+        botIsAdmin,
+        args,
+      });
       return true;
 
-    case 'mode':
-      await handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args });
+    case "mode":
+      await handleMode({
+        chatId,
+        chatType,
+        senderIsAdmin,
+        senderIsOwner,
+        senderId,
+        args,
+      });
       return true;
 
-    case 'trigger':
-      await handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args });
+    case "trigger":
+      await handleTrigger({
+        chatId,
+        chatType,
+        senderIsAdmin,
+        senderIsOwner,
+        senderId,
+        args,
+      });
       return true;
 
-    case 'dashboard':
+    case "dashboard":
       await handleDashboard({ chatId });
       return true;
 
-    case 'broadcast':
+    case "broadcast":
       await handleBroadcastCommand({
         chatId,
         senderId,
@@ -72,54 +116,89 @@ async function handleCommandListener(msg, context) {
       });
       return true;
 
-    case 'info':
+    case "info":
       await handleInfoCommand({
         chatId,
         senderId,
         senderDisplay: context.senderDisplay,
         senderRole: context.senderRole,
-        isGroup: chatType === 'group',
+        isGroup: chatType === "group",
         group: context.group,
       });
       return true;
 
-    case 'debug':
+    case "debug":
       await handleDebugCommand({ chatId, senderId, args });
       return true;
 
-    case 'join':
+    case "join":
       await handleJoinCommand({ chatId, senderId, args });
       return true;
 
-    case 'sticker':
-      await handleSticker({ chatId, chatType, senderIsAdmin, senderIsOwner, args, msg });
+    case "sticker":
+      await handleSticker({
+        chatId,
+        chatType,
+        senderIsAdmin,
+        senderIsOwner,
+        args,
+        msg,
+      });
       return true;
 
-    case 'model':
-      await handleModel({ chatId, chatType, senderIsAdmin, senderIsOwner, args });
+    case "model":
+      await handleModel({
+        chatId,
+        chatType,
+        senderIsAdmin,
+        senderIsOwner,
+        args,
+      });
       return true;
 
-    case 'modelcfg':
+    case "modelcfg":
       await handleModelcfg({ chatId, senderId, senderIsOwner, args });
       return true;
 
-    case 'setting':
-      await handleSettings({ chatId, chatType, senderId, senderIsAdmin, senderIsOwner, args });
+    case "setting":
+      await handleSettings({
+        chatId,
+        chatType,
+        senderId,
+        senderIsAdmin,
+        senderIsOwner,
+        args,
+      });
       return true;
 
-    case 'group-status':
-      await handleGroupStatus({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args, msg });
+    case "group-status":
+      await handleGroupStatus({
+        chatId,
+        chatType,
+        senderIsAdmin,
+        senderIsOwner,
+        senderId,
+        args,
+        msg,
+        fromMe,
+      });
       return true;
 
-    case 'catch':
+    case "catch":
       await handleCatch({ chatId, quotedMessageId });
       return true;
 
-    case 'owner-contact':
-      await handleOwnerContact({ chatId, chatType, senderIsAdmin, senderIsOwner, args });
+    case "owner-contact":
+      await handleOwnerContact({
+        chatId,
+        chatType,
+        senderIsAdmin,
+        senderIsOwner,
+        args,
+      });
       return true;
 
-    case 'subagent':
+    case "subagent":
       await handleSubagent({ chatId, senderIsOwner, args });
       return true;
 

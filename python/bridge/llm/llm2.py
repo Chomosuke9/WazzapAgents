@@ -192,7 +192,7 @@ Only kick with clear justification. Cannot kick admins.
 # Mirrors the structure of _DELETE_RULES / _MUTE_RULES / _KICK_RULES.
 _SUBAGENT_RULES = """<subagent>
 SUB-AGENT is ALLOWED for this chat. You have an `execute_subtask` tool that
-delegates work to a separate background agent (bash + python, web access).
+delegates work to a separate background agent (bash + python).
 
 Use `execute_subtask` for tasks that you cannot finish in a single chat reply,
 specifically:
@@ -207,44 +207,34 @@ Do NOT use `execute_subtask` for:
 - moderation actions (use delete/mute/kick tools instead)
 
 When calling the tool:
-- Write `instruction` as a self-contained natural-language brief. Don't assume
-  the sub-agent can see this chat's history; restate the goal, expected output,
-  and any constraints (language, length, format).
+- Write `instruction` as a self-contained natural-language brief. The sub-agent DOES NOT HAVE ACCESS to the chat history; it is a completely different agent. Make your instruction as detailed as possible.
 - Pass `context_msg_ids` (array of 6-digit IDs from the chat context) for any
   messages whose media attachments the sub-agent needs as input. The bridge
-  resolves each ID to the file path automatically — do NOT type file paths
-  into the instruction, and don't invent IDs. Pass `null` when no input
+  resolves each ID to the file path automatically. Pass `null` when no input
   files are needed; this parameter is required even when empty.
 - Output files the sub-agent produces are auto-attached to the chat after
-  your text reply; you don't need to mention paths or upload them yourself.
+  your text reply.
 
-How the sub-agent turn flow works (read carefully — the loop you see when
-this is wrong looks like the bot endlessly repeating "oke aku cek dulu"):
+How the sub-agent turn flow works:
 
 1. Initial turn — the user asks for the task.
-   - Call `execute_subtask` immediately. ONE acknowledgement reply_message
-     is acceptable but optional (e.g. "oke aku cek dulu ya"). Never call
-     more than one `reply_message` here. Never restate file contents you
-     haven't read yet.
+   - Call `execute_subtask` immediately. A single acknowledgement via
+     `reply_message` is recommended to inform the user that the sub-agent is
+     running (e.g., "Alright, I'm processing it, please wait a moment.").
 
 2. While the sub-agent is running (`## Active sub-agent task` block in
    your context), DO NOT call `execute_subtask` again, and DO NOT send
-   another acknowledgement. The typing indicator is already on. If the
-   user is just nudging ("halo?", "udah belum?"), stay silent (call no
-   tools, or only `llm_express`). Only `reply_message` here for genuinely
-   new questions unrelated to the task.
+   another acknowledgement. If the user is just nudging ("Halo?", "Is it done yet?"), use `reply_message` to clarify the sub-agent's progress.
 
 3. Completion turn — the bridge re-invokes you with a `[SUBTASK FINISHED]`
    system message and the `## Sub-Agent result for this turn` block. This
-   IS the moment to deliver the result. Send exactly one `reply_message`
-   summarising the report for the user, in their language, in WhatsApp
-   formatting. Do NOT call `execute_subtask` again here. Do NOT repeat
-   "oke aku cek" — the result is in front of you, deliver it.
+   IS the moment to deliver the result. Send a `reply_message`
+   summarizing the report for the user.
 
 4. Follow-up bursts after delivery — if a `## Recently finished sub-agent
    task` block is in your context, treat that task as already delivered.
-   Don't redo it. Answer follow-up questions from the report content
-   directly. Only call `execute_subtask` again if the user is asking for
+   Do not repeat it. Answer follow-up questions based on the report content
+   directly. Only call `execute_subtask` again if the user asks for
    a genuinely NEW task.
 </subagent>"""
 
@@ -313,11 +303,11 @@ def _chat_state_header(chat_type: str, bot_is_admin: bool, bot_is_super_admin: b
   else:
     scope_line = "This is a private chat. You're directly chatting with one other person."
   if bot_is_super_admin:
-    role_line = "Bot is a super admin (owner)."
+    role_line = "You are a super admin (owner)."
   elif bot_is_admin:
-    role_line = "Bot is an admin."
+    role_line = "You are an admin."
   else:
-    role_line = "Bot is a normal member."
+    role_line = "You are a regular member."
   return (
     f"{scope_line}\n"
     f"{role_line}"
@@ -370,20 +360,20 @@ def _context_injection_block(
   mention_count_text = _count_phrase(mention_count, "time", "times")
   if isinstance(mention_count, int):
     if mention_count > 0:
-      mention_line = f"- Bot is mentioned {mention_count_text} in this current message window."
+      mention_line = f"- You have been mentioned {mention_count_text} in the current message window."
     elif bot_mentioned:
-      mention_line = "- Bot is mentioned in this current message window."
+      mention_line = "- You have been mentioned in the current message window."
     else:
-      mention_line = "- Bot is not mentioned in this current message window."
+      mention_line = "- You have not been mentioned in the current message window."
   elif bot_mentioned:
-    mention_line = "- Bot is mentioned in this current message window."
+    mention_line = "- You have been mentioned in the current message window."
   else:
-    mention_line = "- Bot is not mentioned in this current message window."
+    mention_line = "- You have not been mentioned in the current message window."
 
   if replied_to_bot:
-    reply_line = "- A message in this current message window replies to the bot."
+    reply_line = "- A message in the current message window replies to you."
   else:
-    reply_line = "- No message in this current message window replies to the bot."
+    reply_line = "- No message in the current message window replies to you."
 
   if quoted_has_media is None:
     quoted_payload = payload.get("quoted")
@@ -399,9 +389,9 @@ def _context_injection_block(
     quoted_has_media = bool(quoted_has_media)
 
   if quoted_has_media:
-    quoted_media_line = "- Reply/quoted metadata includes quoted media."
+    quoted_media_line = "- The quoted message includes media."
   else:
-    quoted_media_line = "- Reply/quoted metadata does not include quoted media."
+    quoted_media_line = "- The quoted message does not include media."
 
   since_assistant_text = _count_phrase(since_assistant, "message", "messages")
   human_window_text = _count_phrase(human_window, "human message", "human messages")
@@ -419,33 +409,33 @@ def _context_injection_block(
     for window, count in assistant_reply_values:
       count_text = _count_phrase(count, "reply", "replies")
       assistant_reply_lines.append(
-        f"- Assistant has sent {count_text} in the last {window} messages."
+        f"- You have sent {count_text} in the last {window} messages."
       )
 
   if not assistant_reply_lines:
     fallback_recent = payload.get("assistantRepliesInLast20")
     fallback_text = _count_phrase(fallback_recent, "reply", "replies")
     assistant_reply_lines.append(
-      f"- Assistant has sent {fallback_text} in the last 20 messages."
+      f"- You have sent {fallback_text} in the last 20 messages."
     )
 
   if _is_singular_count(human_window):
-    human_window_line = f"- There is {human_window_text} in this current message window."
+    human_window_line = f"- There is {human_window_text} in the current message window."
   else:
-    human_window_line = f"- There are {human_window_text} in this current message window."
+    human_window_line = f"- There are {human_window_text} in the current message window."
 
   join_event_text = _count_phrase(explicit_join_events, "event", "events")
   join_participant_text = _count_phrase(explicit_join_participants, "participant", "participants")
   if isinstance(explicit_join_events, int):
     if explicit_join_events > 0:
       join_event_line = (
-        "- Explicit system member-join signals in this current message window: "
+        "- Explicit system member-join signals in the current message window: "
         f"{join_event_text} ({join_participant_text})."
       )
     else:
-      join_event_line = "- No explicit system member-join signal in this current message window."
+      join_event_line = "- No explicit system member-join signal in the current message window."
   else:
-    join_event_line = "- Explicit system member-join signal count is unknown for this current message window."
+    join_event_line = "- Explicit system member-join signal count is unknown for the current message window."
 
   llm1_reason = ""
   if isinstance(llm1_reason_raw, str):
@@ -464,11 +454,11 @@ def _context_injection_block(
   return (
     "Current message metadata:\n"
     "Helper:\n"
-    "- `current message window` = only `current messages(burst)` (exclude `older messages`).\n"
+    "- `current message window` = only `current messages(burst)` (excludes `older messages`).\n"
     f"{mention_line}\n"
     f"{reply_line}\n"
     f"{quoted_media_line}\n"
-    f"- The last assistant reply was {since_assistant_text} ago.\n"
+    f"- Your last reply was {since_assistant_text} ago.\n"
     f"{assistant_reply_block}\n"
     f"{human_window_line}\n"
     f"{join_event_line}\n"

@@ -1,13 +1,13 @@
-import logger from '../../logger.js';
-import { getSock } from '../connection.js';
-import { getOwnerContact, setOwnerContact } from '../../db.js';
+import logger from "../../logger.js";
+import { getSock } from "../connection.js";
+import { getOwnerContact, setOwnerContact } from "../../db.js";
 
 /**
  * Strip all non-digit characters to produce a WhatsApp ID (waid).
  * e.g. "+1 (581) 287-2385" → "15812872385"
  */
 function stripToDigits(phoneNumber) {
-  return String(phoneNumber).replace(/\D/g, '');
+  return String(phoneNumber).replace(/\D/g, "");
 }
 
 /**
@@ -18,21 +18,21 @@ function stripToDigits(phoneNumber) {
  *   VERSION:3.0
  *   N:Agus Kebab;;;;
  *   FN:Agus Kebab
- *   item1.TEL;waid=6282132318899:+6282132318899
+ *   item1.TEL;waid=6280000000000:+6280000000000
  *   item1.X-ABLabel:Ponsel
  *   END:VCARD
  */
 function buildVcard(phoneNumber, displayName) {
   const waid = stripToDigits(phoneNumber);
   return [
-    'BEGIN:VCARD',
-    'VERSION:3.0',
+    "BEGIN:VCARD",
+    "VERSION:3.0",
     `N:${displayName};;;;`,
     `FN:${displayName}`,
     `item1.TEL;waid=${waid}:${phoneNumber}`,
-    'item1.X-ABLabel:Ponsel',
-    'END:VCARD',
-  ].join('\n');
+    "item1.X-ABLabel:Ponsel",
+    "END:VCARD",
+  ].join("\n");
 }
 
 /**
@@ -44,7 +44,7 @@ function buildVcard(phoneNumber, displayName) {
  * @returns {{ phoneNumber: string, displayName: string } | null}
  */
 function parseSetArgs(args) {
-  if (!args || !args.startsWith('set ')) return null;
+  if (!args || !args.startsWith("set ")) return null;
   const rest = args.slice(4).trim();
 
   // Match two quoted strings: "phoneNumber" "displayName"
@@ -58,10 +58,16 @@ function parseSetArgs(args) {
   return { phoneNumber, displayName };
 }
 
-async function handleOwnerContact({ chatId, chatType, senderIsAdmin, senderIsOwner, args }) {
+async function handleOwnerContact({
+  chatId,
+  chatType,
+  senderIsAdmin,
+  senderIsOwner,
+  args,
+}) {
   const sock = getSock();
-  const isPrivate = chatType === 'private';
-  const rawArgs = typeof args === 'string' ? args.trim() : '';
+  const isPrivate = chatType === "private";
+  const rawArgs = typeof args === "string" ? args.trim() : "";
 
   // ── No args: send stored contact card ──
   if (!rawArgs) {
@@ -72,7 +78,10 @@ async function handleOwnerContact({ chatId, chatType, senderIsAdmin, senderIsOwn
           text: 'Owner contact has not been set yet. The bot owner can set it with:\n/owner-contact set "number" "name"',
         });
       } catch (err) {
-        logger.warn({ err, chatId }, 'failed sending /owner-contact not-set response');
+        logger.warn(
+          { err, chatId },
+          "failed sending /owner-contact not-set response",
+        );
       }
       return;
     }
@@ -86,7 +95,10 @@ async function handleOwnerContact({ chatId, chatType, senderIsAdmin, senderIsOwn
         },
       });
     } catch (err) {
-      logger.warn({ err, chatId }, 'failed sending /owner-contact contact card');
+      logger.warn(
+        { err, chatId },
+        "failed sending /owner-contact contact card",
+      );
     }
     return;
   }
@@ -94,8 +106,12 @@ async function handleOwnerContact({ chatId, chatType, senderIsAdmin, senderIsOwn
   // ── Permission check for set: only bot owner ──
   if (!senderIsOwner) {
     try {
-      await sock.sendMessage(chatId, { text: 'Only the bot owner can set the owner contact.' });
-    } catch (err) { /* ignore */ }
+      await sock.sendMessage(chatId, {
+        text: "Only the bot owner can set the owner contact.",
+      });
+    } catch (err) {
+      /* ignore */
+    }
     return;
   }
 
@@ -103,9 +119,11 @@ async function handleOwnerContact({ chatId, chatType, senderIsAdmin, senderIsOwn
   if (!parsed) {
     try {
       await sock.sendMessage(chatId, {
-        text: 'Invalid format. Usage:\n/owner-contact set "+6282132318899" "Agus Kebab"',
+        text: 'Invalid format. Usage:\n/owner-contact set "+6280000000000" "Agus Kebab"',
       });
-    } catch (err) { /* ignore */ }
+    } catch (err) {
+      /* ignore */
+    }
     return;
   }
 
@@ -115,7 +133,10 @@ async function handleOwnerContact({ chatId, chatType, senderIsAdmin, senderIsOwn
       text: `Owner contact updated: *${parsed.displayName}* (${parsed.phoneNumber})`,
     });
   } catch (err) {
-    logger.warn({ err, chatId }, 'failed sending /owner-contact set confirmation');
+    logger.warn(
+      { err, chatId },
+      "failed sending /owner-contact set confirmation",
+    );
   }
 }
 

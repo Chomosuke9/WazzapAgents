@@ -1,12 +1,15 @@
-import path from 'path';
-import fs from 'fs-extra';
-import { generateWAMessageContent, generateWAMessageFromContent } from 'baileys';
-import logger from '../../logger.js';
-import { getSock } from '../connection.js';
-import { unwrapMessage } from '../../messageParser.js';
-import { downloadMediaToFile, mapMediaKind } from '../../mediaHandler.js';
-import config from '../../config.js';
-import { withTimeout } from '../utils.js';
+import path from "path";
+import fs from "fs-extra";
+import {
+  generateWAMessageContent,
+  generateWAMessageFromContent,
+} from "baileys";
+import logger from "../../logger.js";
+import { getSock } from "../connection.js";
+import { unwrapMessage } from "../../messageParser.js";
+import { downloadMediaToFile, mapMediaKind } from "../../mediaHandler.js";
+import config from "../../config.js";
+import { withTimeout } from "../utils.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -17,7 +20,7 @@ import { withTimeout } from '../utils.js';
  * e.g. "62812xxx:5@s.whatsapp.net" -> "62812xxx@s.whatsapp.net"
  */
 function getCleanJid(jid) {
-  return jid.split(':')[0].split('/')[0] + '@s.whatsapp.net';
+  return jid.split(":")[0].split("/")[0] + "@s.whatsapp.net";
 }
 
 /**
@@ -28,10 +31,12 @@ function getCleanJid(jid) {
 function createGroupStatusContextInfo(authorJid) {
   return {
     isGroupStatus: true,
-    statusAttributions: [{
-      type: 5, // StatusAttributionType.GROUP_STATUS
-      groupStatus: { authorJid: getCleanJid(authorJid) },
-    }],
+    statusAttributions: [
+      {
+        type: 5, // StatusAttributionType.GROUP_STATUS
+        groupStatus: { authorJid: getCleanJid(authorJid) },
+      },
+    ],
   };
 }
 
@@ -41,17 +46,20 @@ function createGroupStatusContextInfo(authorJid) {
 
 async function downloadMediaContent(content, contentType, messageId) {
   const mediaKind = mapMediaKind(contentType);
-  if (!mediaKind || !['image', 'video'].includes(mediaKind)) return null;
+  if (!mediaKind || !["image", "video"].includes(mediaKind)) return null;
 
   try {
-    const extMap = { image: 'jpg', video: 'mp4' };
-    const ext = extMap[mediaKind] || 'bin';
+    const extMap = { image: "jpg", video: "mp4" };
+    const ext = extMap[mediaKind] || "bin";
     const filename = `${messageId}_groupStatus.${ext}`;
     const filepath = path.join(config.mediaDir, filename);
     await downloadMediaToFile(content, mediaKind, filepath, withTimeout);
     return { filepath, mediaKind };
   } catch (err) {
-    logger.warn({ err, messageId, contentType }, 'failed to download media for group-status');
+    logger.warn(
+      { err, messageId, contentType },
+      "failed to download media for group-status",
+    );
     return null;
   }
 }
@@ -91,7 +99,11 @@ async function sendGroupStatus(sock, jid, content, authorJid) {
   // Step 2 — inject contextInfo for attribution into applicable message types
   const contextInfo = createGroupStatusContextInfo(authorJid);
   for (const key of Object.keys(innerMsg)) {
-    if (key === 'imageMessage' || key === 'videoMessage' || key === 'extendedTextMessage') {
+    if (
+      key === "imageMessage" ||
+      key === "videoMessage" ||
+      key === "extendedTextMessage"
+    ) {
       innerMsg[key].contextInfo = contextInfo;
     }
   }
@@ -121,43 +133,73 @@ async function sendGroupStatus(sock, jid, content, authorJid) {
 // Command handler
 // ---------------------------------------------------------------------------
 
-async function handleGroupStatus({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args, msg }) {
+async function handleGroupStatus({
+  chatId,
+  chatType,
+  senderIsAdmin,
+  senderIsOwner,
+  senderId,
+  args,
+  msg,
+  fromMe,
+}) {
   const sock = getSock();
 
   // Only works in groups
-  if (chatType !== 'group') {
+  if (chatType !== "group") {
     try {
-      await sock.sendMessage(chatId, { text: 'This command can only be used in a group.' });
-    } catch (err) { /* ignore */ }
+      await sock.sendMessage(chatId, {
+        text: "This command can only be used in a group.",
+      });
+    } catch (err) {
+      /* ignore */
+    }
     return;
   }
 
-  // Permission: admin or owner only
-  if (!senderIsAdmin && !senderIsOwner) {
-    logger.info({ chatId }, '/group-status rejected: not admin or owner');
+  // Permission: admin, owner, or the bot itself (fromMe)
+  if (!senderIsAdmin && !senderIsOwner && !fromMe) {
+    logger.info({ chatId }, "/group-status rejected: not admin, owner, or bot");
     try {
-      await sock.sendMessage(chatId, { text: 'Only admin/owner can send group status.' });
-    } catch (err) { /* ignore */ }
+      await sock.sendMessage(chatId, {
+        text: "Only admin/owner can send group status.",
+      });
+    } catch (err) {
+      /* ignore */
+    }
     return;
   }
 
-  const caption = (args || '').trim();
+  const caption = (args || "").trim();
   const authorJid = sock.user?.id || senderId;
-  const { contentType, message: innerMessage } = unwrapMessage(msg.message) || {};
+  const { contentType, message: innerMessage } =
+    unwrapMessage(msg.message) || {};
   let mediaResult = null;
 
   // Mode 1: Media attached directly to this message
-  if (contentType === 'imageMessage' || contentType === 'videoMessage') {
-    mediaResult = await downloadMediaContent(innerMessage[contentType], contentType, msg.key.id);
+  if (contentType === "imageMessage" || contentType === "videoMessage") {
+    mediaResult = await downloadMediaContent(
+      innerMessage[contentType],
+      contentType,
+      msg.key.id,
+    );
   }
 
   // Mode 2: Reply to a media message
   if (!mediaResult && innerMessage?.extendedTextMessage?.contextInfo) {
     const ctx = innerMessage.extendedTextMessage.contextInfo;
     if (ctx.quotedMessage) {
-      const { contentType: qType, message: qMsg } = unwrapMessage(ctx.quotedMessage) || {};
-      if ((qType === 'imageMessage' || qType === 'videoMessage') && qMsg?.[qType]) {
-        mediaResult = await downloadMediaContent(qMsg[qType], qType, ctx.stanzaId);
+      const { contentType: qType, message: qMsg } =
+        unwrapMessage(ctx.quotedMessage) || {};
+      if (
+        (qType === "imageMessage" || qType === "videoMessage") &&
+        qMsg?.[qType]
+      ) {
+        mediaResult = await downloadMediaContent(
+          qMsg[qType],
+          qType,
+          ctx.stanzaId,
+        );
       }
     }
   }
@@ -166,29 +208,42 @@ async function handleGroupStatus({ chatId, chatType, senderIsAdmin, senderIsOwne
     if (mediaResult) {
       const content = {
         [mediaResult.mediaKind]: { url: mediaResult.filepath },
-        caption: caption || '',
+        caption: caption || "",
       };
       await sendGroupStatus(sock, chatId, content, authorJid);
-      logger.info({ chatId, mediaKind: mediaResult.mediaKind, hasCaption: !!caption }, 'group-status sent with media');
+      logger.info(
+        { chatId, mediaKind: mediaResult.mediaKind, hasCaption: !!caption },
+        "group-status sent with media",
+      );
     } else if (caption) {
       await sendGroupStatus(sock, chatId, { text: caption }, authorJid);
-      logger.info({ chatId }, 'group-status sent as text');
+      logger.info({ chatId }, "group-status sent as text");
     } else {
       try {
         await sock.sendMessage(chatId, {
-          text: 'Reply to an image/video or provide text.',
+          text: "Reply to an image/video or provide text.",
         });
-      } catch (err) { /* ignore */ }
+      } catch (err) {
+        /* ignore */
+      }
       return;
     }
   } catch (err) {
-    logger.error({ err, chatId }, 'failed to send group-status');
+    logger.error({ err, chatId }, "failed to send group-status");
     try {
-      await sock.sendMessage(chatId, { text: `Failed to send group status: ${err.message}` });
-    } catch (e) { /* ignore */ }
+      await sock.sendMessage(chatId, {
+        text: `Failed to send group status: ${err.message}`,
+      });
+    } catch (e) {
+      /* ignore */
+    }
   } finally {
     if (mediaResult?.filepath) {
-      try { await fs.remove(mediaResult.filepath); } catch { /* ignore */ }
+      try {
+        await fs.remove(mediaResult.filepath);
+      } catch {
+        /* ignore */
+      }
     }
   }
 }
