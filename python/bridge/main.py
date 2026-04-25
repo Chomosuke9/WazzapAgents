@@ -1067,7 +1067,16 @@ async def handle_socket(ws):
         # role=system message. This makes the "task sub-agent" block visible
         # to LLM2 as a standalone instruction rather than a regular history
         # line that format_history flattens out.
-        subagent_context = subagent_tracker.format_context(chat_id) if allow_subagent else None
+        #
+        # Prefer the active-task block when one is running. Otherwise, if a
+        # task finished very recently (default 5 min), surface a "recently
+        # finished" reminder so a follow-up burst doesn't make LLM2 re-spawn
+        # the same task or re-acknowledge a result it has already delivered.
+        subagent_context: str | None = None
+        if allow_subagent:
+          subagent_context = subagent_tracker.format_context(chat_id)
+          if subagent_context is None:
+            subagent_context = subagent_tracker.format_recent_finished(chat_id)
 
         # Inject file catalog into LLM2 history so LLM knows available files
         file_catalog = _build_file_catalog_for_chat(media_paths_by_chat, chat_id)
@@ -1446,6 +1455,7 @@ async def handle_socket(ws):
             # tracker (SUBAGENT_REPORT_MAX_CHARS) so the system message
             # cannot blow up future LLM2 turns.
             staged_outputs: StagedOutputs = StagedOutputs(staged=[], skipped=[])
+            subagent_result_block: str | None = None
             finalized = subagent_tracker._history.get(chat_id)
             if finalized:
               final_task = finalized[-1]
@@ -1477,19 +1487,50 @@ async def handle_socket(ws):
               if file_list_text:
                 system_lines.append("")
                 system_lines.append(file_list_text)
+              subtask_finished_text = "\n".join(system_lines)
+              # Persist in chat history so subsequent bursts can reference
+              # the report. ``format_history`` renders ``role="system"``
+              # messages with a clearly-distinct ``SYSTEM:`` prefix so the
+              # model doesn't confuse them with user content.
               history.append(WhatsAppMessage(
                 timestamp_ms=int(time.time() * 1000),
                 sender="system",
-                text="\n".join(system_lines),
+                text=subtask_finished_text,
                 role="system",
               ))
+              # Build a dedicated, top-priority context block for the
+              # post-task LLM2 re-invoke. This is what reliably stops the
+              # bot from repeating the pre-task acknowledgement instead of
+              # delivering the actual report — relying on the [SUBTASK
+              # FINISHED] line being noticed inside the chat transcript
+              # is not enough.
+              attachments_clause = (
+                "Output files (if any) are auto-attached after your "
+                "reply; do NOT mention paths or upload them yourself."
+              )
+              subagent_result_block = (
+                "## Sub-Agent result for this turn (deliver this NOW)\n"
+                f"{subtask_finished_text}\n\n"
+                "Instructions for this re-invoke:\n"
+                "- Send EXACTLY ONE `reply_message` summarising the report "
+                "above for the user, in their language and WhatsApp formatting.\n"
+                "- DO NOT call `execute_subtask` again on this turn.\n"
+                "- DO NOT repeat \"oke aku cek\" / \"siap, aku cek dokumennya\" or "
+                "any other pre-task acknowledgement — the task is finished, "
+                "deliver the actual result.\n"
+                f"- {attachments_clause}\n"
+                "- If the sub-agent reported failure, tell the user briefly "
+                "what failed and (only if useful) suggest the next step."
+              )
 
-            # Re-invoke LLM2 with the subtask result in history.
+            # Re-invoke LLM2 with the subtask result block injected as a
+            # dedicated prompt slot (``subagent_result_block``).
             # allow_subagent=False prevents the model from immediately
             # spawning another sub-task in the same turn (infinite loop).
-            # Build the re-invoke history from the live ``history`` plus
-            # the file_catalog system message we injected earlier so the
-            # LLM still knows which files are available to reference.
+            # The re-invoke history is the live ``history`` (which now
+            # contains the [SUBTASK FINISHED] system message) plus the
+            # file_catalog reminder so the LLM still knows which files
+            # are available to reference.
             reinvoke_history = list(history)
             if file_catalog:
               reinvoke_history.append(WhatsAppMessage(
@@ -1511,6 +1552,7 @@ async def handle_socket(ws):
                   bot_is_admin=bot_is_admin,
                   bot_is_super_admin=bot_is_super_admin,
                   allow_subagent=False,
+                  subagent_result_block=subagent_result_block,
                 )
               llm2_reinvoke_ms = int((time.perf_counter() - llm2_reinvoke_started) * 1000)
               logger.info(
@@ -1529,6 +1571,7 @@ async def handle_socket(ws):
               reply_msg = None
 
             # Process the re-invoked LLM2 response actions
+            reinvoke_actions: list[dict] = []
             if reply_msg is not None:
               _tool_calls = getattr(reply_msg, 'tool_calls', None) or []
               if _tool_calls:
@@ -1543,89 +1586,127 @@ async def handle_socket(ws):
                   fallback_reply_to=fallback_reply_to,
                   allowed_context_ids=allowed_context_ids,
                 )
-              for reinvoke_action in reinvoke_actions:
-                reinvoke_type = reinvoke_action.get("type")
-                if reinvoke_type == "send_message":
-                  reinvoke_text = reinvoke_action.get("text") or ""
-                  if _is_duplicate_reply(chat_id, reinvoke_text):
-                    continue
-                  request_id = _make_request_id("send")
-                  await send_message(
-                    ws,
-                    chat_id,
-                    reinvoke_text,
-                    reinvoke_action.get("replyTo"),
-                    request_id=request_id,
-                  )
-                  record_stat(chat_id, "responses_sent")
-                  _append_history(
-                    history,
-                    WhatsAppMessage(
-                      timestamp_ms=int(time.time() * 1000),
-                      sender=assistant_name(),
-                      context_msg_id="pending",
-                      sender_ref=assistant_sender_ref(),
-                      sender_is_admin=False,
-                      text=reinvoke_text or None,
-                      media=None,
-                      quoted_message_id=_normalize_context_msg_id(reinvoke_action.get("replyTo")),
-                      quoted_sender=None,
-                      quoted_text=None,
-                      quoted_media=None,
-                      message_id=f"local-send-{request_id}",
-                      role="assistant",
-                    ),
-                  )
-                  action_counts["send_message"] += 1
-                elif reinvoke_type == "react_message":
-                  await send_react_message(
-                    ws,
-                    chat_id,
-                    reinvoke_action.get("contextMsgId"),
-                    reinvoke_action.get("emoji"),
-                    request_id=_make_request_id("react"),
-                  )
-                  action_counts["react_message"] += 1
-                elif reinvoke_type == "express_message":
-                  reinvoke_expression = str(reinvoke_action.get("expression") or "").strip()
-                  if reinvoke_expression:
-                    sticker_path = resolve_sticker(reinvoke_expression)
-                    if sticker_path:
-                      await send_sticker(
-                        ws,
-                        chat_id,
-                        sticker_path,
-                        reinvoke_action.get("contextMsgId"),
-                        request_id=_make_request_id("sticker"),
-                      )
-                      record_stat(chat_id, "stickers_sent")
-                    else:
-                      await send_react_message(
-                        ws,
-                        chat_id,
-                        reinvoke_action.get("contextMsgId"),
-                        reinvoke_expression,
-                        request_id=_make_request_id("react"),
-                      )
-                  action_counts["express_message"] += 1
-                elif reinvoke_type == "delete_message":
-                  await send_delete_message(
-                    ws,
-                    chat_id,
-                    reinvoke_action.get("contextMsgId"),
-                    request_id=_make_request_id("delete"),
-                  )
-                  action_counts["delete_message"] += 1
-                elif reinvoke_type == "kick_member":
-                  await send_kick_member(
-                    ws,
-                    chat_id,
-                    reinvoke_action.get("targets") or [],
-                    request_id=_make_request_id("kick"),
-                    mode=reinvoke_action.get("mode") or "partial_success",
-                    auto_reply_anchor=bool(reinvoke_action.get("autoReplyAnchor", False)),
-                  )
-                  action_counts["kick_member"] += 1
+            # Strict safety net: if the re-invoke produced no usable
+            # `send_message`, fall back to sending the raw report so the
+            # user at least sees the result. Without this, a flaky LLM2
+            # call after a successful sub-agent run leaves the user
+            # staring at "oke aku cek dulu" forever — exactly the bug
+            # being fixed here.
+            has_reinvoke_text = any(
+              a.get("type") == "send_message" and (a.get("text") or "").strip()
+              for a in reinvoke_actions
+            )
+            if not has_reinvoke_text and finalized:
+              fallback_text = (
+                final_task.report
+                or ("Sub-agent failed without a report."
+                    if final_task.status != "completed"
+                    else "(Sub-agent finished but produced no report.)")
+              )
+              logger.warning(
+                "execute_subtask: re-invoke produced no reply; falling back to raw report",
+                extra={
+                  "chat_id": chat_id,
+                  "session_id": session_id,
+                  "had_reply_msg": reply_msg is not None,
+                  "reinvoke_action_count": len(reinvoke_actions),
+                },
+              )
+              reinvoke_actions = [{
+                "type": "send_message",
+                "text": fallback_text,
+                "replyTo": fallback_reply_to,
+              }]
+
+            for reinvoke_action in reinvoke_actions:
+              reinvoke_type = reinvoke_action.get("type")
+              if reinvoke_type == "send_message":
+                reinvoke_text = reinvoke_action.get("text") or ""
+                # Intentionally skip ``_is_duplicate_reply`` here. The
+                # re-invoke is the *delivery* of the sub-agent result and
+                # may legitimately rephrase the original acknowledgement
+                # (e.g. the bot said "oke aku cek dulu ya" pre-task; the
+                # post-task reply could start with "oke, aku udah cek" or
+                # any other near-duplicate signature). Letting the dedup
+                # window swallow it is exactly the bug that made the
+                # sub-agent report never reach the user.
+                request_id = _make_request_id("send")
+                await send_message(
+                  ws,
+                  chat_id,
+                  reinvoke_text,
+                  reinvoke_action.get("replyTo"),
+                  request_id=request_id,
+                )
+                record_stat(chat_id, "responses_sent")
+                _append_history(
+                  history,
+                  WhatsAppMessage(
+                    timestamp_ms=int(time.time() * 1000),
+                    sender=assistant_name(),
+                    context_msg_id="pending",
+                    sender_ref=assistant_sender_ref(),
+                    sender_is_admin=False,
+                    text=reinvoke_text or None,
+                    media=None,
+                    quoted_message_id=_normalize_context_msg_id(reinvoke_action.get("replyTo")),
+                    quoted_sender=None,
+                    quoted_text=None,
+                    quoted_media=None,
+                    message_id=f"local-send-{request_id}",
+                    role="assistant",
+                  ),
+                )
+                action_counts["send_message"] += 1
+              elif reinvoke_type == "react_message":
+                await send_react_message(
+                  ws,
+                  chat_id,
+                  reinvoke_action.get("contextMsgId"),
+                  reinvoke_action.get("emoji"),
+                  request_id=_make_request_id("react"),
+                )
+                action_counts["react_message"] += 1
+              elif reinvoke_type == "express_message":
+                reinvoke_expression = str(reinvoke_action.get("expression") or "").strip()
+                if reinvoke_expression:
+                  sticker_path = resolve_sticker(reinvoke_expression)
+                  if sticker_path:
+                    await send_sticker(
+                      ws,
+                      chat_id,
+                      sticker_path,
+                      reinvoke_action.get("contextMsgId"),
+                      request_id=_make_request_id("sticker"),
+                    )
+                    record_stat(chat_id, "stickers_sent")
+                  else:
+                    await send_react_message(
+                      ws,
+                      chat_id,
+                      reinvoke_action.get("contextMsgId"),
+                      reinvoke_expression,
+                      request_id=_make_request_id("react"),
+                    )
+                action_counts["express_message"] += 1
+              elif reinvoke_type == "delete_message":
+                await send_delete_message(
+                  ws,
+                  chat_id,
+                  reinvoke_action.get("contextMsgId"),
+                  request_id=_make_request_id("delete"),
+                )
+                action_counts["delete_message"] += 1
+              elif reinvoke_type == "kick_member":
+                await send_kick_member(
+                  ws,
+                  chat_id,
+                  reinvoke_action.get("targets") or [],
+                  request_id=_make_request_id("kick"),
+                  mode=reinvoke_action.get("mode") or "partial_success",
+                  auto_reply_anchor=bool(reinvoke_action.get("autoReplyAnchor", False)),
+                )
+                action_counts["kick_member"] += 1
 
             # Auto-send sub-agent output files as separate WhatsApp messages,
             # one bubble per file with no caption. Sent after the LLM2 text

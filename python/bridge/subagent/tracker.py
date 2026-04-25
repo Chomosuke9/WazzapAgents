@@ -83,17 +83,68 @@ class SubTaskTracker:
     elapsed_text = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
 
     lines: list[str] = []
-    lines.append("## Task information")
-    lines.append(f"- {task.instruction}")
-    lines.append("")
+    lines.append("## Active sub-agent task (already running for this chat)")
+    lines.append(f"- Instruction: {task.instruction}")
+    lines.append(f"- Running for: {elapsed_text}")
 
     if task.progress:
-      lines.append("## Sub-Agent history:")
+      lines.append("")
+      lines.append("Progress so far:")
       for entry in task.progress:
         lines.append(f"- {entry.step}: {entry.detail}")
-      lines.append("")
 
-    lines.append("## Information")
-    lines.append(f"- Sub-Agent is currently running for {elapsed_text}")
+    lines.append("")
+    lines.append("Rules while a sub-agent is in flight:")
+    lines.append("- DO NOT call `execute_subtask` again for this chat — one is already running.")
+    lines.append(
+      "- DO NOT re-acknowledge with phrases like \"oke aku cek\" / "
+      "\"sebentar ya\" / \"on it\". The user already saw your earlier "
+      "acknowledgement and the typing indicator is on while the sub-agent "
+      "works."
+    )
+    lines.append(
+      "- If the user asks an unrelated question, answer that briefly. "
+      "If they're just checking on progress, stay silent (no `reply_message`)."
+    )
+    lines.append(
+      "- The sub-agent's final report will be delivered to you on the next "
+      "turn as a `[SUBTASK FINISHED]` system message; that's when you "
+      "summarise the result for the user."
+    )
 
+    return "\n".join(lines)
+
+  def format_recent_finished(self, chat_id: str, *, max_age_seconds: float = 300.0) -> str | None:
+    """Render the most recently finished sub-agent task for ``chat_id`` if it
+    finished within ``max_age_seconds``.
+
+    This exists so a follow-up message (e.g. user replying to the report)
+    in a fresh burst still has a clear, prompt-level signal of what just
+    happened. The persistent history already carries the [SUBTASK FINISHED]
+    line, but the model is more reliable when we surface it as a dedicated
+    context slot rather than relying on it being noticed inside a chat
+    transcript.
+    """
+    history = self._history.get(chat_id)
+    if not history:
+      return None
+    task = history[-1]
+    if task.end_time is None:
+      return None
+    age = time.time() - task.end_time
+    if age < 0 or age > max_age_seconds:
+      return None
+    success_text = "yes" if task.status == "completed" else "no"
+    lines: list[str] = []
+    lines.append("## Recently finished sub-agent task")
+    lines.append(f"- Instruction: {task.instruction}")
+    lines.append(f"- Success: {success_text}")
+    if task.report:
+      lines.append(f"- Report: {task.report}")
+    lines.append("")
+    lines.append(
+      "This task has already been delivered to the user. DO NOT call "
+      "`execute_subtask` again to redo it. If the user is referencing it, "
+      "answer from the report above."
+    )
     return "\n".join(lines)
