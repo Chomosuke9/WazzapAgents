@@ -99,15 +99,24 @@ function saveDb(state) {
 function initSettingsTables(db) {
   db.run(`
     CREATE TABLE IF NOT EXISTS chat_settings (
-      chat_id    TEXT PRIMARY KEY,
-      prompt     TEXT,
-      permission INTEGER NOT NULL DEFAULT 0,
-      mode       TEXT NOT NULL DEFAULT '${DEFAULT_MODE}',
-      triggers   TEXT NOT NULL DEFAULT '${DEFAULT_TRIGGERS}',
-      llm2_model TEXT,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      chat_id          TEXT PRIMARY KEY,
+      prompt           TEXT,
+      permission       INTEGER NOT NULL DEFAULT 0,
+      mode             TEXT NOT NULL DEFAULT '${DEFAULT_MODE}',
+      triggers         TEXT NOT NULL DEFAULT '${DEFAULT_TRIGGERS}',
+      llm2_model       TEXT,
+      subagent_enabled INTEGER NOT NULL DEFAULT 0,
+      updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
+
+  // Migration for existing installs whose chat_settings table predates the
+  // subagent_enabled column. Without this, set/get below would fail with
+  // "no such column" until the file is recreated.
+  const chatSettingsCols = getColumns(db, 'chat_settings');
+  if (!chatSettingsCols.has('subagent_enabled')) {
+    db.run('ALTER TABLE chat_settings ADD COLUMN subagent_enabled INTEGER NOT NULL DEFAULT 0');
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS llm_models (
@@ -416,8 +425,52 @@ async function init() {
   _subagentState.lastLoadedMtimeMs = getFileMtimeMs(subagentPath) || Date.now();
 
   migrateFromLegacyIfNeeded();
+  migrateSubagentDbIntoSettings();
 
   logger.info({ settingsPath, statsPath, moderationPath }, 'DB initialized (split)');
+}
+
+function migrateSubagentDbIntoSettings() {
+  // Pre-fix /subagent on wrote to subagent.db while the Python bridge read
+  // from chat_settings.subagent_enabled in settings.db, so existing /subagent
+  // on flags were never visible to Python. Backfill into the new source of
+  // truth on every boot. The set is upsert-with-OR semantics: a row is only
+  // promoted to enabled=1 in chat_settings if it's enabled=1 in subagent.db,
+  // never demoted, so manual edits to chat_settings still win on conflict.
+  if (!_subagentState.db || !_settingsState.db) return;
+  let rows;
+  try {
+    rows = queryRows(_subagentState.db, 'SELECT chat_id, enabled FROM subagent_enabled');
+  } catch (err) {
+    logger.warn({ err }, 'subagent.db migration: query failed');
+    return;
+  }
+  if (!rows || rows.length === 0) return;
+  let migrated = 0;
+  _settingsState.db.run('BEGIN TRANSACTION');
+  try {
+    for (const row of rows) {
+      if (row.enabled !== 1) continue;
+      _settingsState.db.run(
+        `INSERT INTO chat_settings (chat_id, subagent_enabled, updated_at)
+         VALUES (?, 1, datetime('now'))
+         ON CONFLICT(chat_id) DO UPDATE SET
+           subagent_enabled = MAX(chat_settings.subagent_enabled, excluded.subagent_enabled),
+           updated_at = excluded.updated_at`,
+        [row.chat_id]
+      );
+      migrated += 1;
+    }
+    _settingsState.db.run('COMMIT');
+  } catch (err) {
+    _settingsState.db.run('ROLLBACK');
+    logger.warn({ err }, 'subagent.db migration: rollback');
+    return;
+  }
+  if (migrated > 0) {
+    saveDb(_settingsState);
+    logger.info({ rows: migrated }, 'Migrated subagent.db rows into chat_settings.subagent_enabled');
+  }
 }
 
 function runSettingsQuery(sql, ...params) {
@@ -717,20 +770,31 @@ function setOwnerContact(phoneNumber, displayName) {
 }
 
 function getSubagentEnabled(chatId) {
-  const row = getOneFromState(_subagentState, initSubagentTables, 'SELECT enabled FROM subagent_enabled WHERE chat_id = ?', chatId);
-  return row?.enabled === 1;
+  // Read from settings.db / chat_settings — the same source of truth that
+  // the Python bridge (python/bridge/db.py::get_subagent_enabled) reads
+  // from. The historical subagent.db split caused /subagent on writes from
+  // Node to never reach Python's lookup, so allow_subagent stayed false
+  // and execute_subtask was never offered to LLM2. See migration in
+  // initSettingsTables() that backfills old subagent.db rows.
+  const row = getOneFromState(
+    _settingsState,
+    initSettingsTables,
+    'SELECT subagent_enabled FROM chat_settings WHERE chat_id = ?',
+    chatId
+  );
+  return row?.subagent_enabled === 1;
 }
 
 function setSubagentEnabled(chatId, enabled) {
   const value = enabled ? 1 : 0;
-  runSubagentQuery(`
-    INSERT INTO subagent_enabled (chat_id, enabled, updated_at)
+  runSettingsQuery(`
+    INSERT INTO chat_settings (chat_id, subagent_enabled, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(chat_id) DO UPDATE SET
-      enabled = excluded.enabled,
+      subagent_enabled = excluded.subagent_enabled,
       updated_at = excluded.updated_at
   `, chatId, value);
-  saveDb(_subagentState);
+  saveDb(_settingsState);
   logger.info({ chatId, enabled: value }, 'DB set_subagent_enabled');
 }
 

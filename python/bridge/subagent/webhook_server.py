@@ -92,10 +92,15 @@ class SubAgentWebhookServer:
       step = entry.get("step", "unknown")
       detail = entry.get("detail", "")
       self._tracker.update_progress(session_id, step, detail)
-      logger.debug(
-        "SubAgent progress: session=%s step=%s",
+      # Promoted from DEBUG → INFO so progress is visible at default
+      # log level. The bridge previously logged at DEBUG, so operators
+      # had no signal that the sub-agent was actually running unless
+      # they cranked LOG_LEVEL globally.
+      logger.info(
+        "SubAgent progress: session=%s step=%s detail=%s",
         session_id,
         step,
+        (detail[:160] if isinstance(detail, str) else detail),
       )
       return web.json_response({"status": "ok"})
 

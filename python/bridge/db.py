@@ -566,6 +566,23 @@ def clear_default_llm2_model_cache() -> None:
   logger.debug('Cleared default LLM2 model cache')
 
 
+def clear_subagent_enabled_cache(chat_id: Optional[str] = None) -> None:
+  """Drop the subagent-enabled cache for *chat_id* (or all chats).
+
+  Called when Node writes to chat_settings.subagent_enabled via
+  /subagent on/off so the next get_subagent_enabled() re-reads from
+  disk instead of returning the stale cached value.
+  """
+  with _cache_lock:
+    if chat_id is not None:
+      if chat_id in _subagent_enabled_cache:
+        del _subagent_enabled_cache[chat_id]
+        logger.debug('Cleared subagent_enabled cache for chat_id=%s', chat_id)
+    else:
+      _subagent_enabled_cache.clear()
+      logger.debug('Cleared all subagent_enabled caches')
+
+
 def reset_settings_connection() -> None:
   """Close and discard the settings DB connection so it is re-opened from disk on next access.
 
@@ -580,11 +597,18 @@ def reset_settings_connection() -> None:
     except Exception:
       pass
     _LOCAL.settings_conn = None
-  # Also clear in-memory caches so next reads go to the (fresh) DB
+  # Also clear in-memory caches so next reads go to the (fresh) DB.
+  # Every cache backed by settings.db must be listed here, otherwise a
+  # caller that uses reset_settings_connection() to "force a re-read"
+  # (e.g. the invalidate_default_model WS handler) would still serve
+  # stale values from the missing cache. subagent_enabled lives in the
+  # chat_settings table since the storage-unification fix, so its cache
+  # is included here too.
   global _default_llm2_model_cache
   _default_llm2_model_cache = None
   with _cache_lock:
     _llm2_model_cache.clear()
+    _subagent_enabled_cache.clear()
   logger.debug('Settings DB connection reset; caches cleared')
 
 

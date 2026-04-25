@@ -44,6 +44,7 @@ try:
     checkpoint_all_dbs as db_checkpoint_all_dbs,
     get_subagent_enabled as db_get_subagent_enabled,
     set_subagent_enabled as db_set_subagent_enabled,
+    clear_subagent_enabled_cache as db_clear_subagent_enabled_cache,
   )
   from .dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop
   from .stickers import resolve_sticker
@@ -127,6 +128,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     checkpoint_all_dbs as db_checkpoint_all_dbs,
     get_subagent_enabled as db_get_subagent_enabled,
     set_subagent_enabled as db_set_subagent_enabled,
+    clear_subagent_enabled_cache as db_clear_subagent_enabled_cache,
   )
   from bridge.dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop  # type: ignore
   from bridge.stickers import resolve_sticker  # type: ignore
@@ -1053,6 +1055,12 @@ async def handle_socket(ws):
 
         # Determine whether subagent tool should be available for this chat
         allow_subagent = db_get_subagent_enabled(chat_id)
+        logger.info(
+          "subagent gate: chat_id=%s allow_subagent=%s (execute_subtask tool will be %s LLM2)",
+          chat_id,
+          allow_subagent,
+          "added to" if allow_subagent else "withheld from",
+        )
 
         # Sub-agent context is now passed to generate_reply as a separate
         # prompt slot (msg #4) instead of being smuggled into history as a
@@ -1813,6 +1821,26 @@ async def handle_socket(ws):
       if event_type == "invalidate_default_model":
         db_reset_settings_connection()
         logger.info("Settings DB connection reset and caches cleared via invalidate_default_model message")
+        continue
+
+      # Handle set_subagent_enabled from Node.js (after /subagent on|off) so
+      # the in-process cache (`_subagent_enabled_cache`) is dropped without
+      # requiring a bridge restart. The new value will be re-read from
+      # chat_settings.subagent_enabled on the next get_subagent_enabled call.
+      if event_type == "set_subagent_enabled":
+        chat_id = event.get("chatId")
+        enabled = bool(event.get("enabled"))
+        if chat_id:
+          db_clear_subagent_enabled_cache(chat_id)
+          # Reset the settings DB connection too so SQLite re-reads the row
+          # Node just wrote; without this, the cached connection may serve
+          # the pre-write snapshot for the lifetime of the process.
+          db_reset_settings_connection()
+          logger.info(
+            "subagent_enabled cache invalidated chat_id=%s enabled=%s",
+            chat_id,
+            enabled,
+          )
         continue
 
       if event_type != "incoming_message":
