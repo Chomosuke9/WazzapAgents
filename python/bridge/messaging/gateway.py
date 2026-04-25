@@ -52,6 +52,59 @@ async def send_message(
   )
 
 
+async def send_attachment(
+  ws,
+  chat_id: str,
+  attachment_path: str,
+  kind: str,
+  *,
+  request_id: str,
+  file_name: str | None = None,
+  reply_to: str | None = None,
+  caption: str | None = None,
+):
+  """Send a single attachment to a chat as its own WhatsApp message.
+
+  ``kind`` must be one of: ``image``, ``video``, ``audio``, ``sticker``,
+  ``document``. The Node gateway (``src/wa/outbound.js::sendOutgoing``) already
+  accepts an ``attachments`` array on the ``send_message`` payload — this
+  helper just builds a payload with exactly one attachment so each file lands
+  in its own bubble.
+
+  The Node side re-validates ``attachment_path`` against ``MEDIA_DIR`` /
+  ``STICKERS_DIR`` via ``resolveAllowedAttachmentPath``, so a path outside the
+  sandbox will be rejected by the action even though we don't check here.
+  """
+  if not attachment_path or not kind:
+    return
+  normalized_reply_to = _normalize_context_msg_id(reply_to) if reply_to else None
+  attachment: dict = {"kind": kind, "path": attachment_path}
+  if file_name:
+    attachment["fileName"] = file_name
+  if caption:
+    attachment["caption"] = caption
+  payload: dict = {
+    "requestId": request_id,
+    "chatId": chat_id,
+    "attachments": [attachment],
+  }
+  if normalized_reply_to:
+    payload["replyTo"] = normalized_reply_to
+  logger.debug(
+    "outbound",
+    extra={
+      "chat_id": chat_id,
+      "action": "send_attachment",
+      "request_id": request_id,
+      "kind": kind,
+      "attachment_path": attachment_path,
+      "file_name": file_name,
+      "reply_to": normalized_reply_to,
+    },
+  )
+  await ws.send(json.dumps({"type": "send_message", "payload": payload}))
+
+
 async def send_delete_message(
   ws,
   chat_id: str,
