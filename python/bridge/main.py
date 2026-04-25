@@ -1344,86 +1344,89 @@ async def handle_socket(ws):
             subagent_webhook.register_completion_event(session_id, completion_event)
 
             try:
-              await subagent_client.submit(session_id, instruction, input_files)
-            except SubAgentSubmitError as submit_err:
-              # Submit retried internally and still failed — surface the
-              # error immediately instead of waiting on a webhook that will
-              # never come.
-              logger.error(
-                "execute_subtask: submit failed session=%s status=%s: %s",
-                session_id,
-                submit_err.status_code,
-                submit_err,
-                extra={"chat_id": chat_id, "session_id": session_id},
-              )
-              subagent_webhook.unregister_completion_event(session_id)
-              subagent_tracker.finalize(session_id, {
-                "success": False,
-                "report": f"Failed to submit task to sub-agent: {submit_err}",
-              })
-            except Exception as submit_err:
-              logger.exception(
-                "execute_subtask: submit failed session=%s: %s",
-                session_id,
-                submit_err,
-                extra={"chat_id": chat_id},
-              )
-              subagent_webhook.unregister_completion_event(session_id)
-              subagent_tracker.finalize(session_id, {
-                "success": False,
-                "report": f"Failed to submit task to sub-agent: {submit_err}",
-              })
-            else:
-              # Submit succeeded — wait for webhook, releasing the per-chat
-              # lock so other bursts in the same chat are not blocked by an
-              # in-flight sub-agent task. Re-acquire before mutating shared
-              # state (history, send actions).
-              lock.release()
               try:
+                await subagent_client.submit(session_id, instruction, input_files)
+              except SubAgentSubmitError as submit_err:
+                # Submit retried internally and still failed — surface the
+                # error immediately instead of waiting on a webhook that will
+                # never come.
+                logger.error(
+                  "execute_subtask: submit failed session=%s status=%s: %s",
+                  session_id,
+                  submit_err.status_code,
+                  submit_err,
+                  extra={"chat_id": chat_id, "session_id": session_id},
+                )
+                subagent_webhook.unregister_completion_event(session_id)
+                subagent_tracker.finalize(session_id, {
+                  "success": False,
+                  "report": f"Failed to submit task to sub-agent: {submit_err}",
+                })
+              except Exception as submit_err:
+                logger.exception(
+                  "execute_subtask: submit failed session=%s: %s",
+                  session_id,
+                  submit_err,
+                  extra={"chat_id": chat_id},
+                )
+                subagent_webhook.unregister_completion_event(session_id)
+                subagent_tracker.finalize(session_id, {
+                  "success": False,
+                  "report": f"Failed to submit task to sub-agent: {submit_err}",
+                })
+              else:
+                # Submit succeeded — wait for webhook, releasing the per-chat
+                # lock so other bursts in the same chat are not blocked by an
+                # in-flight sub-agent task. Re-acquire before mutating shared
+                # state (history, send actions).
+                lock.release()
                 try:
-                  await asyncio.wait_for(completion_event.wait(), timeout=SUBAGENT_WAIT_TIMEOUT_S)
-                except asyncio.TimeoutError:
-                  logger.warning(
-                    "execute_subtask: webhook timeout session=%s, falling back to polling",
-                    session_id,
-                    extra={"chat_id": chat_id},
-                  )
-                  # Cleanup completion event to prevent memory leak
-                  subagent_webhook.unregister_completion_event(session_id)
-                  # Fallback polling
                   try:
-                    result = await subagent_client.poll_result(session_id)
-                  except Exception as poll_err:
-                    logger.exception(
-                      "execute_subtask: poll failed session=%s: %s",
+                    await asyncio.wait_for(completion_event.wait(), timeout=SUBAGENT_WAIT_TIMEOUT_S)
+                  except asyncio.TimeoutError:
+                    logger.warning(
+                      "execute_subtask: webhook timeout session=%s, falling back to polling",
                       session_id,
-                      poll_err,
                       extra={"chat_id": chat_id},
                     )
-                    result = None
-                  if result:
-                    subagent_tracker.finalize(session_id, result)
-                  else:
-                    subagent_tracker.finalize(session_id, {
-                      "success": False,
-                      "report": "Timeout waiting for sub-agent result",
-                    })
-              finally:
-                await lock.acquire()
-                # Best-effort cleanup of the per-session input staging dir
-                # so we don't leak copies of WhatsApp media on disk after
-                # the sub-agent is done with them. Output files staged into
-                # ``MEDIA_DIR/subagent_out/`` are kept — the Node side may
-                # still need them when actually dispatching the attachment.
-                try:
-                  cleanup_input_staging(session_id)
-                except Exception as cleanup_err:  # pylint: disable=broad-except
-                  logger.warning(
-                    "execute_subtask: input staging cleanup failed session=%s: %s",
-                    session_id,
-                    cleanup_err,
-                    extra={"chat_id": chat_id},
-                  )
+                    # Cleanup completion event to prevent memory leak
+                    subagent_webhook.unregister_completion_event(session_id)
+                    # Fallback polling
+                    try:
+                      result = await subagent_client.poll_result(session_id)
+                    except Exception as poll_err:
+                      logger.exception(
+                        "execute_subtask: poll failed session=%s: %s",
+                        session_id,
+                        poll_err,
+                        extra={"chat_id": chat_id},
+                      )
+                      result = None
+                    if result:
+                      subagent_tracker.finalize(session_id, result)
+                    else:
+                      subagent_tracker.finalize(session_id, {
+                        "success": False,
+                        "report": "Timeout waiting for sub-agent result",
+                      })
+                finally:
+                  await lock.acquire()
+            finally:
+              # Best-effort cleanup of the per-session input staging dir
+              # so we don't leak copies of WhatsApp media on disk regardless
+              # of whether submit succeeded, raised SubAgentSubmitError, or
+              # raised any other Exception. Output files staged into
+              # ``MEDIA_DIR/subagent_out/`` are kept — the Node side may
+              # still need them when actually dispatching the attachment.
+              try:
+                cleanup_input_staging(session_id)
+              except Exception as cleanup_err:  # pylint: disable=broad-except
+                logger.warning(
+                  "execute_subtask: input staging cleanup failed session=%s: %s",
+                  session_id,
+                  cleanup_err,
+                  extra={"chat_id": chat_id},
+                )
 
             # Inject result into history as system message.
             # If the sub-agent succeeded and produced output files, stage them
