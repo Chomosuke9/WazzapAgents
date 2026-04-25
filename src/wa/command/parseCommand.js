@@ -40,6 +40,8 @@ const COMMAND_ALIASES = new Map([
   ['catch', 'catch'],
   ['catches', 'catch'],
   ['owner-contact', 'owner-contact'],
+  ['subagent', 'subagent'],
+  ['subagents', 'subagent'],
 ]);
 
 function parseSlashCommand(text) {
