@@ -29,7 +29,12 @@ import {
   resolveQuotedMessage,
 } from '../identifiers.js';
 import { getGroupContext } from '../groupContext.js';
-import { resolveAllowedAttachmentPath } from '../mediaHandler.js';
+import {
+  resolveAllowedAttachmentPath,
+  detectMimeFromFile,
+  normalizeMime,
+  inferExtension,
+} from '../mediaHandler.js';
 import { getSock } from './connection.js';
 import { escapeRegex } from './utils.js';
 import { actionError } from './actions.js';
@@ -127,6 +132,54 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
 }
 
 /**
+ * Resolve the most accurate mimetype for an outbound attachment.
+ *
+ * Order of preference:
+ *   1. Caller-provided ``att.mime`` / ``att.mimetype`` (Python forwards the
+ *      result of ``bridge.subagent.output.detect_kind``, which already does
+ *      magic-byte sniffing). Skip if it's just ``application/octet-stream``
+ *      so we still try to do better below.
+ *   2. Magic-byte sniff of the actual file content via
+ *      ``detectMimeFromFile`` — this catches files where the extension lies
+ *      or is missing entirely.
+ *   3. Extension-based guess via ``inferExtension`` reversed (best-effort).
+ *
+ * For non-document kinds we additionally bias toward the kind's typical
+ * mimetype when no other signal is available so Baileys' validation passes.
+ */
+async function resolveAttachmentMimetype(att, filePath, kind) {
+  const declared = normalizeMime(att?.mime || att?.mimetype);
+  if (declared && declared !== 'application/octet-stream') return declared;
+
+  const sniffed = await detectMimeFromFile(filePath);
+  if (sniffed) return sniffed;
+
+  if (declared) return declared;
+  if (kind === 'image') return 'image/jpeg';
+  if (kind === 'video') return 'video/mp4';
+  if (kind === 'audio') return 'audio/mp4';
+  if (kind === 'sticker') return 'image/webp';
+  return null;
+}
+
+/**
+ * Ensure a document filename carries a sensible extension.
+ *
+ * WhatsApp clients open documents using the filename extension, not the
+ * mimetype, so a document called ``report`` with mimetype
+ * ``application/pdf`` will open as ``report`` and be treated as text.
+ * Append a best-guess extension when the basename has none.
+ */
+function ensureFileNameHasExtension(fileName, mime) {
+  const safe = typeof fileName === 'string' && fileName.trim() ? fileName.trim() : 'file';
+  const ext = path.extname(safe);
+  if (ext) return safe;
+  const inferred = inferExtension(mime);
+  if (!inferred || inferred === 'bin') return safe;
+  return `${safe}.${inferred}`;
+}
+
+/**
  * Send a message (text, media, or both) to WhatsApp.
  *
  * Handles attachment sending (image/video/audio/sticker/document with optional caption),
@@ -169,12 +222,23 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
     const kindToken = typeof att?.kind === 'string' ? att.kind : (typeof att?.type === 'string' ? att.type : 'document');
     const kind = kindToken.trim().toLowerCase() || 'document';
     const filePath = await resolveAllowedAttachmentPath(att?.path, actionError);
+    const resolvedMime = await resolveAttachmentMimetype(att, filePath, kind);
     const content = {};
     if (kind === 'image') content.image = { url: filePath };
     else if (kind === 'video') content.video = { url: filePath };
     else if (kind === 'audio') content.audio = { url: filePath, ptt: false };
     else if (kind === 'sticker') content.sticker = { url: filePath };
-    else content.document = { url: filePath, fileName: att.fileName || path.basename(filePath) };
+    else {
+      const fileName = att.fileName || path.basename(filePath);
+      content.document = {
+        url: filePath,
+        fileName: ensureFileNameHasExtension(fileName, resolvedMime),
+      };
+    }
+    // Always pin the mimetype so Baileys does not fall back to its own
+    // guess. For documents in particular, an unrecognized stream is
+    // rendered as application/pdf, which produces unopenable messages.
+    if (resolvedMime) content.mimetype = resolvedMime;
 
     if (att.caption) {
       const renderedCaption = await renderOutboundMentions(chatId, String(att.caption), group);

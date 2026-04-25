@@ -4,14 +4,25 @@ Hard cutover layout (default under DATA_DIR):
 - settings.db   : chat_settings, llm_models
 - stats.db      : chat_stats, chat_user_stats
 - moderation.db : chat_mutes
+
+Resilience: every public CRUD helper is wrapped with ``@_db_resilient`` which
+catches ``sqlite3.DatabaseError`` (e.g. ``database disk image is malformed``,
+``not a database``), drops the cached thread-local connection, runs
+``_recover_corrupt_db`` (delete stale WAL/SHM, then back up + recreate the main
+file as a last resort), and retries the operation once. Without this wrapper
+a single corruption — usually triggered by an unclean shutdown that leaves a
+half-written WAL — would permanently break every subsequent read on the
+affected DB until the process restarted.
 """
 from __future__ import annotations
 
+import functools
 import os
 import sqlite3
 import threading
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, TypeVar
 
 try:
   from .log import setup_logging
@@ -102,75 +113,235 @@ def _resolve_moderation_db_path() -> Path:
   return _MODERATION_DB_PATH
 
 
-def _recover_corrupt_db(db_path: Path) -> None:
-  """Attempt to recover a corrupt SQLite database by removing WAL/SHM files.
+def _backup_corrupt_file(db_path: Path) -> Optional[Path]:
+  """Move a corrupt DB file aside as ``<name>.corrupted[.N].bak``.
 
-  If WAL files are stale from an unclean shutdown, deleting them allows SQLite
-  to fall back to the main database file which is often intact.
-  If the main database file itself is corrupt, it is renamed as a backup and
-  recreated so the application can continue operating.
+  Returns the backup path on success, ``None`` if the file could not even be
+  renamed (in which case it is deleted as a last resort).
   """
-  for ext in ('-wal', '-shm'):
+  if not db_path.exists():
+    return None
+  backup = db_path.with_suffix(db_path.suffix + '.corrupted.bak')
+  if backup.exists():
+    i = 1
+    while backup.with_suffix(f'.corrupted.{i}.bak').exists():
+      i += 1
+    backup = backup.with_suffix(f'.corrupted.{i}.bak')
+  try:
+    db_path.rename(backup)
+    logger.warning('DB recovery: corrupt %s renamed to %s', db_path.name, backup.name)
+    return backup
+  except OSError as exc:
+    logger.error('DB recovery: could not rename %s: %s', db_path, exc)
+    try:
+      db_path.unlink()
+      logger.warning('DB recovery: deleted corrupt %s', db_path.name)
+    except OSError:
+      pass
+    return None
+
+
+def _probe_db(db_path: Path) -> bool:
+  """Open *db_path* read-only and check ``PRAGMA integrity_check``.
+
+  Returns ``True`` iff SQLite reports the file as ``ok``. Any error or any
+  non-``ok`` result is treated as corruption.
+  """
+  try:
+    test_conn = sqlite3.connect(str(db_path), timeout=5)
+    try:
+      rows = test_conn.execute('PRAGMA integrity_check').fetchall()
+    finally:
+      test_conn.close()
+    return bool(rows) and all(
+      (row[0] if not isinstance(row, sqlite3.Row) else row[0]) == 'ok'
+      for row in rows
+    )
+  except sqlite3.DatabaseError:
+    return False
+
+
+def _recover_corrupt_db(db_path: Path) -> None:
+  """Attempt to recover a corrupt SQLite database in two stages.
+
+  1. Delete stale WAL/SHM files from the previous (possibly unclean) run —
+     this is enough when the main DB file is intact and only the WAL is bad.
+  2. If the main DB still fails ``integrity_check``, rename it aside as
+     ``.corrupted.bak`` and let the next ``sqlite3.connect`` recreate an empty
+     file. The corresponding ``_ensure_*_tables`` migration recreates the
+     schema, so the application keeps running with empty tables instead of
+     crashing on every query.
+  """
+  for ext in ('-wal', '-shm', '-journal'):
     p = db_path.with_suffix(db_path.suffix + ext)
     if p.exists():
       try:
         p.unlink()
-        logger.warning('DB recovery: removed stale WAL file %s', p)
+        logger.warning('DB recovery: removed stale %s file %s', ext.lstrip('-'), p)
       except OSError as exc:
         logger.warning('DB recovery: could not remove %s: %s', p, exc)
 
-  # Test whether the database is now usable
-  try:
-    test_conn = sqlite3.connect(str(db_path), timeout=5)
-    test_conn.execute('PRAGMA integrity_check').fetchall()
-    test_conn.close()
-    logger.info('DB recovery: %s recovered after WAL cleanup', db_path.name)
-  except Exception:
-    # Main database file is corrupt — back it up and recreate
-    logger.warning('DB recovery: %s still corrupt after WAL cleanup, recreating', db_path.name)
-    backup = db_path.with_suffix(db_path.suffix + '.corrupted.bak')
-    if backup.exists():
-      i = 1
-      while backup.with_suffix(f'.corrupted.{i}.bak').exists():
-        i += 1
-      backup = backup.with_suffix(f'.corrupted.{i}.bak')
-    try:
-      db_path.rename(backup)
-      logger.warning('DB recovery: corrupt %s renamed to %s', db_path.name, backup.name)
-    except OSError as exc:
-      logger.error('DB recovery: could not rename %s: %s', db_path, exc)
-      # Last resort — delete the corrupt file
-      try:
-        db_path.unlink()
-        logger.warning('DB recovery: deleted corrupt %s', db_path.name)
-      except OSError:
-        pass
+  if _probe_db(db_path):
+    logger.info('DB recovery: %s recovered after journal cleanup', db_path.name)
+    return
+
+  logger.warning('DB recovery: %s still corrupt after journal cleanup, recreating', db_path.name)
+  _backup_corrupt_file(db_path)
 
 
 def _new_conn(db_path: Path) -> sqlite3.Connection:
-  """Open a SQLite connection with WAL mode and busy timeout.
+  """Open a SQLite connection with WAL mode and resilient PRAGMAs.
 
-  If the database file is corrupt (e.g. stale WAL from unclean shutdown),
-  automatically attempts recovery before raising.
+  Tuned for durability + concurrent reads:
+    - ``journal_mode=WAL``       — allow concurrent readers + one writer.
+    - ``synchronous=NORMAL``     — fsync on commit; safe with WAL, fast.
+    - ``busy_timeout=5000``      — wait up to 5 s on contended writes.
+    - ``temp_store=MEMORY``      — keep temp btrees in RAM, not on disk.
+    - ``foreign_keys=ON``        — defensive for any future FK constraints.
+    - ``cache_size=-2000``       — ~2 MB page cache per connection.
+
+  On corruption (``database disk image is malformed`` etc.) the function calls
+  :func:`_recover_corrupt_db` once and retries. If the retry still fails the
+  exception propagates so the caller can decide what to do.
   """
+  def _configure(conn: sqlite3.Connection) -> None:
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('PRAGMA synchronous=NORMAL')
+    conn.execute('PRAGMA busy_timeout=5000')
+    conn.execute('PRAGMA temp_store=MEMORY')
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.execute('PRAGMA cache_size=-2000')
+    # Quick integrity probe — raises sqlite3.DatabaseError on corruption.
+    conn.execute('PRAGMA quick_check').fetchone()
+
+  conn: sqlite3.Connection | None = None
   try:
     conn = sqlite3.connect(str(db_path), timeout=5)
-    conn.execute('PRAGMA journal_mode=WAL')
-    conn.execute('PRAGMA busy_timeout=3000')
-    # Quick integrity probe — catches "database disk image is malformed"
-    conn.execute('PRAGMA integrity_check').fetchone()
+    _configure(conn)
     conn.row_factory = sqlite3.Row
     return conn
-  except sqlite3.DatabaseError:
-    logger.warning('DB: %s appears corrupt, attempting recovery', db_path.name)
+  except sqlite3.DatabaseError as exc:
+    logger.warning('DB: %s appears corrupt on open (%s); attempting recovery', db_path.name, exc)
+    if conn is not None:
+      try:
+        conn.close()
+      except Exception:
+        pass
     _recover_corrupt_db(db_path)
-    # Retry after recovery
     conn = sqlite3.connect(str(db_path), timeout=5)
-    conn.execute('PRAGMA journal_mode=WAL')
-    conn.execute('PRAGMA busy_timeout=3000')
-    conn.execute('PRAGMA integrity_check').fetchone()
+    _configure(conn)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+# ---------------------------------------------------------------------------
+# Resilience: auto-recover on runtime corruption
+# ---------------------------------------------------------------------------
+
+# Substrings of sqlite3.DatabaseError messages that signal the on-disk file
+# is unusable — i.e. dropping the cached connection and recovering may help.
+_DB_CORRUPTION_TOKENS: tuple[str, ...] = (
+  'malformed',
+  'disk image is malformed',
+  'not a database',
+  'file is not a database',
+  'file is encrypted',
+  'database corruption',
+)
+
+_F = TypeVar('_F', bound=Callable[..., object])
+
+
+def _is_db_corruption_error(exc: BaseException) -> bool:
+  if not isinstance(exc, sqlite3.DatabaseError):
+    return False
+  msg = str(exc).lower()
+  return any(token in msg for token in _DB_CORRUPTION_TOKENS)
+
+
+def _conn_attr_for(db_kind: str) -> str:
+  return f'{db_kind}_conn'
+
+
+def _resolve_path_for(db_kind: str) -> Path:
+  if db_kind == 'settings':
+    return _resolve_settings_db_path()
+  if db_kind == 'stats':
+    return _resolve_stats_db_path()
+  if db_kind == 'moderation':
+    return _resolve_moderation_db_path()
+  raise ValueError(f'unknown db_kind: {db_kind}')
+
+
+def _drop_cached_connection(db_kind: str) -> None:
+  """Close + forget the thread-local connection for *db_kind*.
+
+  Safe to call multiple times. Errors during ``close()`` are swallowed because
+  the connection is already known-bad.
+  """
+  attr = _conn_attr_for(db_kind)
+  conn: sqlite3.Connection | None = getattr(_LOCAL, attr, None)
+  if conn is None:
+    return
+  try:
+    conn.close()
+  except Exception:
+    pass
+  setattr(_LOCAL, attr, None)
+
+
+def _clear_caches_for(db_kind: str) -> None:
+  """Drop in-memory caches that were populated from *db_kind*.
+
+  After recovery the on-disk DB may be empty (recreated), so cached values are
+  no longer authoritative.
+  """
+  global _default_llm2_model_cache
+  with _cache_lock:
+    if db_kind == 'settings':
+      _prompt_cache.clear()
+      _permission_cache.clear()
+      _mode_cache.clear()
+      _triggers_cache.clear()
+      _subagent_enabled_cache.clear()
+      _llm2_model_cache.clear()
+      _default_llm2_model_cache = None
+    elif db_kind == 'moderation':
+      _mute_cache.clear()
+
+
+def _db_resilient(db_kind: str) -> Callable[[_F], _F]:
+  """Decorator: retry once after transparent corruption recovery.
+
+  Wraps a public DB helper. If the wrapped function raises a
+  ``sqlite3.DatabaseError`` whose message indicates corruption, the cached
+  connection is dropped, ``_recover_corrupt_db`` is called, and the function
+  is invoked again. A second failure propagates so the caller sees a real
+  error rather than spinning.
+  """
+  def decorator(fn: _F) -> _F:
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):  # type: ignore[no-untyped-def]
+      try:
+        return fn(*args, **kwargs)
+      except sqlite3.DatabaseError as exc:
+        if not _is_db_corruption_error(exc):
+          raise
+        logger.warning(
+          'DB %s: corruption detected in %s (%s); dropping connection and recovering',
+          db_kind, fn.__name__, exc,
+        )
+        _drop_cached_connection(db_kind)
+        try:
+          _recover_corrupt_db(_resolve_path_for(db_kind))
+        except Exception as recover_err:
+          logger.error('DB %s: recovery failed: %s', db_kind, recover_err)
+          raise exc
+        _clear_caches_for(db_kind)
+        # Single retry. If this still raises, propagate.
+        return fn(*args, **kwargs)
+    return wrapper  # type: ignore[return-value]
+  return decorator
 
 
 def _ensure_settings_tables(conn: sqlite3.Connection) -> None:
@@ -296,6 +467,7 @@ def _get_moderation_conn() -> sqlite3.Connection:
 # Public API
 # ---------------------------------------------------------------------------
 
+@_db_resilient('settings')
 def get_prompt(chat_id: str) -> Optional[str]:
   """Return the custom prompt for *chat_id*, or ``None`` if not set."""
   with _cache_lock:
@@ -314,6 +486,7 @@ def get_prompt(chat_id: str) -> Optional[str]:
   return value
 
 
+@_db_resilient('settings')
 def set_prompt(chat_id: str, prompt: Optional[str]) -> None:
   _ensure_split_ready()
   conn = _get_settings_conn()
@@ -333,6 +506,7 @@ def set_prompt(chat_id: str, prompt: Optional[str]) -> None:
   logger.info('DB set_prompt chat_id=%s len=%s', chat_id, len(prompt) if prompt else 0)
 
 
+@_db_resilient('settings')
 def get_permission(chat_id: str) -> int:
   """Return the permission level (0-3) for *chat_id*. Default ``0``."""
   with _cache_lock:
@@ -351,6 +525,7 @@ def get_permission(chat_id: str) -> int:
   return value
 
 
+@_db_resilient('settings')
 def set_permission(chat_id: str, level: int) -> None:
   clamped = max(0, min(3, int(level)))
   _ensure_split_ready()
@@ -371,6 +546,7 @@ def set_permission(chat_id: str, level: int) -> None:
   logger.info('DB set_permission chat_id=%s level=%s', chat_id, clamped)
 
 
+@_db_resilient('settings')
 def clear_settings(chat_id: str) -> None:
   """Remove all stored settings for *chat_id*."""
   _ensure_split_ready()
@@ -417,6 +593,7 @@ _llm2_model_cache: dict[str, Optional[str]] = {}
 _default_llm2_model_cache: Optional[dict] = None
 
 
+@_db_resilient('settings')
 def get_default_llm2_model() -> Optional[dict]:
   """Return the default model (lowest sort_order, is_active=1)."""
   global _default_llm2_model_cache
@@ -437,6 +614,7 @@ def get_default_llm2_model() -> Optional[dict]:
   return _default_llm2_model_cache
 
 
+@_db_resilient('settings')
 def get_llm2_model(chat_id: str) -> Optional[str]:
   """Return the model_id for chat_id, or None if not set."""
   with _cache_lock:
@@ -455,6 +633,7 @@ def get_llm2_model(chat_id: str) -> Optional[str]:
   return value
 
 
+@_db_resilient('settings')
 def get_model_vision_support(chat_id: str) -> bool:
   """Return True if the active model for chat_id supports vision (multimodal input).
 
@@ -488,6 +667,7 @@ def get_model_vision_support(chat_id: str) -> bool:
   return result
 
 
+@_db_resilient('settings')
 def set_llm2_model(chat_id: str, model_id: Optional[str]) -> None:
   _ensure_split_ready()
   conn = _get_settings_conn()
@@ -507,6 +687,7 @@ def set_llm2_model(chat_id: str, model_id: Optional[str]) -> None:
   logger.info('DB set_llm2_model chat_id=%s model_id=%s', chat_id, model_id)
 
 
+@_db_resilient('settings')
 def get_all_active_models() -> list[dict]:
   """Return all active models ordered by sort_order."""
   _ensure_split_ready()
@@ -526,6 +707,7 @@ def get_all_active_models() -> list[dict]:
   ]
 
 
+@_db_resilient('settings')
 def get_all_models() -> list[dict]:
   """Return all models (active and inactive) ordered by sort_order."""
   _ensure_split_ready()
@@ -651,6 +833,7 @@ def checkpoint_all_dbs() -> None:
       logger.warning('WAL checkpoint failed for %s: %s', name, exc)
 
 
+@_db_resilient('settings')
 def add_model(model_id: str, display_name: str, description: str = '', sort_order: Optional[int] = None, vision_support: bool = False) -> bool:
   """Add a new model. Returns False if model_id already exists."""
   global _default_llm2_model_cache
@@ -675,6 +858,7 @@ def add_model(model_id: str, display_name: str, description: str = '', sort_orde
     return False
 
 
+@_db_resilient('settings')
 def update_model(model_id: str, display_name: Optional[str] = None, description: Optional[str] = None, is_active: Optional[bool] = None, sort_order: Optional[int] = None, vision_support: Optional[bool] = None) -> bool:
   """Update a model. Returns False if model_id not found."""
   global _default_llm2_model_cache
@@ -710,6 +894,7 @@ def update_model(model_id: str, display_name: Optional[str] = None, description:
   return True
 
 
+@_db_resilient('settings')
 def delete_model(model_id: str) -> bool:
   """Delete a model. Returns False if model_id not found."""
   global _default_llm2_model_cache
@@ -734,6 +919,7 @@ def delete_model(model_id: str) -> bool:
 # Mode / Triggers
 # ---------------------------------------------------------------------------
 
+@_db_resilient('settings')
 def get_mode(chat_id: str) -> str:
   """Return the chat mode ('auto', 'prefix', or 'hybrid'). Default 'prefix'."""
   with _cache_lock:
@@ -754,6 +940,7 @@ def get_mode(chat_id: str) -> str:
   return value
 
 
+@_db_resilient('settings')
 def set_mode(chat_id: str, mode: str) -> None:
   if mode not in VALID_MODES:
     mode = DEFAULT_MODE
@@ -775,6 +962,7 @@ def set_mode(chat_id: str, mode: str) -> None:
   logger.info('DB set_mode chat_id=%s mode=%s', chat_id, mode)
 
 
+@_db_resilient('settings')
 def get_triggers(chat_id: str) -> set[str]:
   """Return the set of enabled trigger types for *chat_id*."""
   with _cache_lock:
@@ -793,6 +981,7 @@ def get_triggers(chat_id: str) -> set[str]:
   return {t.strip().lower() for t in raw.split(',') if t.strip().lower() in VALID_TRIGGERS}
 
 
+@_db_resilient('settings')
 def set_triggers(chat_id: str, triggers: set[str]) -> None:
   valid = {t for t in triggers if t in VALID_TRIGGERS}
   raw = ','.join(sorted(valid)) if valid else ''
@@ -818,6 +1007,7 @@ def set_triggers(chat_id: str, triggers: set[str]) -> None:
 # SubAgent toggle
 # ---------------------------------------------------------------------------
 
+@_db_resilient('settings')
 def get_subagent_enabled(chat_id: str) -> bool:
   """Return whether subagent is enabled for *chat_id*. Default False."""
   with _cache_lock:
@@ -836,6 +1026,7 @@ def get_subagent_enabled(chat_id: str) -> bool:
   return value
 
 
+@_db_resilient('settings')
 def set_subagent_enabled(chat_id: str, enabled: bool) -> None:
   enabled = bool(enabled)
   _ensure_split_ready()
@@ -860,6 +1051,7 @@ def set_subagent_enabled(chat_id: str, enabled: bool) -> None:
 # Dashboard stats persistence
 # ---------------------------------------------------------------------------
 
+@_db_resilient('stats')
 def upsert_stats_batch(rows: list[tuple[str, str, str, str, int]]) -> None:
   """Batch upsert stat counters: [(chat_id, period_type, period_key, stat_key, increment), ...]."""
   if not rows:
@@ -878,6 +1070,7 @@ def upsert_stats_batch(rows: list[tuple[str, str, str, str, int]]) -> None:
   conn.commit()
 
 
+@_db_resilient('stats')
 def upsert_user_stats_batch(rows: list[tuple[str, str, str, str, str, int]]) -> None:
   """Batch upsert user invoke counters: [(chat_id, period_type, period_key, sender_ref, sender_name, increment), ...]."""
   if not rows:
@@ -897,6 +1090,7 @@ def upsert_user_stats_batch(rows: list[tuple[str, str, str, str, str, int]]) -> 
   conn.commit()
 
 
+@_db_resilient('stats')
 def get_stats(chat_id: str, period_type: str, period_key: str) -> dict[str, int]:
   """Return {stat_key: stat_value} for a given chat and period."""
   _ensure_split_ready()
@@ -908,6 +1102,7 @@ def get_stats(chat_id: str, period_type: str, period_key: str) -> dict[str, int]
   return {row['stat_key']: row['stat_value'] for row in rows}
 
 
+@_db_resilient('stats')
 def get_top_users(chat_id: str, period_type: str, period_key: str, limit: int = 5) -> list[tuple[str, str, int]]:
   """Return top users [(sender_ref, sender_name, invoke_count), ...] for a period."""
   _ensure_split_ready()
@@ -958,6 +1153,7 @@ def _mute_remaining_minutes(entry: dict) -> int:
   return max(0, int(remaining))
 
 
+@_db_resilient('moderation')
 def add_mute(chat_id: str, sender_ref: str, duration_minutes: int) -> None:
   """Add or update a mute. Persists to DB and updates cache."""
   duration_minutes = max(1, min(1440, int(duration_minutes)))
@@ -987,6 +1183,7 @@ def add_mute(chat_id: str, sender_ref: str, duration_minutes: int) -> None:
   logger.info('mute added chat_id=%s sender_ref=%s duration=%sm', chat_id, sender_ref, duration_minutes)
 
 
+@_db_resilient('moderation')
 def remove_mute(chat_id: str, sender_ref: str) -> None:
   """Remove a mute from DB and cache."""
   _ensure_split_ready()
@@ -1002,6 +1199,7 @@ def remove_mute(chat_id: str, sender_ref: str) -> None:
   logger.info('mute removed chat_id=%s sender_ref=%s', chat_id, sender_ref)
 
 
+@_db_resilient('moderation')
 def clear_mutes(chat_id: str) -> None:
   """Remove all mutes for a chat (used on bot demotion)."""
   _ensure_split_ready()
@@ -1013,6 +1211,7 @@ def clear_mutes(chat_id: str) -> None:
   logger.info('all mutes cleared chat_id=%s', chat_id)
 
 
+@_db_resilient('moderation')
 def is_muted(chat_id: str, sender_ref: str) -> bool:
   """Check if a user is currently muted (cache-first, instant)."""
   with _cache_lock:
