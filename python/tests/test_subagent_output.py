@@ -72,6 +72,70 @@ class TestDetectKind:
     kind, _ = detect_kind("/tmp/foo.webp")
     assert kind == "image"
 
+  # ---- Magic-byte sniffing for files whose extension is missing/wrong ----
+  # Without sniffing, WhatsApp clients fall back to rendering unknown
+  # streams as PDF, which produces unopenable messages.
+
+  def test_sniffs_pdf_when_extension_is_missing(self, tmp_path):
+    p = tmp_path / "no_extension_pdf"
+    p.write_bytes(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    kind, mime = detect_kind(str(p))
+    assert kind == "document"
+    assert mime == "application/pdf"
+
+  def test_sniffs_png_when_extension_is_misleading(self, tmp_path):
+    # File is a real PNG but the name lies — extension says .pdf.
+    p = tmp_path / "lying.pdf"
+    p.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 24)
+    kind, mime = detect_kind(str(p))
+    # Extension wins when it produces a known mime, so this still says PDF.
+    # (Sniffing only fires when the extension fails to give a usable mime.)
+    assert kind == "document"
+    assert mime == "application/pdf"
+
+  def test_sniffs_jpeg_for_extensionless_image(self, tmp_path):
+    p = tmp_path / "photo"
+    p.write_bytes(b"\xff\xd8\xff\xe0" + b"\x00" * 12)
+    kind, mime = detect_kind(str(p))
+    assert kind == "image"
+    assert mime == "image/jpeg"
+
+  def test_sniffs_zip_for_extensionless_office_doc(self, tmp_path):
+    # PK\x03\x04 is the magic for ZIP, which covers DOCX/XLSX/PPTX/EPUB.
+    p = tmp_path / "report"
+    p.write_bytes(b"PK\x03\x04" + b"\x00" * 20)
+    kind, mime = detect_kind(str(p))
+    assert kind == "document"
+    assert mime == "application/zip"
+
+  def test_sniffs_mp4_for_extensionless_video(self, tmp_path):
+    p = tmp_path / "movie"
+    # MP4 container: 4 bytes box size, then 'ftyp', then a brand.
+    p.write_bytes(b"\x00\x00\x00\x20ftypisom" + b"\x00" * 8)
+    kind, mime = detect_kind(str(p))
+    assert kind == "video"
+    assert mime == "video/mp4"
+
+  def test_octet_stream_is_overridden_by_sniff(self, tmp_path):
+    # Even when ``mimetypes`` would say octet-stream, sniffing should win.
+    p = tmp_path / "data.bin"
+    p.write_bytes(b"%PDF-1.4\n")
+    kind, mime = detect_kind(str(p))
+    assert kind == "document"
+    assert mime == "application/pdf"
+
+  def test_unknown_content_with_no_extension_still_falls_back(self, tmp_path):
+    p = tmp_path / "unknown_blob"
+    p.write_bytes(b"\x00\x01\x02\x03\x04\x05\x06\x07")
+    kind, mime = detect_kind(str(p))
+    assert kind == "document"
+    assert mime == "application/octet-stream"
+
+  def test_docx_extension_yields_office_mime(self):
+    kind, mime = detect_kind("/tmp/report.docx")
+    assert kind == "document"
+    assert "wordprocessingml" in mime
+
 
 # ---------------------------------------------------------------------------
 # stage_output_files
@@ -382,6 +446,37 @@ class TestSendAttachment:
     ))
     att = json.loads(ws.sent[0])["payload"]["attachments"][0]
     assert att["caption"] == "hello"
+
+  def test_forwards_mime_to_node(self):
+    # Without an explicit mimetype, Baileys treats unknown documents as PDFs
+    # and produces unopenable WhatsApp messages. The bridge has to forward
+    # the value detect_kind() resolved.
+    ws = FakeWS()
+    asyncio.run(send_attachment(
+      ws,
+      chat_id="g@g.us",
+      attachment_path="/data/media/foo.docx",
+      kind="document",
+      request_id="req-mime",
+      file_name="foo.docx",
+      mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ))
+    att = json.loads(ws.sent[0])["payload"]["attachments"][0]
+    assert att["mime"] == (
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
+  def test_omits_mime_field_when_not_provided(self):
+    ws = FakeWS()
+    asyncio.run(send_attachment(
+      ws,
+      chat_id="g@g.us",
+      attachment_path="/data/media/foo.png",
+      kind="image",
+      request_id="req-nomime",
+    ))
+    att = json.loads(ws.sent[0])["payload"]["attachments"][0]
+    assert "mime" not in att
 
   def test_noop_when_path_missing(self):
     ws = FakeWS()

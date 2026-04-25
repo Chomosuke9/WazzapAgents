@@ -118,7 +118,95 @@ class StagedOutputs:
 _EXT_MIME_OVERRIDES = {
   # ``mimetypes`` doesn't ship a webp mapping on every Python build.
   ".webp": "image/webp",
+  # ZIP-based Office formats — ``mimetypes`` only has these on some platforms.
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".odt": "application/vnd.oasis.opendocument.text",
+  ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+  ".odp": "application/vnd.oasis.opendocument.presentation",
+  ".rtf": "application/rtf",
+  ".7z": "application/x-7z-compressed",
+  ".rar": "application/vnd.rar",
+  ".tar": "application/x-tar",
+  ".gz": "application/gzip",
+  ".m4a": "audio/mp4",
+  ".opus": "audio/ogg",
+  ".heic": "image/heic",
+  ".heif": "image/heif",
+  ".avif": "image/avif",
 }
+
+
+def _sniff_mime_from_bytes(head: bytes) -> str | None:
+  """Best-effort magic-byte sniffing for files whose extension lies (or is missing).
+
+  Covers the formats most likely to come out of a sub-agent: PDFs, common
+  image/video/audio containers, and ZIP-based Office documents. Returns
+  ``None`` for anything we can't classify confidently — callers should keep
+  using extension-based fallbacks in that case.
+
+  Detection order matters: more specific signatures come first so e.g. a
+  WebP is not misidentified as RIFF.
+  """
+  if not head:
+    return None
+
+  if head.startswith(b'%PDF-'):
+    return 'application/pdf'
+  if head.startswith(b'\x89PNG\r\n\x1a\n'):
+    return 'image/png'
+  if head.startswith(b'\xff\xd8\xff'):
+    return 'image/jpeg'
+  if head.startswith(b'GIF87a') or head.startswith(b'GIF89a'):
+    return 'image/gif'
+  if head[:4] == b'RIFF' and head[8:12] == b'WEBP':
+    return 'image/webp'
+  if head[:4] == b'RIFF' and head[8:12] == b'WAVE':
+    return 'audio/wav'
+  if head[:4] == b'RIFF' and head[8:12] == b'AVI ':
+    return 'video/x-msvideo'
+  if head[:4] == b'OggS':
+    return 'audio/ogg'
+  if head.startswith(b'fLaC'):
+    return 'audio/flac'
+  if head.startswith(b'ID3') or (len(head) >= 2 and head[0] == 0xFF and (head[1] & 0xE0) == 0xE0):
+    return 'audio/mpeg'
+  if len(head) >= 12 and head[4:8] == b'ftyp':
+    brand = head[8:12]
+    if brand in (b'isom', b'iso2', b'mp41', b'mp42', b'avc1', b'dash'):
+      return 'video/mp4'
+    if brand in (b'M4A ', b'M4B ', b'mp42'):
+      return 'audio/mp4'
+    if brand in (b'qt  ',):
+      return 'video/quicktime'
+    return 'video/mp4'
+  if head.startswith(b'\x1aE\xdf\xa3'):
+    return 'video/x-matroska'
+  # ZIP / Office Open XML / OpenDocument / EPUB — all start with PK\x03\x04.
+  if head.startswith(b'PK\x03\x04') or head.startswith(b'PK\x05\x06') or head.startswith(b'PK\x07\x08'):
+    return 'application/zip'
+  if head.startswith(b'\x1f\x8b'):
+    return 'application/gzip'
+  if head.startswith(b'7z\xbc\xaf\x27\x1c'):
+    return 'application/x-7z-compressed'
+  if head.startswith(b'Rar!\x1a\x07'):
+    return 'application/vnd.rar'
+  if head.startswith(b'BM'):
+    return 'image/bmp'
+  if head.startswith(b'{\\rtf'):
+    return 'application/rtf'
+  if head[:4] == b'<!DO' or head[:5].lower() == b'<html':
+    return 'text/html'
+  return None
+
+
+def _read_head(path: str, n: int = 16) -> bytes:
+  try:
+    with open(path, 'rb') as fh:
+      return fh.read(n)
+  except OSError:
+    return b''
 
 
 def detect_kind(path: str | os.PathLike[str]) -> tuple[str, str]:
@@ -126,6 +214,16 @@ def detect_kind(path: str | os.PathLike[str]) -> tuple[str, str]:
 
   ``kind`` is one of ``image``, ``video``, ``audio``, ``document``. It maps to
   the WhatsApp/Baileys media kind expected by ``src/wa/outbound.js``.
+
+  Detection strategy:
+    1. Map known extensions via ``_EXT_MIME_OVERRIDES`` and ``mimetypes``.
+    2. If the extension yields no usable mime (missing ext or
+       ``application/octet-stream``), sniff the file's first 16 bytes via
+       :func:`_sniff_mime_from_bytes`. This catches sub-agent outputs whose
+       filename has no extension or a misleading one — without sniffing,
+       WhatsApp clients fall back to rendering them as PDF, which corrupts
+       the user-visible attachment.
+    3. Final fallback is ``application/octet-stream`` + ``document``.
 
   Stickers are intentionally not auto-detected — proper WhatsApp stickers
   require custom EXIF metadata that sub-agents won't produce. A bare ``.webp``
@@ -136,7 +234,17 @@ def detect_kind(path: str | os.PathLike[str]) -> tuple[str, str]:
   mime = _EXT_MIME_OVERRIDES.get(ext)
   if mime is None:
     guessed, _ = mimetypes.guess_type(path_str)
-    mime = guessed or "application/octet-stream"
+    mime = guessed
+
+  needs_sniff = (not mime) or mime == 'application/octet-stream' or not ext
+  if needs_sniff and os.path.isfile(path_str):
+    sniffed = _sniff_mime_from_bytes(_read_head(path_str, 16))
+    if sniffed:
+      mime = sniffed
+
+  if not mime:
+    mime = 'application/octet-stream'
+
   if mime.startswith("image/"):
     return "image", mime
   if mime.startswith("video/"):

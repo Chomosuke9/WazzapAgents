@@ -62,6 +62,7 @@ async def send_attachment(
   file_name: str | None = None,
   reply_to: str | None = None,
   caption: str | None = None,
+  mime: str | None = None,
 ):
   """Send a single attachment to a chat as its own WhatsApp message.
 
@@ -70,6 +71,12 @@ async def send_attachment(
   accepts an ``attachments`` array on the ``send_message`` payload — this
   helper just builds a payload with exactly one attachment so each file lands
   in its own bubble.
+
+  ``mime`` is forwarded to Node so the gateway can set Baileys'
+  ``content.mimetype`` explicitly. Without it Baileys falls back to its own
+  guess, which for unfamiliar files is ``application/pdf`` — that produces
+  WhatsApp messages that can't be opened. Pass the value returned by
+  :func:`bridge.subagent.output.detect_kind` whenever possible.
 
   The Node side re-validates ``attachment_path`` against ``MEDIA_DIR`` /
   ``STICKERS_DIR`` via ``resolveAllowedAttachmentPath``, so a path outside the
@@ -83,6 +90,8 @@ async def send_attachment(
     attachment["fileName"] = file_name
   if caption:
     attachment["caption"] = caption
+  if mime:
+    attachment["mime"] = mime
   payload: dict = {
     "requestId": request_id,
     "chatId": chat_id,
@@ -99,6 +108,7 @@ async def send_attachment(
       "kind": kind,
       "attachment_path": attachment_path,
       "file_name": file_name,
+      "mime": mime,
       "reply_to": normalized_reply_to,
     },
   )

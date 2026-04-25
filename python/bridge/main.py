@@ -1720,6 +1720,7 @@ async def handle_socket(ws):
                   staged_file.kind,
                   request_id=_make_request_id("subagent_attach"),
                   file_name=staged_file.name,
+                  mime=staged_file.mime,
                 )
               except Exception as attach_err:
                 logger.exception(
