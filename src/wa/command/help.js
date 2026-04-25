@@ -21,6 +21,7 @@ const HELP_TEXT = `*WazzapAgents - Daftar Perintah*
 
 *Owner Saja*
 • \`/owner-contact set "nomor" "nama"\` — Atur kontak owner bot
+• \`/subagent\` [on|off] — Aktifkan/matikan sub-agent untuk chat ini
 
 _Ketik perintah tanpa argumen untuk melihat status saat ini._`;
 
