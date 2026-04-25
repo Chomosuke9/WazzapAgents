@@ -94,6 +94,7 @@ Self-Triggering Commands:
 {{delete_rules}}
 {{mute_rules}}
 {{kick_rules}}
+{{subagent_rules}}
 
 <context_behavior>
 - Person's join-ID ≠ their display name.

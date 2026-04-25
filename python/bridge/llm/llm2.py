@@ -185,6 +185,41 @@ KICK is ALLOWED for this chat. Use the kick_members tool to remove disruptive me
 Only kick with clear justification. Cannot kick admins.
 </kick>"""
 
+# Injected into the system prompt only when /subagent on is set for this chat
+# (i.e. allow_subagent=True). Tells LLM2 when to delegate via the
+# execute_subtask tool and what the sub-agent can / cannot do, so the model
+# does not silently forget the tool exists or use it for trivial replies.
+# Mirrors the structure of _DELETE_RULES / _MUTE_RULES / _KICK_RULES.
+_SUBAGENT_RULES = """<subagent>
+SUB-AGENT is ALLOWED for this chat. You have an `execute_subtask` tool that
+delegates work to a separate background agent (bash + python, web access).
+
+Use `execute_subtask` for tasks that you cannot finish in a single chat reply,
+specifically:
+- file processing (summarize a PDF/audio/video, OCR, edit an image, transcode media)
+- code execution / data crunching that needs a real shell or python runtime
+- web scraping or multi-step research
+- anything that needs to produce attachment files to send back to the chat
+
+Do NOT use `execute_subtask` for:
+- short conversational replies, greetings, jokes, opinions — answer those directly
+- anything you can answer from your own knowledge in one message
+- moderation actions (use delete/mute/kick tools instead)
+
+When calling the tool:
+- Write `instruction` as a self-contained natural-language brief. Don't assume
+  the sub-agent can see this chat's history; restate the goal, expected output,
+  and any constraints (language, length, format).
+- Pass `input_files` only with paths that appeared in the file catalog injected
+  into your context — don't invent paths.
+- Set `context_msg_id` to the message that triggered the task so attachments
+  the sub-agent produces can be sent as a reply.
+
+After the tool runs, the sub-agent's progress and result will appear as a
+"## Sub-Agent" block in your context on the next turn. Don't re-invoke the
+tool while one is still running for this chat.
+</subagent>"""
+
 
 def _render_system_prompt(
   base_system: str,
@@ -193,6 +228,7 @@ def _render_system_prompt(
   allow_delete: bool = False,
   allow_mute: bool = False,
   allow_kick: bool = False,
+  allow_subagent: bool = False,
 ) -> str:
   overide_text = (prompt_override or "").strip()
   configured_assistant_name = assistant_name()
@@ -215,6 +251,8 @@ def _render_system_prompt(
     .replace("{{ mute_rules }}", _MUTE_RULES if allow_mute else "")
     .replace("{{kick_rules}}", _KICK_RULES if allow_kick else "")
     .replace("{{ kick_rules }}", _KICK_RULES if allow_kick else "")
+    .replace("{{subagent_rules}}", _SUBAGENT_RULES if allow_subagent else "")
+    .replace("{{ subagent_rules }}", _SUBAGENT_RULES if allow_subagent else "")
   )
 
 
@@ -491,6 +529,7 @@ async def generate_reply(
     allow_delete=can_delete,
     allow_mute=can_mute,
     allow_kick=can_kick,
+    allow_subagent=allow_subagent,
   )
   history_list = list(history)
   message_max_chars = _llm2_message_max_chars()
@@ -544,16 +583,12 @@ async def generate_reply(
   msgs = [SystemMessage(content=rendered_system)]
   msgs.append(HumanMessage(content=f"Group description:\n{group_text}"))
   msgs.append(HumanMessage(content=context_injection))
-  subagent_block: str | None = None
-  if subagent_context:
-    subagent_block = subagent_context
-  elif allow_subagent:
-    subagent_block = (
-      "## Sub-Agent\n"
-      "No sub-agent task is currently running. Use the `execute_subtask` "
-      "tool to delegate work that needs file processing, code execution, "
-      "or long computation."
-    )
+  # Only inject the per-burst sub-agent context when there is real progress
+  # or a finished result to show. The "no task running" placeholder used to
+  # be appended whenever allow_subagent was true, but the system prompt now
+  # carries the <subagent> rules block (see _SUBAGENT_RULES), so the
+  # placeholder is redundant noise.
+  subagent_block: str | None = subagent_context if subagent_context else None
   if subagent_block:
     msgs.append(HumanMessage(content=subagent_block))
   msgs.append(HumanMessage(content=messages_content))
