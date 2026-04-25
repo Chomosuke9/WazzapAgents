@@ -210,10 +210,12 @@ When calling the tool:
 - Write `instruction` as a self-contained natural-language brief. Don't assume
   the sub-agent can see this chat's history; restate the goal, expected output,
   and any constraints (language, length, format).
-- Pass `input_files` only with paths that appeared in the file catalog injected
-  into your context — don't invent paths.
-- Set `context_msg_id` to the message that triggered the task so attachments
-  the sub-agent produces can be sent as a reply.
+- Pass `context_msg_ids` (array of 6-digit IDs from the chat context) for any
+  messages whose media attachments the sub-agent needs as input. The bridge
+  resolves each ID to the file path automatically — do NOT type file paths
+  into the instruction, and don't invent IDs.
+- Output files the sub-agent produces are auto-attached to the chat after
+  your text reply; you don't need to mention paths or upload them yourself.
 
 After the tool runs, the sub-agent's progress and result will appear as a
 "## Sub-Agent" block in your context on the next turn. Don't re-invoke the
