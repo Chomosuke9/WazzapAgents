@@ -451,6 +451,7 @@ async def generate_reply(
   bot_is_super_admin: bool = False,
   result_validator=None,
   allow_subagent: bool = False,
+  subagent_context: str | None = None,
 ):
   targets = _llm2_targets()
   payload = current_payload if isinstance(current_payload, dict) else {}
@@ -533,12 +534,39 @@ async def generate_reply(
   else:
     messages_content = messages_content_text
 
+  # Final prompt order, in the sequence the model actually sees them:
+  #   1) system        : system prompt
+  #   2) user          : group description
+  #   3) user          : helper / context injection
+  #   4) user          : sub-agent task block  (only when allow_subagent /
+  #                      subagent_context is provided for this chat)
+  #   5) user          : older messages + current burst
   msgs = [SystemMessage(content=rendered_system)]
   msgs.append(HumanMessage(content=f"Group description:\n{group_text}"))
   msgs.append(HumanMessage(content=context_injection))
+  subagent_block: str | None = None
+  if subagent_context:
+    subagent_block = subagent_context
+  elif allow_subagent:
+    subagent_block = (
+      "## Sub-Agent\n"
+      "No sub-agent task is currently running. Use the `execute_subtask` "
+      "tool to delegate work that needs file processing, code execution, "
+      "or long computation."
+    )
+  if subagent_block:
+    msgs.append(HumanMessage(content=subagent_block))
   msgs.append(HumanMessage(content=messages_content))
   if env_flag("BRIDGE_LOG_PROMPT_FULL"):
     first_target = targets[0]
+    logged_messages: list[dict] = [
+      {"role": "system", "content": rendered_system},
+      {"role": "user", "content": f"Group description:\n{group_text}"},
+      {"role": "user", "content": context_injection},
+    ]
+    if subagent_block:
+      logged_messages.append({"role": "user", "content": subagent_block})
+    logged_messages.append({"role": "user", "content": redact_multimodal_content(messages_content)})
     logger.info(
       "LLM2 prompt full",
       extra={
@@ -547,12 +575,7 @@ async def generate_reply(
         "provider": first_target.name,
         "model": first_target.model,
         "endpoint": first_target.base_url,
-        "messages": [
-          {"role": "system", "content": rendered_system},
-          {"role": "user", "content": f"Group description:\n{group_text}"},
-          {"role": "user", "content": context_injection},
-          {"role": "user", "content": redact_multimodal_content(messages_content)},
-        ],
+        "messages": logged_messages,
       },
     )
   prompt_preview = trunc(

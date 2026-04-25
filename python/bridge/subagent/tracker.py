@@ -6,11 +6,25 @@ from typing import Deque, Dict, Optional
 
 try:
   from .models import SubTask, ProgressEntry
+  from .config import SUBAGENT_PROGRESS_DETAIL_MAX_CHARS, SUBAGENT_REPORT_MAX_CHARS
 except ImportError:
   import sys
   from pathlib import Path
   sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.subagent.models import SubTask, ProgressEntry  # type: ignore
+  from bridge.subagent.config import (  # type: ignore
+    SUBAGENT_PROGRESS_DETAIL_MAX_CHARS,
+    SUBAGENT_REPORT_MAX_CHARS,
+  )
+
+
+def _truncate(text: Optional[str], limit: int) -> Optional[str]:
+  if text is None or limit <= 0 or len(text) <= limit:
+    return text
+  # Reserve room for the marker so the final string never exceeds ``limit``.
+  marker = " …[truncated]"
+  keep = max(0, limit - len(marker))
+  return text[:keep] + marker
 
 
 class SubTaskTracker:
@@ -26,6 +40,9 @@ class SubTaskTracker:
     task = self._active.get(session_id)
     if task is None:
       return
+    # Hard cap the detail length — we cannot trust the upstream cap to hold
+    # if SUBAGENT_PROGRESS_DETAIL_MAX_CHARS gets tightened on this side.
+    detail = _truncate(detail, SUBAGENT_PROGRESS_DETAIL_MAX_CHARS) or ""
     # Skip duplicate: if the last entry has identical step+detail, ignore
     if task.progress:
       last = task.progress[-1]
@@ -45,7 +62,8 @@ class SubTaskTracker:
     task.result = result
     success = result.get("success", False)
     task.status = "completed" if success else "failed"
-    task.report = result.get("report") or result.get("error") or None
+    raw_report = result.get("report") or result.get("error") or None
+    task.report = _truncate(raw_report, SUBAGENT_REPORT_MAX_CHARS)
     self._history.setdefault(task.chat_id, deque(maxlen=50)).append(task)
 
   def get_active_for_chat(self, chat_id: str) -> SubTask | None:
