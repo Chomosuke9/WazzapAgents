@@ -174,9 +174,15 @@ def _sniff_mime_from_bytes(head: bytes) -> str | None:
     return 'audio/mpeg'
   if len(head) >= 12 and head[4:8] == b'ftyp':
     brand = head[8:12]
+    # ``mp42`` is a generic ISO Base Media v2 brand used by both video and
+    # audio containers. We default to video here because audio-only files
+    # almost always carry an ``M4A `` / ``M4B `` brand instead. The
+    # downstream WhatsApp behaviour for either kind is the same — the
+    # important thing is that the kind is *not* ``document``, so the file
+    # opens with a media player rather than as a broken PDF.
     if brand in (b'isom', b'iso2', b'mp41', b'mp42', b'avc1', b'dash'):
       return 'video/mp4'
-    if brand in (b'M4A ', b'M4B ', b'mp42'):
+    if brand in (b'M4A ', b'M4B '):
       return 'audio/mp4'
     if brand in (b'qt  ',):
       return 'video/quicktime'

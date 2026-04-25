@@ -53,8 +53,11 @@ function inferExtension(mime) {
   if (normalized === 'video/x-matroska' || normalized.includes('matroska')) return 'mkv';
   if (normalized === 'video/quicktime' || normalized.includes('quicktime')) return 'mov';
   if (normalized === 'video/x-msvideo' || normalized.includes('msvideo')) return 'avi';
-  if (normalized === 'video/mp4' || normalized.includes('mp4')) return 'mp4';
+  // Order matters: ``audio/mp4`` and ``audio/x-m4a`` must be checked before the
+  // generic ``includes('mp4')`` fallback, otherwise audio files would all get
+  // a ``.mp4`` extension instead of ``.m4a``.
   if (normalized === 'audio/mp4' || normalized === 'audio/x-m4a') return 'm4a';
+  if (normalized === 'video/mp4' || normalized.includes('mp4')) return 'mp4';
   if (normalized === 'audio/mpeg' || normalized.includes('mp3')) return 'mp3';
   if (normalized === 'audio/wav' || normalized === 'audio/x-wav') return 'wav';
   if (normalized === 'audio/flac') return 'flac';
