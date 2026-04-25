@@ -1681,75 +1681,77 @@ async def handle_socket(ws):
               context block from ``SubTaskTracker.format_context``).
               """
               try:
-                # Wait for the sub-agent to finish — the webhook will set
-                # ``completion_event``. On submit failure the event was
-                # already set above so this returns immediately.
                 try:
-                  await asyncio.wait_for(
-                    completion_event.wait(), timeout=SUBAGENT_WAIT_TIMEOUT_S
-                  )
-                except asyncio.TimeoutError:
-                  logger.warning(
-                    "execute_subtask: webhook timeout session=%s, falling back to polling",
-                    session_id,
-                    extra={"chat_id": chat_id},
-                  )
-                  subagent_webhook.unregister_completion_event(session_id)
+                  # Wait for the sub-agent to finish — the webhook will set
+                  # ``completion_event``. On submit failure the event was
+                  # already set above so this returns immediately.
                   try:
-                    result = await subagent_client.poll_result(session_id)
-                  except Exception as poll_err:  # pylint: disable=broad-except
-                    logger.exception(
-                      "execute_subtask: poll failed session=%s: %s",
+                    await asyncio.wait_for(
+                      completion_event.wait(), timeout=SUBAGENT_WAIT_TIMEOUT_S
+                    )
+                  except asyncio.TimeoutError:
+                    logger.warning(
+                      "execute_subtask: webhook timeout session=%s, falling back to polling",
                       session_id,
-                      poll_err,
                       extra={"chat_id": chat_id},
                     )
-                    result = None
-                  if result:
-                    subagent_tracker.finalize(session_id, result)
-                  else:
-                    subagent_tracker.finalize(session_id, {
-                      "success": False,
-                      "report": "Timeout waiting for sub-agent result",
-                    })
+                    subagent_webhook.unregister_completion_event(session_id)
+                    try:
+                      result = await subagent_client.poll_result(session_id)
+                    except Exception as poll_err:  # pylint: disable=broad-except
+                      logger.exception(
+                        "execute_subtask: poll failed session=%s: %s",
+                        session_id,
+                        poll_err,
+                        extra={"chat_id": chat_id},
+                      )
+                      result = None
+                    if result:
+                      subagent_tracker.finalize(session_id, result)
+                    else:
+                      subagent_tracker.finalize(session_id, {
+                        "success": False,
+                        "report": "Timeout waiting for sub-agent result",
+                      })
 
-                # Best-effort cleanup of the per-session input staging dir
-                # so we don't leak copies of WhatsApp media on disk.
-                # Output files staged into ``MEDIA_DIR/subagent_out/`` are
-                # kept — the Node side may still need them when actually
-                # dispatching the attachment.
-                try:
-                  cleanup_input_staging(session_id)
-                except Exception as cleanup_err:  # pylint: disable=broad-except
-                  logger.warning(
-                    "execute_subtask: input staging cleanup failed session=%s: %s",
-                    session_id,
-                    cleanup_err,
-                    extra={"chat_id": chat_id},
-                  )
-
-                # Acquire the per-chat lock for history mutation + send.
-                # Other bursts arriving on this chat during the wait above
-                # have already been processed (LLM2 saw the active-task
-                # context block telling it not to re-acknowledge or
-                # re-spawn); now we deliver the report.
-                async with lock:
-                  await _deliver_subagent_result(
-                    ws=ws,
-                    session_id=session_id,
-                    chat_id=chat_id,
-                    history=history,
-                    current=current,
-                    current_payload=current_payload,
-                    group_description=group_description,
-                    db_prompt=db_prompt,
-                    chat_type=chat_type,
-                    bot_is_admin=bot_is_admin,
-                    bot_is_super_admin=bot_is_super_admin,
-                    fallback_reply_to=fallback_reply_to,
-                    allowed_context_ids=allowed_context_ids,
-                    record_stat_fn=record_stat,
-                  )
+                  # Acquire the per-chat lock for history mutation + send.
+                  # Other bursts arriving on this chat during the wait above
+                  # have already been processed (LLM2 saw the active-task
+                  # context block telling it not to re-acknowledge or
+                  # re-spawn); now we deliver the report.
+                  async with lock:
+                    await _deliver_subagent_result(
+                      ws=ws,
+                      session_id=session_id,
+                      chat_id=chat_id,
+                      history=history,
+                      current=current,
+                      current_payload=current_payload,
+                      group_description=group_description,
+                      db_prompt=db_prompt,
+                      chat_type=chat_type,
+                      bot_is_admin=bot_is_admin,
+                      bot_is_super_admin=bot_is_super_admin,
+                      fallback_reply_to=fallback_reply_to,
+                      allowed_context_ids=allowed_context_ids,
+                      record_stat_fn=record_stat,
+                    )
+                finally:
+                  # Always best-effort clean up the per-session input
+                  # staging dir, including on ``asyncio.CancelledError``
+                  # during shutdown — otherwise WhatsApp media copies
+                  # leak on disk every time a sub-agent is in flight at
+                  # shutdown. Output files in ``MEDIA_DIR/subagent_out/``
+                  # are intentionally kept (Node may still need them).
+                  try:
+                    cleanup_input_staging(session_id)
+                  except Exception as cleanup_err:  # pylint: disable=broad-except
+                    logger.warning(
+                      "execute_subtask: input staging cleanup failed session=%s: %s",
+                      session_id,
+                      cleanup_err,
+                      extra={"chat_id": chat_id},
+                    )
               except asyncio.CancelledError:
                 raise
               except Exception as bg_err:  # pylint: disable=broad-except
