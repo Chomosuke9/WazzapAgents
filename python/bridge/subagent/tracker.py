@@ -36,23 +36,45 @@ class SubTaskTracker:
     self._active[task.session_id] = task
     self._history.setdefault(task.chat_id, deque(maxlen=50))
 
-  def update_progress(self, session_id: str, step: str, detail: str) -> None:
+  def update_progress(
+    self,
+    session_id: str,
+    step: str,
+    detail: str,
+    reason: Optional[str] = None,
+  ) -> None:
     task = self._active.get(session_id)
     if task is None:
       return
-    # Hard cap the detail length — we cannot trust the upstream cap to hold
-    # if SUBAGENT_PROGRESS_DETAIL_MAX_CHARS gets tightened on this side.
+    # Hard cap both the detail and reason — we cannot trust the upstream
+    # cap to hold if SUBAGENT_PROGRESS_DETAIL_MAX_CHARS gets tightened on
+    # this side.
     detail = _truncate(detail, SUBAGENT_PROGRESS_DETAIL_MAX_CHARS) or ""
-    # Skip duplicate: if the last entry has identical step+detail, ignore
+    reason = _truncate(reason, SUBAGENT_PROGRESS_DETAIL_MAX_CHARS)
+    # Skip duplicate: if the last entry has identical step+detail+reason, ignore
     if task.progress:
       last = task.progress[-1]
-      if last.step == step and last.detail == detail:
+      if last.step == step and last.detail == detail and last.reason == reason:
         return
     task.progress.append(ProgressEntry(
       step=step,
       detail=detail,
       timestamp=time.time(),
+      reason=reason,
     ))
+
+  @staticmethod
+  def _render_progress_entry(entry: "ProgressEntry") -> str:
+    """Render a progress entry for the active-task context block.
+
+    Prefers ``"<step>: <reason>"`` when ``reason`` is populated (the new
+    WazzapSubAgents native-tool-call format); falls back to
+    ``"<step>: <detail>"`` for older sub-agents that only sent ``detail``.
+    """
+    reason = (entry.reason or "").strip()
+    if reason:
+      return f"{entry.step}: {reason}"
+    return f"{entry.step}: {entry.detail}"
 
   def finalize(self, session_id: str, result: dict) -> None:
     task = self._active.pop(session_id, None)
@@ -72,6 +94,15 @@ class SubTaskTracker:
         return task
     return None
 
+  # Bounds for the active-task context block. The progress deque can hold
+  # up to 100 entries (see SubTask.progress), each with a ~500 char detail
+  # — that's potentially 50 KB if rendered raw, which would blow LLM2's
+  # context window every turn while a sub-agent is running. We render
+  # only the most recent ``_FORMAT_CONTEXT_MAX_PROGRESS`` entries and cap
+  # each rendered line to ``_FORMAT_CONTEXT_MAX_PROGRESS_DETAIL`` chars.
+  _FORMAT_CONTEXT_MAX_PROGRESS = 5
+  _FORMAT_CONTEXT_MAX_PROGRESS_DETAIL = 200
+
   def format_context(self, chat_id: str) -> str | None:
     task = self.get_active_for_chat(chat_id)
     if task is None:
@@ -88,10 +119,26 @@ class SubTaskTracker:
     lines.append(f"- Running for: {elapsed_text}")
 
     if task.progress:
+      total = len(task.progress)
+      # ``deque`` does not support negative slicing directly, so materialise
+      # the last N entries via ``list``.
+      tail = list(task.progress)[-self._FORMAT_CONTEXT_MAX_PROGRESS:]
+      omitted = total - len(tail)
       lines.append("")
-      lines.append("Progress so far:")
-      for entry in task.progress:
-        lines.append(f"- {entry.step}: {entry.detail}")
+      header = "Progress so far"
+      if omitted > 0:
+        header += f" (showing last {len(tail)} of {total})"
+      lines.append(f"{header}:")
+      for entry in tail:
+        # ``entry.detail`` already carries the full payload (including
+        # ``reason`` from WazzapSubAgents). Prefer a clean
+        # "<step>: <reason>" rendering when ``reason`` is available so
+        # the bridge surfaces *intent* rather than an opaque blob; fall
+        # back to ``detail`` otherwise.
+        rendered = self._render_progress_entry(entry)
+        if len(rendered) > self._FORMAT_CONTEXT_MAX_PROGRESS_DETAIL:
+          rendered = rendered[: self._FORMAT_CONTEXT_MAX_PROGRESS_DETAIL - 1] + "…"
+        lines.append(f"- {rendered}")
 
     lines.append("")
     lines.append("Rules while a sub-agent is in flight:")

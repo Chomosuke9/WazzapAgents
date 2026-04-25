@@ -11,6 +11,10 @@ class ProgressEntry:
   step: str
   detail: str
   timestamp: float
+  # Short, human-readable explanation of WHY the step ran. Populated by
+  # WazzapSubAgents starting from the native-tool-call refactor — older
+  # sub-agents may omit it, so callers must treat it as optional.
+  reason: Optional[str] = None
 
 
 @dataclass

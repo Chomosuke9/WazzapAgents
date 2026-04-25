@@ -403,76 +403,6 @@ def _guess_mime_from_path(file_path: str) -> str:
   return "image/jpeg"
 
 
-def _build_file_catalog_for_chat(
-  media_paths_by_chat: dict,
-  chat_id: str,
-  max_items: int = 8,
-  max_age_hours: float = 24.0,
-  max_chars: int = 800,
-) -> str | None:
-  """Build a compact catalog of recently received file attachments for this chat.
-
-  Filters by recency (default 24h) and enforces a character budget
-  (default 800 chars) to avoid bloating the LLM2 token window.
-  """
-  chat_store = media_paths_by_chat.get(chat_id)
-  if not chat_store:
-    return None
-
-  cutoff_ts = time.time() - (max_age_hours * 3600)
-
-  # Flatten all stored attachments, newest first (dict iteration order in Python 3.7+)
-  entries: list[dict] = []
-  for ctx_id, atts in reversed(list(chat_store.items())):
-    for att in atts:
-      if not isinstance(att, dict):
-        continue
-      p = att.get("path")
-      if not p or not os.path.isfile(p):
-        continue
-      received_at = att.get("received_at") or 0
-      if received_at < cutoff_ts:
-        continue
-      entries.append({
-        "path": p,
-        "kind": att.get("kind", "unknown"),
-        "file_name": att.get("fileName") or os.path.basename(p),
-        "context_msg_id": ctx_id,
-      })
-
-  if not entries:
-    return None
-
-  # Deduplicate by path, keep newest
-  seen_paths: set[str] = set()
-  deduped: list[dict] = []
-  for entry in entries:
-    if entry["path"] in seen_paths:
-      continue
-    seen_paths.add(entry["path"])
-    deduped.append(entry)
-
-  lines: list[str] = []
-  lines.append("## Available files")
-  lines.append("Use exact `path` values for `input_files` in `execute_subtask`.")
-  lines.append("")
-
-  for entry in deduped[:max_items]:
-    line = (
-      f'- [{entry["kind"]}] `{entry["path"]}`'
-      f' (name: {entry["file_name"]})'
-    )
-    # Stop if adding this line would exceed the character budget
-    if sum(len(l) for l in lines) + len(line) + 1 > max_chars:
-      break
-    lines.append(line)
-
-  if len(lines) <= 3:
-    return None
-
-  return "\n".join(lines)
-
-
 def _resolve_sticker_media(
   media_paths_by_chat: dict,
   payload: dict,
@@ -524,6 +454,295 @@ class PendingChat:
   prefix_interrupt: asyncio.Event = field(default_factory=asyncio.Event)
   task: asyncio.Task | None = None
   lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+async def _deliver_subagent_result(
+  *,
+  ws,
+  session_id: str,
+  chat_id: str,
+  history: deque,
+  current,
+  current_payload: dict,
+  group_description: str | None,
+  db_prompt: str | None,
+  chat_type: str | None,
+  bot_is_admin: bool,
+  bot_is_super_admin: bool,
+  fallback_reply_to: str | None,
+  allowed_context_ids: set,
+  record_stat_fn,
+) -> None:
+  """Stage sub-agent outputs, re-invoke LLM2, and dispatch the resulting
+  actions for a finalised sub-agent task.
+
+  This is the second half of the ``execute_subtask`` flow. The first half
+  (submit + register completion event) runs inline in the action loop;
+  this half runs from a background task spawned in
+  ``process_message_batch`` so the per-chat lock is no longer held while
+  the sub-agent is in flight. The caller is expected to hold the per-chat
+  lock for the duration of this call.
+  """
+  # Find the finalised task for THIS session_id (not just the chat's
+  # most recent finalised entry). With the chat unlocked during the
+  # sub-agent wait, a second sub-task could in principle have been
+  # started and finished in the same chat between the wait completing
+  # and the lock being re-acquired — addressing the right session keeps
+  # the result delivery correct in that edge case.
+  final_task = None
+  finalized_history = subagent_tracker._history.get(chat_id) or []
+  for candidate in reversed(finalized_history):
+    if candidate.session_id == session_id:
+      final_task = candidate
+      break
+
+  staged_outputs: StagedOutputs = StagedOutputs(staged=[], skipped=[])
+  subagent_result_block: str | None = None
+  if final_task is not None:
+    if final_task.status == "completed":
+      raw_paths = final_task.result.get("output_files") or []
+      if isinstance(raw_paths, list) and raw_paths:
+        staged_outputs = stage_output_files(session_id, raw_paths)
+        if staged_outputs.skipped:
+          logger.warning(
+            "execute_subtask: skipped %d output file(s) session=%s",
+            len(staged_outputs.skipped),
+            session_id,
+            extra={
+              "chat_id": chat_id,
+              "skipped": [
+                {"name": s.name, "reason": s.reason}
+                for s in staged_outputs.skipped
+              ],
+            },
+          )
+    file_list_text = format_file_list(
+      staged_outputs.staged, staged_outputs.skipped,
+    )
+    system_lines = [
+      "[SUBTASK FINISHED]",
+      f"Result: {final_task.report or 'No report'}",
+      f"Success: {final_task.status == 'completed'}",
+    ]
+    if file_list_text:
+      system_lines.append("")
+      system_lines.append(file_list_text)
+    subtask_finished_text = "\n".join(system_lines)
+    history.append(WhatsAppMessage(
+      timestamp_ms=int(time.time() * 1000),
+      sender="system",
+      text=subtask_finished_text,
+      role="system",
+    ))
+    attachments_clause = (
+      "Output files (if any) are auto-attached after your "
+      "reply; do NOT mention paths or upload them yourself."
+    )
+    subagent_result_block = (
+      "## Sub-Agent result for this turn (deliver this NOW)\n"
+      f"{subtask_finished_text}\n\n"
+      "Instructions for this re-invoke:\n"
+      "- Send EXACTLY ONE `reply_message` summarising the report "
+      "above for the user, in their language and WhatsApp formatting.\n"
+      "- DO NOT call `execute_subtask` again on this turn.\n"
+      "- DO NOT repeat \"oke aku cek\" / \"siap, aku cek dokumennya\" or "
+      "any other pre-task acknowledgement — the task is finished, "
+      "deliver the actual result.\n"
+      f"- {attachments_clause}\n"
+      "- If the sub-agent reported failure, tell the user briefly "
+      "what failed and (only if useful) suggest the next step."
+    )
+  else:
+    logger.warning(
+      "execute_subtask: no finalised task found for session=%s chat=%s",
+      session_id,
+      chat_id,
+      extra={"chat_id": chat_id, "session_id": session_id},
+    )
+
+  reinvoke_history = list(history)
+  reply_msg = None
+  try:
+    llm2_reinvoke_started = time.perf_counter()
+    async with typing_indicator(ws, chat_id):
+      reply_msg = await generate_reply(
+        reinvoke_history,
+        current,
+        current_payload=current_payload,
+        group_description=group_description,
+        prompt_override=db_prompt,
+        chat_type=chat_type,
+        bot_is_admin=bot_is_admin,
+        bot_is_super_admin=bot_is_super_admin,
+        allow_subagent=False,
+        subagent_result_block=subagent_result_block,
+      )
+    llm2_reinvoke_ms = int((time.perf_counter() - llm2_reinvoke_started) * 1000)
+    logger.info(
+      "execute_subtask: re-invoke LLM2 completed in %dms session=%s",
+      llm2_reinvoke_ms,
+      session_id,
+      extra={"chat_id": chat_id},
+    )
+  except Exception as reinvoke_err:  # pylint: disable=broad-except
+    logger.exception(
+      "execute_subtask: re-invoke LLM2 failed session=%s: %s",
+      session_id,
+      reinvoke_err,
+      extra={"chat_id": chat_id},
+    )
+    reply_msg = None
+
+  reinvoke_actions: list[dict] = []
+  if reply_msg is not None:
+    _tool_calls = getattr(reply_msg, 'tool_calls', None) or []
+    if _tool_calls:
+      reinvoke_actions = _extract_actions_from_tool_calls(
+        _tool_calls,
+        fallback_reply_to=fallback_reply_to,
+        allowed_context_ids=allowed_context_ids,
+      )
+    else:
+      reinvoke_actions = _extract_actions(
+        reply_msg,
+        fallback_reply_to=fallback_reply_to,
+        allowed_context_ids=allowed_context_ids,
+      )
+
+  # Strict safety net: if the re-invoke produced no usable
+  # ``send_message``, fall back to sending the raw report so the user at
+  # least sees the result. Without this, a flaky LLM2 call after a
+  # successful sub-agent run leaves the user staring at "oke aku cek
+  # dulu" forever.
+  has_reinvoke_text = any(
+    a.get("type") == "send_message" and (a.get("text") or "").strip()
+    for a in reinvoke_actions
+  )
+  if not has_reinvoke_text and final_task is not None:
+    fallback_text = (
+      final_task.report
+      or ("Sub-agent failed without a report."
+          if final_task.status != "completed"
+          else "(Sub-agent finished but produced no report.)")
+    )
+    logger.warning(
+      "execute_subtask: re-invoke produced no reply; falling back to raw report",
+      extra={
+        "chat_id": chat_id,
+        "session_id": session_id,
+        "had_reply_msg": reply_msg is not None,
+        "reinvoke_action_count": len(reinvoke_actions),
+      },
+    )
+    reinvoke_actions = [{
+      "type": "send_message",
+      "text": fallback_text,
+      "replyTo": fallback_reply_to,
+    }]
+
+  for reinvoke_action in reinvoke_actions:
+    reinvoke_type = reinvoke_action.get("type")
+    if reinvoke_type == "send_message":
+      reinvoke_text = reinvoke_action.get("text") or ""
+      # Intentionally skip ``_is_duplicate_reply`` here. The re-invoke is
+      # the *delivery* of the sub-agent result and may legitimately
+      # rephrase the original acknowledgement.
+      request_id = _make_request_id("send")
+      await send_message(
+        ws,
+        chat_id,
+        reinvoke_text,
+        reinvoke_action.get("replyTo"),
+        request_id=request_id,
+      )
+      record_stat_fn(chat_id, "responses_sent")
+      _append_history(
+        history,
+        WhatsAppMessage(
+          timestamp_ms=int(time.time() * 1000),
+          sender=assistant_name(),
+          context_msg_id="pending",
+          sender_ref=assistant_sender_ref(),
+          sender_is_admin=False,
+          text=reinvoke_text or None,
+          media=None,
+          quoted_message_id=_normalize_context_msg_id(reinvoke_action.get("replyTo")),
+          quoted_sender=None,
+          quoted_text=None,
+          quoted_media=None,
+          message_id=f"local-send-{request_id}",
+          role="assistant",
+        ),
+      )
+    elif reinvoke_type == "react_message":
+      await send_react_message(
+        ws,
+        chat_id,
+        reinvoke_action.get("contextMsgId"),
+        reinvoke_action.get("emoji"),
+        request_id=_make_request_id("react"),
+      )
+    elif reinvoke_type == "express_message":
+      reinvoke_expression = str(reinvoke_action.get("expression") or "").strip()
+      if reinvoke_expression:
+        sticker_path = resolve_sticker(reinvoke_expression)
+        if sticker_path:
+          await send_sticker(
+            ws,
+            chat_id,
+            sticker_path,
+            reinvoke_action.get("contextMsgId"),
+            request_id=_make_request_id("sticker"),
+          )
+          record_stat_fn(chat_id, "stickers_sent")
+        else:
+          await send_react_message(
+            ws,
+            chat_id,
+            reinvoke_action.get("contextMsgId"),
+            reinvoke_expression,
+            request_id=_make_request_id("react"),
+          )
+    elif reinvoke_type == "delete_message":
+      await send_delete_message(
+        ws,
+        chat_id,
+        reinvoke_action.get("contextMsgId"),
+        request_id=_make_request_id("delete"),
+      )
+    elif reinvoke_type == "kick_member":
+      await send_kick_member(
+        ws,
+        chat_id,
+        reinvoke_action.get("targets") or [],
+        request_id=_make_request_id("kick"),
+        mode=reinvoke_action.get("mode") or "partial_success",
+        auto_reply_anchor=bool(reinvoke_action.get("autoReplyAnchor", False)),
+      )
+
+  # Auto-send sub-agent output files as separate WhatsApp messages, one
+  # bubble per file with no caption. Sent after the LLM2 text reply so
+  # the conversation reads: text first, then files.
+  for staged_file in staged_outputs.staged:
+    try:
+      await send_attachment(
+        ws,
+        chat_id,
+        staged_file.path,
+        staged_file.kind,
+        request_id=_make_request_id("subagent_attach"),
+        file_name=staged_file.name,
+        mime=staged_file.mime,
+      )
+    except Exception as attach_err:  # pylint: disable=broad-except
+      logger.exception(
+        "execute_subtask: send_attachment failed session=%s file=%s: %s",
+        session_id,
+        staged_file.name,
+        attach_err,
+        extra={"chat_id": chat_id},
+      )
+      continue
 
 
 async def handle_socket(ws):
@@ -1078,15 +1297,14 @@ async def handle_socket(ws):
           if subagent_context is None:
             subagent_context = subagent_tracker.format_recent_finished(chat_id)
 
-        # Inject file catalog into LLM2 history so LLM knows available files
-        file_catalog = _build_file_catalog_for_chat(media_paths_by_chat, chat_id)
-        if file_catalog:
-          llm2_history.append(WhatsAppMessage(
-            timestamp_ms=int(time.time() * 1000),
-            sender="system",
-            text=file_catalog,
-            role="system",
-          ))
+        # NOTE: an "Available files" / file catalogue used to be injected
+        # here, but it was unused — LLM2 references attachments by their
+        # 6-digit ``contextMsgId`` (which is already in the rendered
+        # history), so the path-based catalogue only chewed through the
+        # context window without changing model behaviour. The
+        # ``execute_subtask`` tool resolves contextMsgIds to file paths
+        # automatically on the bridge side, so the model never needs to
+        # see the raw paths.
 
         # Keep typing indicator alive while LLM2 generates (refreshes every 8s)
         llm2_started = time.perf_counter()
@@ -1310,6 +1528,28 @@ async def handle_socket(ws):
             action_counts[action_type] += 1
             continue
           if action_type == "execute_subtask":
+            # Reject duplicate execute_subtask while another sub-agent task
+            # is already in flight for this chat. The "Active sub-agent
+            # task" context block (see SubTaskTracker.format_context) tells
+            # LLM2 not to re-spawn, but a server-side guard means a flaky
+            # model that ignores the prompt cannot fork the same chat into
+            # parallel sub-agents. Without this, refactoring the wait into
+            # a background task (so the chat is no longer locked while the
+            # sub-agent runs) would let bursts arriving mid-task spawn
+            # concurrent sub-agents.
+            existing_task = subagent_tracker.get_active_for_chat(chat_id)
+            if existing_task is not None:
+              logger.warning(
+                "execute_subtask: dropped because another sub-agent is "
+                "already active for chat=%s active_session=%s incoming_instruction=%s",
+                chat_id,
+                existing_task.session_id,
+                str(action.get("instruction") or "")[:120],
+                extra={"chat_id": chat_id},
+              )
+              action_counts[action_type] += 1
+              continue
+
             session_id = f"{chat_id}_{uuid.uuid4().hex[:8]}_{int(time.time())}"
             instruction = action["instruction"]
             ctx_ids = action.get("contextMsgIds", [])
@@ -1360,58 +1600,105 @@ async def handle_socket(ws):
             completion_event = asyncio.Event()
             subagent_webhook.register_completion_event(session_id, completion_event)
 
+            submit_failed = False
             try:
+              await subagent_client.submit(session_id, instruction, input_files)
+            except SubAgentSubmitError as submit_err:
+              logger.error(
+                "execute_subtask: submit failed session=%s status=%s: %s",
+                session_id,
+                submit_err.status_code,
+                submit_err,
+                extra={"chat_id": chat_id, "session_id": session_id},
+              )
+              subagent_webhook.unregister_completion_event(session_id)
+              subagent_tracker.finalize(session_id, {
+                "success": False,
+                "report": f"Failed to submit task to sub-agent: {submit_err}",
+              })
+              submit_failed = True
+            except Exception as submit_err:
+              logger.exception(
+                "execute_subtask: submit failed session=%s: %s",
+                session_id,
+                submit_err,
+                extra={"chat_id": chat_id},
+              )
+              subagent_webhook.unregister_completion_event(session_id)
+              subagent_tracker.finalize(session_id, {
+                "success": False,
+                "report": f"Failed to submit task to sub-agent: {submit_err}",
+              })
+              submit_failed = True
+
+            if submit_failed:
+              # No webhook will arrive; trip the event immediately so the
+              # background task wakes up and delivers the failure report
+              # without waiting out the full SUBAGENT_WAIT_TIMEOUT_S.
+              completion_event.set()
+
+            # Capture closure variables that the background task needs.
+            # We capture by argument default to avoid late-binding bugs if
+            # the loop processes more actions before the task is scheduled.
+            _bg_session_id = session_id
+            _bg_chat_id = chat_id
+            _bg_completion_event = completion_event
+            _bg_history = history
+            _bg_lock = lock
+            _bg_current = current
+            _bg_current_payload = llm2_payload
+            _bg_group_description = group_description
+            _bg_db_prompt = db_prompt
+            _bg_chat_type = chat_type
+            _bg_bot_is_admin = bot_is_admin
+            _bg_bot_is_super_admin = bot_is_super_admin
+            _bg_fallback_reply_to = fallback_reply_to
+            _bg_allowed_context_ids = allowed_context_ids
+
+            async def _run_subagent_post_processing(
+              session_id: str = _bg_session_id,
+              chat_id: str = _bg_chat_id,
+              completion_event: asyncio.Event = _bg_completion_event,
+              history=_bg_history,
+              lock: asyncio.Lock = _bg_lock,
+              current=_bg_current,
+              current_payload=_bg_current_payload,
+              group_description=_bg_group_description,
+              db_prompt=_bg_db_prompt,
+              chat_type=_bg_chat_type,
+              bot_is_admin=_bg_bot_is_admin,
+              bot_is_super_admin=_bg_bot_is_super_admin,
+              fallback_reply_to=_bg_fallback_reply_to,
+              allowed_context_ids=_bg_allowed_context_ids,
+            ) -> None:
+              """Wait for the sub-agent to finish, then re-invoke LLM2 and
+              deliver the result.
+
+              Runs as a background ``asyncio.Task`` so the per-chat lock is
+              released as soon as the original action loop exits. New
+              bursts arriving in the same chat while the sub-agent is
+              running are processed normally (LLM2 sees the active-task
+              context block from ``SubTaskTracker.format_context``).
+              """
               try:
-                await subagent_client.submit(session_id, instruction, input_files)
-              except SubAgentSubmitError as submit_err:
-                # Submit retried internally and still failed — surface the
-                # error immediately instead of waiting on a webhook that will
-                # never come.
-                logger.error(
-                  "execute_subtask: submit failed session=%s status=%s: %s",
-                  session_id,
-                  submit_err.status_code,
-                  submit_err,
-                  extra={"chat_id": chat_id, "session_id": session_id},
-                )
-                subagent_webhook.unregister_completion_event(session_id)
-                subagent_tracker.finalize(session_id, {
-                  "success": False,
-                  "report": f"Failed to submit task to sub-agent: {submit_err}",
-                })
-              except Exception as submit_err:
-                logger.exception(
-                  "execute_subtask: submit failed session=%s: %s",
-                  session_id,
-                  submit_err,
-                  extra={"chat_id": chat_id},
-                )
-                subagent_webhook.unregister_completion_event(session_id)
-                subagent_tracker.finalize(session_id, {
-                  "success": False,
-                  "report": f"Failed to submit task to sub-agent: {submit_err}",
-                })
-              else:
-                # Submit succeeded — wait for webhook, releasing the per-chat
-                # lock so other bursts in the same chat are not blocked by an
-                # in-flight sub-agent task. Re-acquire before mutating shared
-                # state (history, send actions).
-                lock.release()
                 try:
+                  # Wait for the sub-agent to finish — the webhook will set
+                  # ``completion_event``. On submit failure the event was
+                  # already set above so this returns immediately.
                   try:
-                    await asyncio.wait_for(completion_event.wait(), timeout=SUBAGENT_WAIT_TIMEOUT_S)
+                    await asyncio.wait_for(
+                      completion_event.wait(), timeout=SUBAGENT_WAIT_TIMEOUT_S
+                    )
                   except asyncio.TimeoutError:
                     logger.warning(
                       "execute_subtask: webhook timeout session=%s, falling back to polling",
                       session_id,
                       extra={"chat_id": chat_id},
                     )
-                    # Cleanup completion event to prevent memory leak
                     subagent_webhook.unregister_completion_event(session_id)
-                    # Fallback polling
                     try:
                       result = await subagent_client.poll_result(session_id)
-                    except Exception as poll_err:
+                    except Exception as poll_err:  # pylint: disable=broad-except
                       logger.exception(
                         "execute_subtask: poll failed session=%s: %s",
                         session_id,
@@ -1426,313 +1713,57 @@ async def handle_socket(ws):
                         "success": False,
                         "report": "Timeout waiting for sub-agent result",
                       })
+
+                  # Acquire the per-chat lock for history mutation + send.
+                  # Other bursts arriving on this chat during the wait above
+                  # have already been processed (LLM2 saw the active-task
+                  # context block telling it not to re-acknowledge or
+                  # re-spawn); now we deliver the report.
+                  async with lock:
+                    await _deliver_subagent_result(
+                      ws=ws,
+                      session_id=session_id,
+                      chat_id=chat_id,
+                      history=history,
+                      current=current,
+                      current_payload=current_payload,
+                      group_description=group_description,
+                      db_prompt=db_prompt,
+                      chat_type=chat_type,
+                      bot_is_admin=bot_is_admin,
+                      bot_is_super_admin=bot_is_super_admin,
+                      fallback_reply_to=fallback_reply_to,
+                      allowed_context_ids=allowed_context_ids,
+                      record_stat_fn=record_stat,
+                    )
                 finally:
-                  await lock.acquire()
-            finally:
-              # Best-effort cleanup of the per-session input staging dir
-              # so we don't leak copies of WhatsApp media on disk regardless
-              # of whether submit succeeded, raised SubAgentSubmitError, or
-              # raised any other Exception. Output files staged into
-              # ``MEDIA_DIR/subagent_out/`` are kept — the Node side may
-              # still need them when actually dispatching the attachment.
-              try:
-                cleanup_input_staging(session_id)
-              except Exception as cleanup_err:  # pylint: disable=broad-except
-                logger.warning(
-                  "execute_subtask: input staging cleanup failed session=%s: %s",
-                  session_id,
-                  cleanup_err,
-                  extra={"chat_id": chat_id},
-                )
-
-            # Inject result into history as system message.
-            # If the sub-agent succeeded and produced output files, stage them
-            # into MEDIA_DIR so the Node sandbox accepts them, then list the
-            # staged files in the system message so LLM2 can reference them
-            # naturally in its text reply. The actual attachment dispatch
-            # happens after the LLM2 re-invoke below.
-            # Truncation of ``final_task.report`` is already applied by the
-            # tracker (SUBAGENT_REPORT_MAX_CHARS) so the system message
-            # cannot blow up future LLM2 turns.
-            staged_outputs: StagedOutputs = StagedOutputs(staged=[], skipped=[])
-            subagent_result_block: str | None = None
-            finalized = subagent_tracker._history.get(chat_id)
-            if finalized:
-              final_task = finalized[-1]
-              if final_task.status == "completed":
-                raw_paths = final_task.result.get("output_files") or []
-                if isinstance(raw_paths, list) and raw_paths:
-                  staged_outputs = stage_output_files(session_id, raw_paths)
-                  if staged_outputs.skipped:
+                  # Always best-effort clean up the per-session input
+                  # staging dir, including on ``asyncio.CancelledError``
+                  # during shutdown — otherwise WhatsApp media copies
+                  # leak on disk every time a sub-agent is in flight at
+                  # shutdown. Output files in ``MEDIA_DIR/subagent_out/``
+                  # are intentionally kept (Node may still need them).
+                  try:
+                    cleanup_input_staging(session_id)
+                  except Exception as cleanup_err:  # pylint: disable=broad-except
                     logger.warning(
-                      "execute_subtask: skipped %d output file(s) session=%s",
-                      len(staged_outputs.skipped),
+                      "execute_subtask: input staging cleanup failed session=%s: %s",
                       session_id,
-                      extra={
-                        "chat_id": chat_id,
-                        "skipped": [
-                          {"name": s.name, "reason": s.reason}
-                          for s in staged_outputs.skipped
-                        ],
-                      },
+                      cleanup_err,
+                      extra={"chat_id": chat_id},
                     )
-              file_list_text = format_file_list(
-                staged_outputs.staged, staged_outputs.skipped,
-              )
-              system_lines = [
-                "[SUBTASK FINISHED]",
-                f"Result: {final_task.report or 'No report'}",
-                f"Success: {final_task.status == 'completed'}",
-              ]
-              if file_list_text:
-                system_lines.append("")
-                system_lines.append(file_list_text)
-              subtask_finished_text = "\n".join(system_lines)
-              # Persist in chat history so subsequent bursts can reference
-              # the report. ``format_history`` renders ``role="system"``
-              # messages with a clearly-distinct ``SYSTEM:`` prefix so the
-              # model doesn't confuse them with user content.
-              history.append(WhatsAppMessage(
-                timestamp_ms=int(time.time() * 1000),
-                sender="system",
-                text=subtask_finished_text,
-                role="system",
-              ))
-              # Build a dedicated, top-priority context block for the
-              # post-task LLM2 re-invoke. This is what reliably stops the
-              # bot from repeating the pre-task acknowledgement instead of
-              # delivering the actual report — relying on the [SUBTASK
-              # FINISHED] line being noticed inside the chat transcript
-              # is not enough.
-              attachments_clause = (
-                "Output files (if any) are auto-attached after your "
-                "reply; do NOT mention paths or upload them yourself."
-              )
-              subagent_result_block = (
-                "## Sub-Agent result for this turn (deliver this NOW)\n"
-                f"{subtask_finished_text}\n\n"
-                "Instructions for this re-invoke:\n"
-                "- Send EXACTLY ONE `reply_message` summarising the report "
-                "above for the user, in their language and WhatsApp formatting.\n"
-                "- DO NOT call `execute_subtask` again on this turn.\n"
-                "- DO NOT repeat \"oke aku cek\" / \"siap, aku cek dokumennya\" or "
-                "any other pre-task acknowledgement — the task is finished, "
-                "deliver the actual result.\n"
-                f"- {attachments_clause}\n"
-                "- If the sub-agent reported failure, tell the user briefly "
-                "what failed and (only if useful) suggest the next step."
-              )
-
-            # Re-invoke LLM2 with the subtask result block injected as a
-            # dedicated prompt slot (``subagent_result_block``).
-            # allow_subagent=False prevents the model from immediately
-            # spawning another sub-task in the same turn (infinite loop).
-            # The re-invoke history is the live ``history`` (which now
-            # contains the [SUBTASK FINISHED] system message) plus the
-            # file_catalog reminder so the LLM still knows which files
-            # are available to reference.
-            reinvoke_history = list(history)
-            if file_catalog:
-              reinvoke_history.append(WhatsAppMessage(
-                timestamp_ms=int(time.time() * 1000),
-                sender="system",
-                text=file_catalog,
-                role="system",
-              ))
-            try:
-              llm2_reinvoke_started = time.perf_counter()
-              async with typing_indicator(ws, chat_id):
-                reply_msg = await generate_reply(
-                  reinvoke_history,
-                  current,
-                  current_payload=llm2_payload,
-                  group_description=group_description,
-                  prompt_override=db_prompt,
-                  chat_type=chat_type,
-                  bot_is_admin=bot_is_admin,
-                  bot_is_super_admin=bot_is_super_admin,
-                  allow_subagent=False,
-                  subagent_result_block=subagent_result_block,
-                )
-              llm2_reinvoke_ms = int((time.perf_counter() - llm2_reinvoke_started) * 1000)
-              logger.info(
-                "execute_subtask: re-invoke LLM2 completed in %dms session=%s",
-                llm2_reinvoke_ms,
-                session_id,
-                extra={"chat_id": chat_id},
-              )
-            except Exception as reinvoke_err:
-              logger.exception(
-                "execute_subtask: re-invoke LLM2 failed session=%s: %s",
-                session_id,
-                reinvoke_err,
-                extra={"chat_id": chat_id},
-              )
-              reply_msg = None
-
-            # Process the re-invoked LLM2 response actions
-            reinvoke_actions: list[dict] = []
-            if reply_msg is not None:
-              _tool_calls = getattr(reply_msg, 'tool_calls', None) or []
-              if _tool_calls:
-                reinvoke_actions = _extract_actions_from_tool_calls(
-                  _tool_calls,
-                  fallback_reply_to=fallback_reply_to,
-                  allowed_context_ids=allowed_context_ids,
-                )
-              else:
-                reinvoke_actions = _extract_actions(
-                  reply_msg,
-                  fallback_reply_to=fallback_reply_to,
-                  allowed_context_ids=allowed_context_ids,
-                )
-            # Strict safety net: if the re-invoke produced no usable
-            # `send_message`, fall back to sending the raw report so the
-            # user at least sees the result. Without this, a flaky LLM2
-            # call after a successful sub-agent run leaves the user
-            # staring at "oke aku cek dulu" forever — exactly the bug
-            # being fixed here.
-            has_reinvoke_text = any(
-              a.get("type") == "send_message" and (a.get("text") or "").strip()
-              for a in reinvoke_actions
-            )
-            if not has_reinvoke_text and finalized:
-              fallback_text = (
-                final_task.report
-                or ("Sub-agent failed without a report."
-                    if final_task.status != "completed"
-                    else "(Sub-agent finished but produced no report.)")
-              )
-              logger.warning(
-                "execute_subtask: re-invoke produced no reply; falling back to raw report",
-                extra={
-                  "chat_id": chat_id,
-                  "session_id": session_id,
-                  "had_reply_msg": reply_msg is not None,
-                  "reinvoke_action_count": len(reinvoke_actions),
-                },
-              )
-              reinvoke_actions = [{
-                "type": "send_message",
-                "text": fallback_text,
-                "replyTo": fallback_reply_to,
-              }]
-
-            for reinvoke_action in reinvoke_actions:
-              reinvoke_type = reinvoke_action.get("type")
-              if reinvoke_type == "send_message":
-                reinvoke_text = reinvoke_action.get("text") or ""
-                # Intentionally skip ``_is_duplicate_reply`` here. The
-                # re-invoke is the *delivery* of the sub-agent result and
-                # may legitimately rephrase the original acknowledgement
-                # (e.g. the bot said "oke aku cek dulu ya" pre-task; the
-                # post-task reply could start with "oke, aku udah cek" or
-                # any other near-duplicate signature). Letting the dedup
-                # window swallow it is exactly the bug that made the
-                # sub-agent report never reach the user.
-                request_id = _make_request_id("send")
-                await send_message(
-                  ws,
-                  chat_id,
-                  reinvoke_text,
-                  reinvoke_action.get("replyTo"),
-                  request_id=request_id,
-                )
-                record_stat(chat_id, "responses_sent")
-                _append_history(
-                  history,
-                  WhatsAppMessage(
-                    timestamp_ms=int(time.time() * 1000),
-                    sender=assistant_name(),
-                    context_msg_id="pending",
-                    sender_ref=assistant_sender_ref(),
-                    sender_is_admin=False,
-                    text=reinvoke_text or None,
-                    media=None,
-                    quoted_message_id=_normalize_context_msg_id(reinvoke_action.get("replyTo")),
-                    quoted_sender=None,
-                    quoted_text=None,
-                    quoted_media=None,
-                    message_id=f"local-send-{request_id}",
-                    role="assistant",
-                  ),
-                )
-                action_counts["send_message"] += 1
-              elif reinvoke_type == "react_message":
-                await send_react_message(
-                  ws,
-                  chat_id,
-                  reinvoke_action.get("contextMsgId"),
-                  reinvoke_action.get("emoji"),
-                  request_id=_make_request_id("react"),
-                )
-                action_counts["react_message"] += 1
-              elif reinvoke_type == "express_message":
-                reinvoke_expression = str(reinvoke_action.get("expression") or "").strip()
-                if reinvoke_expression:
-                  sticker_path = resolve_sticker(reinvoke_expression)
-                  if sticker_path:
-                    await send_sticker(
-                      ws,
-                      chat_id,
-                      sticker_path,
-                      reinvoke_action.get("contextMsgId"),
-                      request_id=_make_request_id("sticker"),
-                    )
-                    record_stat(chat_id, "stickers_sent")
-                  else:
-                    await send_react_message(
-                      ws,
-                      chat_id,
-                      reinvoke_action.get("contextMsgId"),
-                      reinvoke_expression,
-                      request_id=_make_request_id("react"),
-                    )
-                action_counts["express_message"] += 1
-              elif reinvoke_type == "delete_message":
-                await send_delete_message(
-                  ws,
-                  chat_id,
-                  reinvoke_action.get("contextMsgId"),
-                  request_id=_make_request_id("delete"),
-                )
-                action_counts["delete_message"] += 1
-              elif reinvoke_type == "kick_member":
-                await send_kick_member(
-                  ws,
-                  chat_id,
-                  reinvoke_action.get("targets") or [],
-                  request_id=_make_request_id("kick"),
-                  mode=reinvoke_action.get("mode") or "partial_success",
-                  auto_reply_anchor=bool(reinvoke_action.get("autoReplyAnchor", False)),
-                )
-                action_counts["kick_member"] += 1
-
-            # Auto-send sub-agent output files as separate WhatsApp messages,
-            # one bubble per file with no caption. Sent after the LLM2 text
-            # reply so the conversation reads: text first, then files.
-            for staged_file in staged_outputs.staged:
-              try:
-                await send_attachment(
-                  ws,
-                  chat_id,
-                  staged_file.path,
-                  staged_file.kind,
-                  request_id=_make_request_id("subagent_attach"),
-                  file_name=staged_file.name,
-                  mime=staged_file.mime,
-                )
-              except Exception as attach_err:
+              except asyncio.CancelledError:
+                raise
+              except Exception as bg_err:  # pylint: disable=broad-except
                 logger.exception(
-                  "execute_subtask: send_attachment failed session=%s file=%s: %s",
+                  "execute_subtask: background processing failed session=%s: %s",
                   session_id,
-                  staged_file.name,
-                  attach_err,
+                  bg_err,
                   extra={"chat_id": chat_id},
                 )
-                continue
-              action_counts["send_message"] += 1
 
+            bg_task = asyncio.create_task(_run_subagent_post_processing())
+            _track_task(bg_task)
             action_counts[action_type] += 1
             continue
           logger.warning(
