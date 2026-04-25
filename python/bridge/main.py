@@ -189,7 +189,9 @@ try:
   )
   from .subagent.output import (
     StagedOutputs,
+    cleanup_input_staging,
     format_file_list,
+    stage_input_files,
     stage_output_files,
   )
   from .subagent.models import SubTask
@@ -206,7 +208,9 @@ except ImportError:
   )
   from bridge.subagent.output import (  # type: ignore
     StagedOutputs,
+    cleanup_input_staging,
     format_file_list,
+    stage_input_files,
     stage_output_files,
   )
   from bridge.subagent.models import SubTask  # type: ignore
@@ -1294,7 +1298,7 @@ async def handle_socket(ws):
             ctx_ids = action.get("contextMsgIds", [])
 
             # Resolve contextMsgIds -> file paths from stored media
-            input_files: list[str] = []
+            local_input_files: list[str] = []
             chat_store = media_paths_by_chat.get(chat_id, {})
             for cid in ctx_ids:
               atts = chat_store.get(cid)
@@ -1302,20 +1306,34 @@ async def handle_socket(ws):
                 # Use first attachment's path
                 first_path = atts[0].get("path") if isinstance(atts[0], dict) else None
                 if first_path and os.path.isfile(first_path):
-                  input_files.append(first_path)
+                  local_input_files.append(first_path)
               elif isinstance(atts, str) and os.path.isfile(atts):
                 # Legacy single-string storage
-                input_files.append(atts)
+                local_input_files.append(atts)
+
+            # The bridge stores inbound media under MEDIA_DIR (e.g.
+            # ``data/media/...``), but the sub-agent process runs in a
+            # separate container/host that cannot read those paths. Stage
+            # them into the cross-process exchange directory so the paths
+            # we hand to /execute resolve on both sides. See
+            # ``subagent/output.py::input_staging_root`` for the contract.
+            input_files = stage_input_files(session_id, local_input_files)
 
             task = SubTask(session_id=session_id, instruction=instruction, chat_id=chat_id)
             subagent_tracker.register(task)
 
             logger.info(
-              "execute_subtask: submitting session=%s instruction=%s files=%d",
+              "execute_subtask: submitting session=%s instruction=%s files=%d (staged=%d)",
               session_id,
               instruction[:120],
+              len(local_input_files),
               len(input_files),
-              extra={"chat_id": chat_id, "session_id": session_id, "input_files": input_files},
+              extra={
+                "chat_id": chat_id,
+                "session_id": session_id,
+                "local_input_files": local_input_files,
+                "input_files": input_files,
+              },
             )
 
             # IMPORTANT: register the completion event BEFORE submit. If the
@@ -1392,6 +1410,20 @@ async def handle_socket(ws):
                     })
               finally:
                 await lock.acquire()
+                # Best-effort cleanup of the per-session input staging dir
+                # so we don't leak copies of WhatsApp media on disk after
+                # the sub-agent is done with them. Output files staged into
+                # ``MEDIA_DIR/subagent_out/`` are kept — the Node side may
+                # still need them when actually dispatching the attachment.
+                try:
+                  cleanup_input_staging(session_id)
+                except Exception as cleanup_err:  # pylint: disable=broad-except
+                  logger.warning(
+                    "execute_subtask: input staging cleanup failed session=%s: %s",
+                    session_id,
+                    cleanup_err,
+                    extra={"chat_id": chat_id},
+                  )
 
             # Inject result into history as system message.
             # If the sub-agent succeeded and produced output files, stage them

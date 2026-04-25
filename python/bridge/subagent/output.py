@@ -1,8 +1,10 @@
-"""Sub-agent output staging and dispatch helpers.
+"""Sub-agent input/output staging and dispatch helpers.
 
-The sub-agent service writes output files under its own working directory
-(typically `/tmp/work_<session_id>/...`). The Node gateway only allows
-attachments whose real path is inside `MEDIA_DIR` or `STICKERS_DIR` (see
+The sub-agent service writes output files under its per-session workdir
+(default `/storage/subagent_work/<session_id>/...` when running via the
+recommended docker-compose; legacy native runs may use `/tmp/work/...`).
+The Node gateway only allows attachments whose real path is inside
+`MEDIA_DIR` or `STICKERS_DIR` (see
 `src/mediaHandler.js::resolveAllowedAttachmentPath`). To satisfy that sandbox
 without weakening it, we copy each output file into
 
@@ -11,9 +13,19 @@ without weakening it, we copy each output file into
 before dispatching it to WhatsApp. Defense in depth — Node still validates
 the final path.
 
+This module also stages **input** files: WhatsApp media that LLM2 wants the
+sub-agent to operate on first gets copied into
+
+    <SUBAGENT_INPUT_STAGING_DIR>/<session_id>/<basename>
+
+before being passed to `/execute`. The path must be reachable by the
+sub-agent process (in the docker-compose contract, both sides bind-mount
+`/storage` so the path is identical inside and out).
+
 This module:
-  - Stages output files into the sandboxed dir, dropping files that are
+  - Stages output files into the Node sandbox dir, dropping files that are
     missing or larger than ``MAX_FILE_SIZE_BYTES``.
+  - Stages input files into the cross-process exchange dir.
   - Detects the WhatsApp attachment ``kind`` from the file's MIME type.
   - Renders a human-readable file list to embed into the
     ``[SUBTASK FINISHED]`` system message so LLM2 can reference the files
@@ -60,6 +72,20 @@ def _media_dir() -> Path:
 def staging_root() -> Path:
   """Root directory for staged sub-agent outputs (`<MEDIA_DIR>/subagent_out`)."""
   return _media_dir() / "subagent_out"
+
+
+def input_staging_root() -> Path:
+  """Root directory for staged sub-agent **inputs**.
+
+  This must be a path that the sub-agent process can read. The default
+  matches the docker-compose contract (`/storage/subagent_in`); override
+  via the ``SUBAGENT_INPUT_STAGING_DIR`` env var to share a different
+  host directory between the bridge and the sub-agent.
+  """
+  raw = os.getenv("SUBAGENT_INPUT_STAGING_DIR")
+  if raw:
+    return Path(raw).expanduser().resolve()
+  return Path("/storage/subagent_in").resolve()
 
 
 @dataclass(frozen=True)
@@ -214,6 +240,99 @@ def stage_output_files(
     ))
 
   return StagedOutputs(staged=staged, skipped=skipped)
+
+
+def stage_input_files(
+  session_id: str,
+  raw_paths: Iterable[str],
+  *,
+  base_dir: Path | None = None,
+) -> list[str]:
+  """Copy ``raw_paths`` into ``<base_dir>/<session_id>/`` for the sub-agent.
+
+  Returns the list of staged absolute paths in input order, omitting files
+  that are missing / unreadable / oversized. Used to bridge the filesystem
+  gap between the bridge process and a containerised sub-agent: the staged
+  paths must live under a directory both sides have mounted (default
+  ``/storage/subagent_in``; see :func:`input_staging_root`).
+  """
+  if not session_id:
+    logger.warning("stage_input_files called with empty session_id; nothing staged")
+    return []
+
+  paths = [str(p) for p in raw_paths if isinstance(p, (str, os.PathLike))]
+  if not paths:
+    return []
+
+  target_root = (base_dir or input_staging_root()) / session_id
+  try:
+    target_root.mkdir(parents=True, exist_ok=True)
+  except OSError as err:
+    logger.exception(
+      "stage_input_files: failed to create staging dir %s: %s",
+      target_root, err,
+    )
+    return []
+
+  staged_paths: list[str] = []
+  used_names: set[str] = set()
+  for src in paths:
+    name = os.path.basename(src) or "unnamed"
+    if not src or not os.path.exists(src):
+      logger.warning("stage_input_files: source missing, skipping: %s", src)
+      continue
+    if not os.path.isfile(src):
+      logger.warning("stage_input_files: not a regular file, skipping: %s", src)
+      continue
+    try:
+      size = os.path.getsize(src)
+    except OSError as err:
+      logger.warning("stage_input_files: stat failed for %s: %s", src, err)
+      continue
+    if size > MAX_FILE_SIZE_BYTES:
+      logger.warning(
+        "stage_input_files: %s is too large (%s); skipping",
+        src, _format_size(size),
+      )
+      continue
+
+    final_name = name
+    counter = 1
+    while final_name in used_names or (target_root / final_name).exists():
+      stem, ext = os.path.splitext(name)
+      final_name = f"{stem}_{counter}{ext}"
+      counter += 1
+    used_names.add(final_name)
+
+    dest = target_root / final_name
+    try:
+      shutil.copyfile(src, dest)
+    except OSError as err:
+      logger.warning("stage_input_files: copy failed for %s: %s", src, err)
+      continue
+    staged_paths.append(str(dest.resolve()))
+
+  return staged_paths
+
+
+def cleanup_input_staging(session_id: str, *, base_dir: Path | None = None) -> None:
+  """Remove ``<base_dir>/<session_id>/`` after the sub-agent finishes.
+
+  Errors are logged and swallowed — leaking a staging dir is far less
+  bad than crashing the post-task cleanup path.
+  """
+  if not session_id:
+    return
+  target_root = (base_dir or input_staging_root()) / session_id
+  if not target_root.exists():
+    return
+  try:
+    shutil.rmtree(target_root)
+  except OSError as err:
+    logger.warning(
+      "cleanup_input_staging: failed to remove %s: %s",
+      target_root, err,
+    )
 
 
 def format_file_list(staged: list[StagedFile], skipped: list[SkippedFile]) -> str:
