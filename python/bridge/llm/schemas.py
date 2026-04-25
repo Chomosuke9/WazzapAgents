@@ -306,21 +306,30 @@ LLM2_SUBAGENT_TOOL = {
           "minLength": 1,
         },
         "context_msg_ids": {
-          "type": "array",
+          # OpenAI strict-mode forbids "optional" properties: every key in
+          # `properties` MUST also appear in `required`. To keep this field
+          # semantically optional, it accepts `null` as a value. Callers
+          # that want to provide nothing send `null` (which downstream
+          # action extraction normalises back to `[]` via `or []` in
+          # messaging/actions.py::_extract_actions_from_tool_calls).
+          "type": ["array", "null"],
           "items": {
             "type": "string",
             "minLength": 6,
             "maxLength": 6,
           },
           "description": (
-            "Optional list of 6-digit contextMsgIds whose messages contain media attachments "
+            "List of 6-digit contextMsgIds whose messages contain media attachments "
             "to provide as input to the sub-agent. The bridge will resolve each ID to the "
             "corresponding file path automatically. Only include IDs that are explicitly "
-            "relevant to the instruction."
+            "relevant to the instruction. Pass null when no input files are needed."
           ),
         },
       },
-      "required": ["instruction"],
+      # Strict mode: every property name must be listed in `required`.
+      # See note on `context_msg_ids` above for how optionality is modeled
+      # via `["array", "null"]` instead of omitting the key.
+      "required": ["instruction", "context_msg_ids"],
       "additionalProperties": False,
     },
     "strict": True,
