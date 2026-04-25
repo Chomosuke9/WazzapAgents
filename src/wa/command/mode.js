@@ -1,4 +1,5 @@
 import { getSock } from '../connection.js';
+import wsClient from '../../wsClient.js';
 import { getMode, setMode, getTriggers, VALID_MODES } from '../../db.js';
 
 async function handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, senderId, args }) {
@@ -45,6 +46,7 @@ async function handleMode({ chatId, chatType, senderIsAdmin, senderIsOwner, send
   }
 
   setMode(chatId, mode);
+  wsClient.sendReliable({ type: 'invalidate_chat_settings', chatId });
   try {
     await sock.sendMessage(chatId, { text: `Mode updated: *${mode}*` });
   } catch (err) { /* ignore */ }

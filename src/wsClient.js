@@ -8,7 +8,8 @@
  *   - sendReliable(msg)  — queues if disconnected, flushes on reconnect. Used
  *                         for state-sync events that must not be lost:
  *                         `whatsapp_status`, `clear_history`, `set_llm2_model`,
- *                         `invalidate_llm2_model`, `invalidate_default_model`.
+ *                         `invalidate_llm2_model`, `invalidate_default_model`,
+ *                         `invalidate_chat_settings`, `set_subagent_enabled`.
  *
  * See ADR-4 in AGENTS.md for the rationale behind this split.
  */

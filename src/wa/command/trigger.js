@@ -1,4 +1,5 @@
 import { getSock } from '../connection.js';
+import wsClient from '../../wsClient.js';
 import { getTriggers, setTriggers, VALID_TRIGGERS } from '../../db.js';
 
 const TRIGGER_DESCRIPTIONS = {
@@ -44,6 +45,7 @@ async function handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, s
 
   if (cleaned === 'all') {
     setTriggers(chatId, VALID_TRIGGERS);
+    wsClient.sendReliable({ type: 'invalidate_chat_settings', chatId });
     try {
       await sock.sendMessage(chatId, { text: 'All triggers enabled: ' + [...VALID_TRIGGERS].sort().join(', ') });
     } catch (err) { /* ignore */ }
@@ -52,6 +54,7 @@ async function handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, s
 
   if (cleaned === 'none') {
     setTriggers(chatId, new Set());
+    wsClient.sendReliable({ type: 'invalidate_chat_settings', chatId });
     try {
       await sock.sendMessage(chatId, { text: 'All triggers disabled. Bot won\'t respond in prefix mode.' });
     } catch (err) { /* ignore */ }
@@ -73,6 +76,7 @@ async function handleTrigger({ chatId, chatType, senderIsAdmin, senderIsOwner, s
   const newTriggers = new Set([...current, ...toggledOn]);
   for (const t of toggledOff) newTriggers.delete(t);
   setTriggers(chatId, newTriggers);
+  wsClient.sendReliable({ type: 'invalidate_chat_settings', chatId });
 
   const statusLines = [...requested].sort().map((t) => `  - ${t}: ${toggledOn.has(t) ? 'enabled' : 'disabled'}`);
   const activeStr = newTriggers.size > 0 ? [...newTriggers].sort().join(', ') : 'none';

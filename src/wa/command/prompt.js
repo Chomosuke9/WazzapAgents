@@ -1,4 +1,5 @@
 import { getSock } from '../connection.js';
+import wsClient from '../../wsClient.js';
 import { getPrompt, setPrompt } from '../../db.js';
 
 const PROMPT_MAX_CHARS = 4000;
@@ -32,6 +33,7 @@ async function handlePrompt({ chatId, chatType, senderIsAdmin, senderIsOwner, ar
 
   if (args.trim().toLowerCase() === '-' || args.trim().toLowerCase() === 'clear' || args.trim().toLowerCase() === 'reset') {
     setPrompt(chatId, null);
+    wsClient.sendReliable({ type: 'invalidate_chat_settings', chatId });
     try {
       await sock.sendMessage(chatId, { text: 'Custom prompt cleared. Bot will use the default.' });
     } catch (err) { /* ignore */ }
@@ -46,6 +48,7 @@ async function handlePrompt({ chatId, chatType, senderIsAdmin, senderIsOwner, ar
   }
 
   setPrompt(chatId, args);
+  wsClient.sendReliable({ type: 'invalidate_chat_settings', chatId });
   const preview = args.length > 200 ? args.slice(0, 197) + '...' : args;
   try {
     await sock.sendMessage(chatId, { text: `Prompt updated:\n${preview}` });
