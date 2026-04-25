@@ -84,6 +84,7 @@ try:
     _extract_reply_text,
   )
   from .messaging.gateway import (
+    send_attachment,
     send_delete_message,
     send_kick_member,
     send_mark_read,
@@ -166,6 +167,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     _extract_reply_text,
   )
   from bridge.messaging.gateway import (  # type: ignore
+    send_attachment,
     send_delete_message,
     send_kick_member,
     send_mark_read,
@@ -185,6 +187,11 @@ try:
     SubAgentSubmitError,
     SubAgentWebhookServer,
   )
+  from .subagent.output import (
+    StagedOutputs,
+    format_file_list,
+    stage_output_files,
+  )
   from .subagent.models import SubTask
   from .subagent.config import SUBAGENT_WAIT_TIMEOUT_S, SUBAGENT_REPORT_MAX_CHARS
 except ImportError:
@@ -196,6 +203,11 @@ except ImportError:
     SubAgentClient,
     SubAgentSubmitError,
     SubAgentWebhookServer,
+  )
+  from bridge.subagent.output import (  # type: ignore
+    StagedOutputs,
+    format_file_list,
+    stage_output_files,
   )
   from bridge.subagent.models import SubTask  # type: ignore
   from bridge.subagent.config import (  # type: ignore
@@ -1381,29 +1393,51 @@ async def handle_socket(ws):
               finally:
                 await lock.acquire()
 
-            # Inject result into history as a system message. Truncation is
-            # already applied by the tracker (SUBAGENT_REPORT_MAX_CHARS) so
-            # this line cannot blow up future LLM2 turns.
+            # Inject result into history as system message.
+            # If the sub-agent succeeded and produced output files, stage them
+            # into MEDIA_DIR so the Node sandbox accepts them, then list the
+            # staged files in the system message so LLM2 can reference them
+            # naturally in its text reply. The actual attachment dispatch
+            # happens after the LLM2 re-invoke below.
+            # Truncation of ``final_task.report`` is already applied by the
+            # tracker (SUBAGENT_REPORT_MAX_CHARS) so the system message
+            # cannot blow up future LLM2 turns.
+            staged_outputs: StagedOutputs = StagedOutputs(staged=[], skipped=[])
             finalized = subagent_tracker._history.get(chat_id)
             if finalized:
               final_task = finalized[-1]
-              report_text = final_task.report or "No report"
-              output_files_summary = ""
-              if isinstance(final_task.result, dict):
-                files = final_task.result.get("output_files") or []
-                if files:
-                  preview = "\n".join(f"- {f}" for f in files[:10])
-                  more = f"\n- ... ({len(files) - 10} more)" if len(files) > 10 else ""
-                  output_files_summary = f"\nOutput files ({len(files)}):\n{preview}{more}"
+              if final_task.status == "completed":
+                raw_paths = final_task.result.get("output_files") or []
+                if isinstance(raw_paths, list) and raw_paths:
+                  staged_outputs = stage_output_files(session_id, raw_paths)
+                  if staged_outputs.skipped:
+                    logger.warning(
+                      "execute_subtask: skipped %d output file(s) session=%s",
+                      len(staged_outputs.skipped),
+                      session_id,
+                      extra={
+                        "chat_id": chat_id,
+                        "skipped": [
+                          {"name": s.name, "reason": s.reason}
+                          for s in staged_outputs.skipped
+                        ],
+                      },
+                    )
+              file_list_text = format_file_list(
+                staged_outputs.staged, staged_outputs.skipped,
+              )
+              system_lines = [
+                "[SUBTASK FINISHED]",
+                f"Result: {final_task.report or 'No report'}",
+                f"Success: {final_task.status == 'completed'}",
+              ]
+              if file_list_text:
+                system_lines.append("")
+                system_lines.append(file_list_text)
               history.append(WhatsAppMessage(
                 timestamp_ms=int(time.time() * 1000),
                 sender="system",
-                text=(
-                  f"[SUBTASK FINISHED]\n"
-                  f"Result: {report_text}\n"
-                  f"Success: {final_task.status == 'completed'}"
-                  f"{output_files_summary}"
-                ),
+                text="\n".join(system_lines),
                 role="system",
               ))
 
@@ -1549,6 +1583,30 @@ async def handle_socket(ws):
                     auto_reply_anchor=bool(reinvoke_action.get("autoReplyAnchor", False)),
                   )
                   action_counts["kick_member"] += 1
+
+            # Auto-send sub-agent output files as separate WhatsApp messages,
+            # one bubble per file with no caption. Sent after the LLM2 text
+            # reply so the conversation reads: text first, then files.
+            for staged_file in staged_outputs.staged:
+              try:
+                await send_attachment(
+                  ws,
+                  chat_id,
+                  staged_file.path,
+                  staged_file.kind,
+                  request_id=_make_request_id("subagent_attach"),
+                  file_name=staged_file.name,
+                )
+              except Exception as attach_err:
+                logger.exception(
+                  "execute_subtask: send_attachment failed session=%s file=%s: %s",
+                  session_id,
+                  staged_file.name,
+                  attach_err,
+                  extra={"chat_id": chat_id},
+                )
+                continue
+              action_counts["send_message"] += 1
 
             action_counts[action_type] += 1
             continue
