@@ -15,8 +15,10 @@ from bridge.subagent.output import (
   MAX_FILE_SIZE_BYTES,
   StagedFile,
   SkippedFile,
+  cleanup_input_staging,
   detect_kind,
   format_file_list,
+  stage_input_files,
   stage_output_files,
 )
 from bridge.messaging.gateway import send_attachment
@@ -195,6 +197,103 @@ class TestStageOutputFiles:
 
   def test_default_size_cap_is_200mb(self):
     assert MAX_FILE_SIZE_BYTES == 200 * 1024 * 1024
+
+
+# ---------------------------------------------------------------------------
+# stage_input_files / cleanup_input_staging
+# ---------------------------------------------------------------------------
+
+class TestStageInputFiles:
+  def _make_file(self, dirpath: Path, name: str, size: int = 16) -> Path:
+    p = dirpath / name
+    p.write_bytes(b"y" * size)
+    return p
+
+  def test_copies_files_into_session_subdir(self, tmp_path):
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    a = self._make_file(src_dir, "a.txt", size=8)
+    b = self._make_file(src_dir, "b.bin", size=12)
+    base = tmp_path / "exchange"
+    paths = stage_input_files("sess1", [str(a), str(b)], base_dir=base)
+    assert len(paths) == 2
+    for p in paths:
+      assert Path(p).exists()
+      assert (base / "sess1") in Path(p).parents
+    # Names preserved
+    names = sorted(Path(p).name for p in paths)
+    assert names == ["a.txt", "b.bin"]
+    # Contents preserved
+    assert Path(paths[0]).read_bytes() == b"y" * 8
+    assert Path(paths[1]).read_bytes() == b"y" * 12
+
+  def test_skips_missing_files(self, tmp_path):
+    paths = stage_input_files(
+      "s2", ["/nonexistent/foo.txt"], base_dir=tmp_path / "x"
+    )
+    assert paths == []
+
+  def test_skips_directories(self, tmp_path):
+    sub = tmp_path / "src" / "nested"
+    sub.mkdir(parents=True)
+    paths = stage_input_files("s3", [str(sub)], base_dir=tmp_path / "x")
+    assert paths == []
+
+  def test_skips_oversized(self, tmp_path, monkeypatch):
+    src = self._make_file(tmp_path, "big.bin", size=4096)
+    monkeypatch.setattr("bridge.subagent.output.MAX_FILE_SIZE_BYTES", 1024)
+    paths = stage_input_files("s4", [str(src)], base_dir=tmp_path / "x")
+    assert paths == []
+
+  def test_handles_empty_inputs(self, tmp_path):
+    assert stage_input_files("s5", [], base_dir=tmp_path) == []
+
+  def test_handles_empty_session_id(self, tmp_path):
+    src = self._make_file(tmp_path, "x.txt")
+    assert stage_input_files("", [str(src)], base_dir=tmp_path / "x") == []
+
+  def test_resolves_basename_collisions(self, tmp_path):
+    a_dir = tmp_path / "a"
+    b_dir = tmp_path / "b"
+    a_dir.mkdir()
+    b_dir.mkdir()
+    a_file = a_dir / "img.jpg"
+    b_file = b_dir / "img.jpg"
+    a_file.write_bytes(b"first")
+    b_file.write_bytes(b"second")
+    base = tmp_path / "exchange"
+    paths = stage_input_files("s6", [str(a_file), str(b_file)], base_dir=base)
+    assert len(paths) == 2
+    names = {Path(p).name for p in paths}
+    assert "img.jpg" in names
+    # Second file got renamed to avoid clobbering the first
+    assert any(n.startswith("img_") and n.endswith(".jpg") for n in names)
+
+  def test_returns_absolute_resolved_paths(self, tmp_path):
+    src = self._make_file(tmp_path, "x.txt")
+    paths = stage_input_files("s7", [str(src)], base_dir=tmp_path / "exchange")
+    assert len(paths) == 1
+    assert os.path.isabs(paths[0])
+    # Path matches a real file
+    assert os.path.isfile(paths[0])
+
+
+class TestCleanupInputStaging:
+  def test_removes_session_dir(self, tmp_path):
+    base = tmp_path / "exchange"
+    src = tmp_path / "x.txt"
+    src.write_text("hi")
+    paths = stage_input_files("sess1", [str(src)], base_dir=base)
+    assert paths and Path(paths[0]).exists()
+    cleanup_input_staging("sess1", base_dir=base)
+    assert not (base / "sess1").exists()
+
+  def test_no_op_for_missing_dir(self, tmp_path):
+    # Should not raise
+    cleanup_input_staging("never_existed", base_dir=tmp_path / "exchange")
+
+  def test_no_op_for_empty_session_id(self, tmp_path):
+    cleanup_input_staging("", base_dir=tmp_path)
 
 
 # ---------------------------------------------------------------------------

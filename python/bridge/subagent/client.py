@@ -73,12 +73,17 @@ class SubAgentClient:
     failure or after all retries are exhausted, so the caller does not
     silently wait for a webhook that will never arrive.
     """
+    # The webhook server dispatches on the JSON body's ``type`` field
+    # (``complete`` vs ``progress``), not the URL — so callback_url and
+    # progress_webhook point at the same endpoint. Sending them as the
+    # exact same URL keeps the wire format simple and avoids confusing
+    # ``?type=progress`` query strings that are never read.
     payload = {
       "session_id": session_id,
       "instruction": instruction,
       "input_files": input_files,
       "callback_url": self._webhook_url,
-      "progress_webhook": f"{self._webhook_url}?type=progress",
+      "progress_webhook": self._webhook_url,
     }
     url = f"{self._base_url}/execute"
     attempts = max(1, SUBAGENT_SUBMIT_RETRY_MAX + 1)
