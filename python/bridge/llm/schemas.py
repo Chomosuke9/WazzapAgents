@@ -290,7 +290,12 @@ LLM2_SUBAGENT_TOOL = {
       "Delegate a complex task to a sub-agent for execution. "
       "The sub-agent will process the instruction and return a report. "
       "Use this for tasks that require multi-step reasoning, file processing, "
-      "or operations that are too complex for a single LLM call."
+      "or operations that are too complex for a single LLM call. "
+      "Any output files the sub-agent produces are automatically attached and "
+      "sent to the chat after your text reply, one file per WhatsApp message — "
+      "you do not need to mention file paths or upload them yourself. "
+      "Make the instruction precise so the sub-agent only emits files the user "
+      "actually wants delivered."
     ),
     "parameters": {
       "type": "object",
