@@ -218,9 +218,34 @@ When calling the tool:
 - Output files the sub-agent produces are auto-attached to the chat after
   your text reply; you don't need to mention paths or upload them yourself.
 
-After the tool runs, the sub-agent's progress and result will appear as a
-"## Sub-Agent" block in your context on the next turn. Don't re-invoke the
-tool while one is still running for this chat.
+How the sub-agent turn flow works (read carefully — the loop you see when
+this is wrong looks like the bot endlessly repeating "oke aku cek dulu"):
+
+1. Initial turn — the user asks for the task.
+   - Call `execute_subtask` immediately. ONE acknowledgement reply_message
+     is acceptable but optional (e.g. "oke aku cek dulu ya"). Never call
+     more than one `reply_message` here. Never restate file contents you
+     haven't read yet.
+
+2. While the sub-agent is running (`## Active sub-agent task` block in
+   your context), DO NOT call `execute_subtask` again, and DO NOT send
+   another acknowledgement. The typing indicator is already on. If the
+   user is just nudging ("halo?", "udah belum?"), stay silent (call no
+   tools, or only `llm_express`). Only `reply_message` here for genuinely
+   new questions unrelated to the task.
+
+3. Completion turn — the bridge re-invokes you with a `[SUBTASK FINISHED]`
+   system message and the `## Sub-Agent result for this turn` block. This
+   IS the moment to deliver the result. Send exactly one `reply_message`
+   summarising the report for the user, in their language, in WhatsApp
+   formatting. Do NOT call `execute_subtask` again here. Do NOT repeat
+   "oke aku cek" — the result is in front of you, deliver it.
+
+4. Follow-up bursts after delivery — if a `## Recently finished sub-agent
+   task` block is in your context, treat that task as already delivered.
+   Don't redo it. Answer follow-up questions from the report content
+   directly. Only call `execute_subtask` again if the user is asking for
+   a genuinely NEW task.
 </subagent>"""
 
 
@@ -493,6 +518,7 @@ async def generate_reply(
   result_validator=None,
   allow_subagent: bool = False,
   subagent_context: str | None = None,
+  subagent_result_block: str | None = None,
 ):
   targets = _llm2_targets()
   payload = current_payload if isinstance(current_payload, dict) else {}
@@ -582,7 +608,8 @@ async def generate_reply(
   #   3) user          : helper / context injection
   #   4) user          : sub-agent task block  (only when allow_subagent /
   #                      subagent_context is provided for this chat)
-  #   5) user          : older messages + current burst
+  #   5) user          : sub-agent FINISHED-this-turn block (re-invoke only)
+  #   6) user          : older messages + current burst
   msgs = [SystemMessage(content=rendered_system)]
   msgs.append(HumanMessage(content=f"Group description:\n{group_text}"))
   msgs.append(HumanMessage(content=context_injection))
@@ -594,6 +621,14 @@ async def generate_reply(
   subagent_block: str | None = subagent_context if subagent_context else None
   if subagent_block:
     msgs.append(HumanMessage(content=subagent_block))
+  # ``subagent_result_block`` is a high-priority slot used by the post-task
+  # re-invoke so the model gets a clear, dedicated "deliver the result now"
+  # signal instead of having to dig the [SUBTASK FINISHED] line out of the
+  # chat transcript. Keeping it as a separate HumanMessage (rather than
+  # smuggling it into history) is what reliably stops the model from
+  # repeating "oke aku cek dulu" when it should be delivering the report.
+  if subagent_result_block:
+    msgs.append(HumanMessage(content=subagent_result_block))
   msgs.append(HumanMessage(content=messages_content))
   if env_flag("BRIDGE_LOG_PROMPT_FULL"):
     first_target = targets[0]
@@ -604,6 +639,8 @@ async def generate_reply(
     ]
     if subagent_block:
       logged_messages.append({"role": "user", "content": subagent_block})
+    if subagent_result_block:
+      logged_messages.append({"role": "user", "content": subagent_result_block})
     logged_messages.append({"role": "user", "content": redact_multimodal_content(messages_content)})
     logger.info(
       "LLM2 prompt full",

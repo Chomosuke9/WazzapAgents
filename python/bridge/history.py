@@ -138,7 +138,23 @@ def format_history(messages: Iterable[WhatsAppMessage]) -> str:
   for msg in messages:
     context_msg_id = _normalize_context_msg_id(msg.context_msg_id, role=msg.role)
     time = format_context_time(msg.timestamp_ms)
-    
+
+    # System-role messages are bridge-injected events (e.g. [SUBTASK FINISHED],
+    # /reset markers) — render them with a clearly-distinct prefix so the LLM
+    # cannot confuse them for user content. Without this, format_history used
+    # to flatten them as "system (unknown): ..." which looked like a regular
+    # user message and caused the model to ignore the signal.
+    if msg.role == "system":
+      lines.append(f"[#system] {time}")
+      message_text = _message_text(msg)
+      # Indent multi-line system payloads (e.g. SUBTASK FINISHED reports) so
+      # they read as a single coherent block rather than being mistaken for
+      # several separate chat lines.
+      indented = message_text.replace("\n", "\n  ")
+      lines.append(f"SYSTEM: {indented}")
+      lines.append("")
+      continue
+
     if msg.role == "assistant":
       sender = assistant_name()
       sender_ref = assistant_sender_ref()
