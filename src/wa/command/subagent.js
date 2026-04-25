@@ -1,5 +1,15 @@
 import { getSock } from '../connection.js';
+import wsClient from '../../wsClient.js';
 import { getSubagentEnabled, setSubagentEnabled } from '../../db.js';
+
+async function applyAndNotify(chatId, enabled) {
+  // Persist + notify the Python bridge so its in-process cache
+  // (_subagent_enabled_cache) drops the stale value. Without the WS
+  // notification, /subagent on would only take effect after a bridge
+  // restart because the cache is per-process and never expires on its own.
+  setSubagentEnabled(chatId, enabled);
+  wsClient.sendReliable({ type: 'set_subagent_enabled', chatId, enabled });
+}
 
 async function handleSubagent({ chatId, senderIsOwner, args }) {
   const sock = getSock();
@@ -26,7 +36,7 @@ async function handleSubagent({ chatId, senderIsOwner, args }) {
 
   const value = args.trim().toLowerCase();
   if (value === 'on') {
-    setSubagentEnabled(chatId, true);
+    await applyAndNotify(chatId, true);
     try {
       await sock.sendMessage(chatId, { text: 'Subagent enabled.' });
     } catch (err) { /* ignore */ }
@@ -34,7 +44,7 @@ async function handleSubagent({ chatId, senderIsOwner, args }) {
   }
 
   if (value === 'off') {
-    setSubagentEnabled(chatId, false);
+    await applyAndNotify(chatId, false);
     try {
       await sock.sendMessage(chatId, { text: 'Subagent disabled.' });
     } catch (err) { /* ignore */ }
