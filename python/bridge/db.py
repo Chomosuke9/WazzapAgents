@@ -597,11 +597,18 @@ def reset_settings_connection() -> None:
     except Exception:
       pass
     _LOCAL.settings_conn = None
-  # Also clear in-memory caches so next reads go to the (fresh) DB
+  # Also clear in-memory caches so next reads go to the (fresh) DB.
+  # Every cache backed by settings.db must be listed here, otherwise a
+  # caller that uses reset_settings_connection() to "force a re-read"
+  # (e.g. the invalidate_default_model WS handler) would still serve
+  # stale values from the missing cache. subagent_enabled lives in the
+  # chat_settings table since the storage-unification fix, so its cache
+  # is included here too.
   global _default_llm2_model_cache
   _default_llm2_model_cache = None
   with _cache_lock:
     _llm2_model_cache.clear()
+    _subagent_enabled_cache.clear()
   logger.debug('Settings DB connection reset; caches cleared')
 
 
