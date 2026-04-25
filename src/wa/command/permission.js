@@ -1,4 +1,5 @@
 import { getSock } from '../connection.js';
+import wsClient from '../../wsClient.js';
 import { getPermission, setPermission } from '../../db.js';
 
 const PERMISSION_LABELS = {
@@ -57,6 +58,7 @@ async function handlePermission({ chatId, chatType, senderIsAdmin, senderIsOwner
   }
 
   setPermission(chatId, level);
+  wsClient.sendReliable({ type: 'invalidate_chat_settings', chatId });
   const label = PERMISSION_LABELS[level] || String(level);
   try {
     await sock.sendMessage(chatId, { text: `Permission updated: ${label}` });

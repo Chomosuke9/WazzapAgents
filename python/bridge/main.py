@@ -40,6 +40,7 @@ try:
     clear_llm2_model_cache as db_clear_llm2_model_cache,
     clear_default_llm2_model_cache as db_clear_default_llm2_model_cache,
     reset_settings_connection as db_reset_settings_connection,
+    invalidate_chat_caches as db_invalidate_chat_caches,
     close_all_connections as db_close_all_connections,
     checkpoint_all_dbs as db_checkpoint_all_dbs,
     get_subagent_enabled as db_get_subagent_enabled,
@@ -124,6 +125,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     clear_llm2_model_cache as db_clear_llm2_model_cache,
     clear_default_llm2_model_cache as db_clear_default_llm2_model_cache,
     reset_settings_connection as db_reset_settings_connection,
+    invalidate_chat_caches as db_invalidate_chat_caches,
     close_all_connections as db_close_all_connections,
     checkpoint_all_dbs as db_checkpoint_all_dbs,
     get_subagent_enabled as db_get_subagent_enabled,
@@ -600,6 +602,25 @@ async def handle_socket(ws):
       cmd_name = slash_cmd.get("command") or ""
       cmd_args = slash_cmd.get("args") or ""
       p_chat_id = payload.get("chatId") or "unknown"
+
+      # /reset wipes the chat's history and any pending caches. It must run
+      # BEFORE the /reset slash message is appended so the marker itself is
+      # not preserved as the first turn after the reset, and BEFORE the
+      # cmd_handled short-circuit below — Node always sets commandHandled=true
+      # for /reset, so the original handler that lived after the skip was
+      # dead code. Same-batch user payloads accumulated up to this point are
+      # also dropped: those messages preceded the reset boundary, so
+      # treating them as "post-reset" history would defeat the point.
+      if cmd_name == "reset":
+        per_chat[p_chat_id].clear()
+        db_invalidate_chat_caches(p_chat_id)
+        remaining_payloads.clear()
+        logger.info(
+          "Memory and per-chat settings caches cleared for chat_id=%s via /reset",
+          p_chat_id,
+        )
+        continue
+
       history = per_chat[p_chat_id]
 
       # Add command message to history (for LLM context)
@@ -641,12 +662,6 @@ async def handle_socket(ws):
               ws, p_chat_id, f"Failed to create sticker: {err}",
               reply_to, request_id=_make_request_id("cmd"),
             )
-        continue
-
-      # Handle /reset: clear memory (Python manages per_chat history)
-      if cmd_name == "reset":
-        per_chat[p_chat_id].clear()
-        logger.info("Memory cleared for chat_id=%s via /reset", p_chat_id)
         continue
 
       # All other commands are handled by Node.js, just skip
@@ -1875,11 +1890,16 @@ async def handle_socket(ws):
         logger.warning("Gateway error: %s", event.get("payload"))
         continue
 
-      # Handle clear_history message from Node.js (after /reset)
+      # Handle clear_history message from Node.js (after /reset). Node sends
+      # this in addition to the /reset slash message itself; the inline
+      # /reset handler in process_message_batch is the authoritative path,
+      # but this hook still fires immediately so a follow-up message landing
+      # before the debounce window expires can't see stale history.
       if event_type == "clear_history":
         clear_chat_id = event.get("chatId")
-        if clear_chat_id and clear_chat_id in per_chat:
+        if clear_chat_id:
           per_chat[clear_chat_id].clear()
+          db_invalidate_chat_caches(clear_chat_id)
           logger.info("History cleared for chat_id=%s via clear_history message", clear_chat_id)
         continue
 
@@ -1922,6 +1942,21 @@ async def handle_socket(ws):
             "subagent_enabled cache invalidated chat_id=%s enabled=%s",
             chat_id,
             enabled,
+          )
+        continue
+
+      # Handle invalidate_chat_settings from Node.js (after /mode, /prompt,
+      # /permission, /trigger). Without this hook the bridge keeps serving
+      # the pre-write cached value (mode/prompt/permission/triggers) until
+      # the Python process is restarted, which is exactly the symptom users
+      # report as "settings change doesn't take effect until restart".
+      if event_type == "invalidate_chat_settings":
+        chat_id = event.get("chatId")
+        if chat_id:
+          db_invalidate_chat_caches(chat_id)
+          logger.info(
+            "chat settings caches invalidated chat_id=%s",
+            chat_id,
           )
         continue
 

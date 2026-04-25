@@ -794,6 +794,32 @@ def reset_settings_connection() -> None:
   logger.debug('Settings DB connection reset; caches cleared')
 
 
+def invalidate_chat_caches(chat_id: str) -> None:
+  """Drop every per-chat cache backed by settings.db for *chat_id*.
+
+  Called from the WS handler when Node writes a chat-scoped setting
+  (mode, prompt, permission, triggers, LLM2 model, subagent_enabled) so
+  the next read returns the freshly-written value instead of a stale
+  cached snapshot. Without this hook the bridge would keep serving the
+  pre-write value until the process restarted.
+
+  The settings DB connection is also reset because SQLite's WAL snapshot
+  on Python's cached connection may not see writes made by Node's
+  separate connection — closing it forces a fresh read on next access.
+  """
+  if not chat_id:
+    return
+  with _cache_lock:
+    _prompt_cache.pop(chat_id, None)
+    _permission_cache.pop(chat_id, None)
+    _mode_cache.pop(chat_id, None)
+    _triggers_cache.pop(chat_id, None)
+    _llm2_model_cache.pop(chat_id, None)
+    _subagent_enabled_cache.pop(chat_id, None)
+  reset_settings_connection()
+  logger.debug('Per-chat settings caches invalidated chat_id=%s', chat_id)
+
+
 def close_all_connections() -> None:
   """Gracefully close all thread-local SQLite connections.
 
