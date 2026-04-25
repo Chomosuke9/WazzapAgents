@@ -91,15 +91,19 @@ class SubAgentWebhookServer:
       entry = data.get("entry") or {}
       step = entry.get("step", "unknown")
       detail = entry.get("detail", "")
-      self._tracker.update_progress(session_id, step, detail)
+      # ``reason`` is the new native-tool-call payload field; older sub-
+      # agents that still emit only ``detail`` will leave it as None.
+      reason = entry.get("reason")
+      self._tracker.update_progress(session_id, step, detail, reason=reason)
       # Promoted from DEBUG → INFO so progress is visible at default
       # log level. The bridge previously logged at DEBUG, so operators
       # had no signal that the sub-agent was actually running unless
       # they cranked LOG_LEVEL globally.
       logger.info(
-        "SubAgent progress: session=%s step=%s detail=%s",
+        "SubAgent progress: session=%s step=%s reason=%s detail=%s",
         session_id,
         step,
+        (reason[:160] if isinstance(reason, str) else reason),
         (detail[:160] if isinstance(detail, str) else detail),
       )
       return web.json_response({"status": "ok"})
