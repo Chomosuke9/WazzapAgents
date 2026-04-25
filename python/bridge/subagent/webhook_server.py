@@ -5,7 +5,14 @@ from typing import Dict
 
 try:
   from aiohttp import web
-except ImportError:
+except ImportError:  # pragma: no cover - import-time guard
+  # ``aiohttp`` is a hard requirement for the SubAgent webhook server
+  # (declared in requirements.txt). The fallback below keeps the import
+  # itself succeeding so that callers who never instantiate the webhook
+  # server (e.g. unit tests that only touch other parts of the package)
+  # don't blow up — but ``SubAgentWebhookServer.start`` raises loudly
+  # if it's actually missing at runtime, instead of silently degrading
+  # into a 120 s polling fallback for every sub-agent task.
   web = None  # type: ignore
 
 try:
@@ -33,8 +40,15 @@ class SubAgentWebhookServer:
 
   async def start(self) -> None:
     if web is None:
-      logger.error("aiohttp is not installed; SubAgent webhook server cannot start")
-      return
+      # Fail loud. Pre-fix this returned silently and the bridge would
+      # then wait the full ``SUBAGENT_WAIT_TIMEOUT_S`` (default 120 s)
+      # on every sub-agent task before falling back to polling, which
+      # presented as "everything is slow" rather than a setup error.
+      raise RuntimeError(
+        "aiohttp is not installed but is required for the SubAgent webhook "
+        "server. Install it via `pip install -r requirements.txt` (or "
+        "`pip install aiohttp>=3.9.0`)."
+      )
     app = web.Application()
     app.router.add_post("/subagent/callback", self._handle_callback)
     app.router.add_get("/health", self._handle_health)
