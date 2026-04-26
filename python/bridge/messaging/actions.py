@@ -485,17 +485,31 @@ def _extract_actions_from_tool_calls(
 
     elif name == "execute_subtask":
       instruction = str(args.get("instruction") or "").strip()
+      confirmation_text = str(args.get("confirmation_text") or "").strip()
       if not instruction:
         continue
+
       ctx_ids = args.get("context_msg_ids") or []
       if isinstance(ctx_ids, str):
         ctx_ids = [ctx_ids]
+
       # Normalize and validate context msg ids
       valid_ids: list[str] = []
       for raw in ctx_ids:
         cid = _normalize_context_msg_id(raw)
         if cid and cid.isdigit() and len(cid) == 6:
           valid_ids.append(cid)
+
+      # If confirmation_text is provided, send it immediately.
+      # If there are input files, reply to the last file; otherwise use fallback_reply_to.
+      if confirmation_text:
+        conf_reply_to = valid_ids[-1] if valid_ids else fallback_reply_to
+        actions.append({
+          "type": "send_message",
+          "text": confirmation_text,
+          "replyTo": conf_reply_to,
+        })
+
       actions.append({
         "type": "execute_subtask",
         "instruction": instruction,

@@ -218,24 +218,18 @@ When calling the tool:
 How the sub-agent turn flow works:
 
 1. Initial turn — the user asks for the task.
-   - Call `execute_subtask` immediately. A single acknowledgement via
-     `reply_message` is recommended to inform the user that the sub-agent is
-     running (e.g., "Alright, I'm processing it, please wait a moment.").
+   - Call `execute_subtask` immediately. An acknowledgement via
+     `confirmation_text` is recommended to inform the user that the sub-agent is
+     running (e.g., "Alright, I'm processing it, please wait a moment."). DO NOT CALL OTHER `reply_message` tools while you're calling `execute_subtask`.
 
 2. While the sub-agent is running (`## Active sub-agent task` block in
    your context), DO NOT call `execute_subtask` again, and DO NOT send
-   another acknowledgement. If the user is just nudging ("Halo?", "Is it done yet?"), use `reply_message` to clarify the sub-agent's progress.
+   another acknowledgement. If the user is just nudging ("Halo?", "Is it done yet?"), use `reply_message` to clarify the sub-agent's progress, e.g., "I'm still extracting it, please wait."
 
 3. Completion turn — the bridge re-invokes you with a `[SUBTASK FINISHED]`
    system message and the `## Sub-Agent result for this turn` block. This
    IS the moment to deliver the result. Send a `reply_message`
    summarizing the report for the user.
-
-4. Follow-up bursts after delivery — if a `## Recently finished sub-agent
-   task` block is in your context, treat that task as already delivered.
-   Do not repeat it. Answer follow-up questions based on the report content
-   directly. Only call `execute_subtask` again if the user asks for
-   a genuinely NEW task.
 </subagent>"""
 
 

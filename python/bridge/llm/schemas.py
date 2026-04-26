@@ -305,6 +305,15 @@ LLM2_SUBAGENT_TOOL = {
           "description": "Clear, detailed instruction for the sub-agent to execute.",
           "minLength": 1,
         },
+        "confirmation_text": {
+          "type": "string",
+          "description": (
+            "A brief confirmation message to the user that the task has started. "
+            "If input files are provided via context_msg_ids, this message will "
+            "be sent as a reply to the last file ID to acknowledge receipt."
+          ),
+          "minLength": 1,
+        },
         "context_msg_ids": {
           # OpenAI strict-mode forbids "optional" properties: every key in
           # `properties` MUST also appear in `required`. To keep this field
@@ -329,7 +338,7 @@ LLM2_SUBAGENT_TOOL = {
       # Strict mode: every property name must be listed in `required`.
       # See note on `context_msg_ids` above for how optionality is modeled
       # via `["array", "null"]` instead of omitting the key.
-      "required": ["instruction", "context_msg_ids"],
+      "required": ["instruction", "confirmation_text", "context_msg_ids"],
       "additionalProperties": False,
     },
     "strict": True,
