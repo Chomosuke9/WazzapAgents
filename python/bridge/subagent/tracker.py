@@ -94,6 +94,17 @@ class SubTaskTracker:
         return task
     return None
 
+  def get_chat_for_session(self, session_id: str) -> Optional[str]:
+    """Reverse lookup: session_id → chat_id for the *active* task.
+
+    Used by the queue-webhook handler to route a ``queued`` /
+    ``queue_advanced`` notification from WazzapSubAgents to the
+    correct WhatsApp chat. Returns ``None`` if the session is not in
+    the active map (e.g. already finalised).
+    """
+    task = self._active.get(session_id)
+    return task.chat_id if task is not None else None
+
   # Bounds for the active-task context block. The progress deque can hold
   # up to 100 entries (see SubTask.progress), each with a ~500 char detail
   # — that's potentially 50 KB if rendered raw, which would blow LLM2's
