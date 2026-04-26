@@ -871,13 +871,19 @@ async def handle_socket(ws):
       # also dropped: those messages preceded the reset boundary, so
       # treating them as "post-reset" history would defeat the point.
       if cmd_name == "reset":
-        per_chat[p_chat_id].clear()
-        db_invalidate_chat_caches(p_chat_id)
+        is_global_reset = cmd_args.strip().lower() == "global"
+        if is_global_reset:
+          per_chat.clear()
+          db_reset_settings_connection()
+          logger.info("Memory and caches cleared for ALL chats via /reset global (inline)")
+        else:
+          per_chat[p_chat_id].clear()
+          db_invalidate_chat_caches(p_chat_id)
+          logger.info(
+            "Memory and per-chat settings caches cleared for chat_id=%s via /reset",
+            p_chat_id,
+          )
         remaining_payloads.clear()
-        logger.info(
-          "Memory and per-chat settings caches cleared for chat_id=%s via /reset",
-          p_chat_id,
-        )
         continue
 
       history = per_chat[p_chat_id]
