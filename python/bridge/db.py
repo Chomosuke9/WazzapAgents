@@ -478,6 +478,22 @@ def _get_moderation_conn() -> sqlite3.Connection:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _pop_all_chat_caches(chat_id: str) -> None:
+  """Drop every per-chat cache entry for *chat_id*.
+
+  Called by setters that use INSERT...ON CONFLICT so that if the INSERT path
+  creates a new row (with column defaults), other getters' caches (which may
+  hold values from the __global__ fallback) are invalidated.
+  """
+  with _cache_lock:
+    _prompt_cache.pop(chat_id, None)
+    _permission_cache.pop(chat_id, None)
+    _mode_cache.pop(chat_id, None)
+    _triggers_cache.pop(chat_id, None)
+    _llm2_model_cache.pop(chat_id, None)
+    _subagent_enabled_cache.pop(chat_id, None)
+
+
 def _get_setting_row(chat_id: str) -> Optional[sqlite3.Row]:
   """Return the chat_settings row for *chat_id*, falling back to __global__."""
   _ensure_split_ready()
@@ -522,6 +538,7 @@ def set_prompt(chat_id: str, prompt: Optional[str]) -> None:
     (chat_id, prompt),
   )
   conn.commit()
+  _pop_all_chat_caches(chat_id)
   with _cache_lock:
     _prompt_cache[chat_id] = prompt
   logger.info('DB set_prompt chat_id=%s len=%s', chat_id, len(prompt) if prompt else 0)
@@ -558,6 +575,7 @@ def set_permission(chat_id: str, level: int) -> None:
     (chat_id, clamped),
   )
   conn.commit()
+  _pop_all_chat_caches(chat_id)
   with _cache_lock:
     _permission_cache[chat_id] = clamped
   logger.info('DB set_permission chat_id=%s level=%s', chat_id, clamped)
@@ -695,6 +713,7 @@ def set_llm2_model(chat_id: str, model_id: Optional[str]) -> None:
     (chat_id, model_id),
   )
   conn.commit()
+  _pop_all_chat_caches(chat_id)
   with _cache_lock:
     _llm2_model_cache[chat_id] = model_id
   logger.info('DB set_llm2_model chat_id=%s model_id=%s', chat_id, model_id)
@@ -996,6 +1015,7 @@ def set_mode(chat_id: str, mode: str) -> None:
     (chat_id, mode),
   )
   conn.commit()
+  _pop_all_chat_caches(chat_id)
   with _cache_lock:
     _mode_cache[chat_id] = mode
   logger.info('DB set_mode chat_id=%s mode=%s', chat_id, mode)
@@ -1033,6 +1053,7 @@ def set_triggers(chat_id: str, triggers: set[str]) -> None:
     (chat_id, raw),
   )
   conn.commit()
+  _pop_all_chat_caches(chat_id)
   with _cache_lock:
     _triggers_cache[chat_id] = raw
   logger.info('DB set_triggers chat_id=%s triggers=%s', chat_id, raw)
@@ -1073,6 +1094,7 @@ def set_subagent_enabled(chat_id: str, enabled: bool) -> None:
     (chat_id, 1 if enabled else 0),
   )
   conn.commit()
+  _pop_all_chat_caches(chat_id)
   with _cache_lock:
     _subagent_enabled_cache[chat_id] = enabled
   logger.info('DB set_subagent_enabled chat_id=%s enabled=%s', chat_id, enabled)
@@ -1109,6 +1131,7 @@ def set_idle_trigger(chat_id: str, min_val: Optional[int], max_val: Optional[int
     (chat_id, min_val, max_val),
   )
   conn.commit()
+  _pop_all_chat_caches(chat_id)
   logger.info('DB set_idle_trigger chat_id=%s min=%s max=%s', chat_id, min_val, max_val)
 
 

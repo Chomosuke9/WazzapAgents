@@ -66,6 +66,7 @@ async function handleCommandListener(msg, context) {
         senderIsAdmin,
         senderIsOwner,
         contextMsgId,
+        args,
       });
       return true;
 
