@@ -289,6 +289,32 @@ async def test_no_handler_does_not_suppress_followup_when_handler_appears():
 
 
 @pytest.mark.asyncio
+async def test_clear_queue_handler_if_only_clears_on_identity_match():
+  """Regression: an old gateway connection's ``finally`` block must
+  not wipe a *newer* connection's handler. The identity-checked clear
+  is the contract main.py relies on.
+  """
+  tracker = SubTaskTracker()
+  server = SubAgentWebhookServer(tracker, port=0)
+
+  async def handler_a(c, t, p, q):  # noqa: ANN001
+    return None
+
+  async def handler_b(c, t, p, q):  # noqa: ANN001
+    return None
+
+  server.set_queue_handler(handler_a)
+  # New connection takes over.
+  server.set_queue_handler(handler_b)
+  # Old connection's finally fires now. It must NOT clear handler_b.
+  assert server.clear_queue_handler_if(handler_a) is False
+  assert server._queue_handler is handler_b
+  # New connection's finally fires legitimately.
+  assert server.clear_queue_handler_if(handler_b) is True
+  assert server._queue_handler is None
+
+
+@pytest.mark.asyncio
 async def test_get_chat_for_session_returns_none_after_finalize():
   tracker = _make_tracker_with_session("sess-G", "chat-gary")
   assert tracker.get_chat_for_session("sess-G") == "chat-gary"

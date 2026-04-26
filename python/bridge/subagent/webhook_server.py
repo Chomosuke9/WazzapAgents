@@ -100,6 +100,22 @@ class SubAgentWebhookServer:
     """
     self._queue_handler = handler
 
+  def clear_queue_handler_if(self, handler: QueueEventHandler) -> bool:
+    """Clear the queue handler only if it is identically ``handler``.
+
+    The webhook server is a process-wide singleton but ``handle_socket``
+    is spawned once per gateway connection. Without this guard, an
+    older connection finishing its ``finally`` block could wipe out
+    the newer connection's handler — silencing every subsequent queue
+    notification. ``handle_socket`` therefore passes its own closure
+    here so we only clear if it is still the live one. Returns True
+    if cleared, False if a different (or no) handler was current.
+    """
+    if self._queue_handler is handler:
+      self._queue_handler = None
+      return True
+    return False
+
   def _is_duplicate_queue_event(self, session_id: str, position: int, queue_size: int) -> bool:
     """Pure read-only check: is this (session_id, position, queue_size)
     a dup of one we *successfully delivered* within the last

@@ -2145,8 +2145,10 @@ async def handle_socket(ws):
     db_close_all_connections()
     # Detach the queue handler so the webhook server doesn't try to
     # write to a closed ws if a sub-agent queue webhook arrives while
-    # we are between gateway connections.
-    subagent_webhook.set_queue_handler(None)
+    # we are between gateway connections. Use the identity-checked
+    # variant so a slow finally block on an old connection cannot wipe
+    # the live handler installed by a newer overlapping connection.
+    subagent_webhook.clear_queue_handler_if(_on_subagent_queue_event)
     for task in tasks:
       task.cancel()
     if tasks:
