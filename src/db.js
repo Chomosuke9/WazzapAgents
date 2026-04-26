@@ -841,12 +841,7 @@ function getDefaultLlm2Model() {
 }
 
 function getLlm2Model(chatId) {
-  const row = getOneFromState(
-    _settingsState,
-    initSettingsTables,
-    "SELECT llm2_model FROM chat_settings WHERE chat_id = ?",
-    chatId,
-  );
+  const row = getSettingRow(chatId);
   return row?.llm2_model ?? null;
 }
 

@@ -802,6 +802,10 @@ def reset_settings_connection() -> None:
   global _default_llm2_model_cache
   _default_llm2_model_cache = None
   with _cache_lock:
+    _prompt_cache.clear()
+    _permission_cache.clear()
+    _mode_cache.clear()
+    _triggers_cache.clear()
     _llm2_model_cache.clear()
     _subagent_enabled_cache.clear()
   logger.debug('Settings DB connection reset; caches cleared')
