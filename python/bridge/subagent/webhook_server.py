@@ -100,23 +100,32 @@ class SubAgentWebhookServer:
     """
     self._queue_handler = handler
 
-  def _dedup_queue_event(self, session_id: str, position: int, queue_size: int) -> bool:
-    """Return True if this (session_id, position, queue_size) tuple is a
-    dup of one emitted within the last ``_QUEUE_DEDUP_WINDOW_S`` seconds
-    and should be suppressed.
+  def _is_duplicate_queue_event(self, session_id: str, position: int, queue_size: int) -> bool:
+    """Pure read-only check: is this (session_id, position, queue_size)
+    a dup of one we *successfully delivered* within the last
+    ``_QUEUE_DEDUP_WINDOW_S`` seconds?
+
+    Recording the emit is deliberately split out (see
+    :meth:`_record_queue_emit`) so we only suppress a retry when the
+    previous attempt actually reached the gateway. Otherwise a handler
+    failure followed by a sub-agent retry would silently lose the
+    notification.
     """
-    now = time.time()
     prev = self._queue_last_emit.get(session_id)
-    if prev is not None:
-      prev_pos, prev_qs, prev_ts = prev
-      if (
-        prev_pos == position
-        and prev_qs == queue_size
-        and (now - prev_ts) < self._QUEUE_DEDUP_WINDOW_S
-      ):
-        return True
-    self._queue_last_emit[session_id] = (position, queue_size, now)
-    return False
+    if prev is None:
+      return False
+    prev_pos, prev_qs, prev_ts = prev
+    return (
+      prev_pos == position
+      and prev_qs == queue_size
+      and (time.time() - prev_ts) < self._QUEUE_DEDUP_WINDOW_S
+    )
+
+  def _record_queue_emit(self, session_id: str, position: int, queue_size: int) -> None:
+    """Record a successful emit so subsequent retries within the dedup
+    window are suppressed. Must be called *after* the handler returns
+    cleanly — never before."""
+    self._queue_last_emit[session_id] = (position, queue_size, time.time())
 
   async def _handle_callback(self, request: web.Request) -> web.Response:
     try:
@@ -186,7 +195,7 @@ class SubAgentWebhookServer:
         )
         return web.Response(status=400, text="Bad position/queue_size")
 
-      if self._dedup_queue_event(session_id, position, queue_size):
+      if self._is_duplicate_queue_event(session_id, position, queue_size):
         logger.debug(
           "SubAgent queue webhook deduped: session=%s type=%s position=%s",
           session_id,
@@ -224,7 +233,14 @@ class SubAgentWebhookServer:
           msg_type,
           exc,
         )
+        # Don't record dedup state — the sub-agent should be free to
+        # retry this exact (position, queue_size) and have us deliver it.
         return web.json_response({"status": "handler_error"}, status=500)
+
+      # Only commit dedup state after the handler accepted the event.
+      # Anything earlier risks silently dropping a retry of a failed
+      # delivery within the dedup window.
+      self._record_queue_emit(session_id, position, queue_size)
 
       logger.info(
         "SubAgent queue webhook delivered session=%s chat=%s type=%s position=%s queue_size=%s",

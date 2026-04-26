@@ -224,6 +224,71 @@ async def test_handler_renders_expected_whatsapp_text():
 
 
 @pytest.mark.asyncio
+async def test_handler_failure_does_not_suppress_retry_within_window():
+  """Regression: when the handler raises, we must NOT record dedup
+  state, otherwise a sub-agent retry of the same (position, queue_size)
+  within the 5 s window would be silently dropped.
+  """
+
+  tracker = _make_tracker_with_session("sess-Y", "chat-y@s.whatsapp.net")
+  server = SubAgentWebhookServer(tracker, port=0)
+
+  call_count = {"n": 0}
+
+  async def flaky_handler(chat_id: str, event_type: str, position: int, queue_size: int) -> None:
+    call_count["n"] += 1
+    if call_count["n"] == 1:
+      raise RuntimeError("simulated transient WS failure")
+
+  server.set_queue_handler(flaky_handler)
+
+  payload = {
+    "type": "queued",
+    "session_id": "sess-Y",
+    "position": 1,
+    "queue_size": 1,
+  }
+
+  resp1 = await server._handle_callback(_FakeRequest(dict(payload)))
+  assert resp1.status == 500, "first attempt failed → must surface 500 to trigger retry"
+
+  resp2 = await server._handle_callback(_FakeRequest(dict(payload)))
+  assert resp2.status == 200, "retry must NOT be deduped — previous delivery never landed"
+  assert call_count["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_no_handler_does_not_suppress_followup_when_handler_appears():
+  """If the gateway is briefly disconnected (no handler), a follow-up
+  webhook with the same (position, queue_size) once the gateway
+  reconnects must still be delivered.
+  """
+
+  tracker = _make_tracker_with_session("sess-Z", "chat-z@s.whatsapp.net")
+  server = SubAgentWebhookServer(tracker, port=0)
+  # No handler on first call (gateway disconnected window).
+  resp1 = await server._handle_callback(_FakeRequest({
+    "type": "queued",
+    "session_id": "sess-Z",
+    "position": 1,
+    "queue_size": 1,
+  }))
+  assert resp1.status == 200
+
+  # Gateway reconnects and registers a handler.
+  handler = AsyncMock()
+  server.set_queue_handler(handler)
+  resp2 = await server._handle_callback(_FakeRequest({
+    "type": "queue_status",
+    "session_id": "sess-Z",
+    "position": 1,
+    "queue_size": 1,
+  }))
+  assert resp2.status == 200
+  handler.assert_awaited_once_with("chat-z@s.whatsapp.net", "queue_status", 1, 1)
+
+
+@pytest.mark.asyncio
 async def test_get_chat_for_session_returns_none_after_finalize():
   tracker = _make_tracker_with_session("sess-G", "chat-gary")
   assert tracker.get_chat_for_session("sess-G") == "chat-gary"
