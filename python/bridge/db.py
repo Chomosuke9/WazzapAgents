@@ -56,6 +56,7 @@ DEFAULT_MODE = 'prefix'
 VALID_TRIGGERS = {'tag', 'reply', 'join', 'name'}
 DEFAULT_TRIGGERS = 'tag,reply,name'
 DEFAULT_SUBAGENT_ENABLED = False
+GLOBAL_CHAT_ID = '__global__'
 
 # Sentinel to distinguish "we looked it up and it was NULL/missing" from
 # "we haven't looked it up yet".
@@ -372,6 +373,8 @@ def _ensure_settings_tables(conn: sqlite3.Connection) -> None:
     ('triggers', 'TEXT', f"'{DEFAULT_TRIGGERS}'"),
     ('llm2_model', 'TEXT', 'NULL'),
     ('subagent_enabled', 'INTEGER', '0'),
+    ('idle_trigger_min', 'INTEGER', 'NULL'),
+    ('idle_trigger_max', 'INTEGER', 'NULL'),
   ]:
     try:
       conn.execute(f'ALTER TABLE chat_settings ADD COLUMN {col} {col_type} DEFAULT {default}')
@@ -385,6 +388,14 @@ def _ensure_settings_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
   except sqlite3.OperationalError:
     pass
+
+  # Ensure a __global__ defaults row exists so setGlobal* updates propagate
+  # and get_* functions can fall back to it for chats without a specific row.
+  conn.execute(
+    'INSERT OR IGNORE INTO chat_settings (chat_id) VALUES (?)',
+    (GLOBAL_CHAT_ID,),
+  )
+  conn.commit()
 
 
 def _ensure_stats_tables(conn: sqlite3.Connection) -> None:
@@ -467,6 +478,20 @@ def _get_moderation_conn() -> sqlite3.Connection:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _get_setting_row(chat_id: str) -> Optional[sqlite3.Row]:
+  """Return the chat_settings row for *chat_id*, falling back to __global__."""
+  _ensure_split_ready()
+  conn = _get_settings_conn()
+  row = conn.execute(
+    'SELECT * FROM chat_settings WHERE chat_id = ?', (chat_id,)
+  ).fetchone()
+  if row is not None:
+    return row
+  return conn.execute(
+    'SELECT * FROM chat_settings WHERE chat_id = ?', (GLOBAL_CHAT_ID,)
+  ).fetchone()
+
+
 @_db_resilient('settings')
 def get_prompt(chat_id: str) -> Optional[str]:
   """Return the custom prompt for *chat_id*, or ``None`` if not set."""
@@ -475,11 +500,7 @@ def get_prompt(chat_id: str) -> Optional[str]:
   if cached is not _MISSING:
     return cached  # type: ignore[return-value]
 
-  _ensure_split_ready()
-  conn = _get_settings_conn()
-  row = conn.execute(
-    'SELECT prompt FROM chat_settings WHERE chat_id = ?', (chat_id,)
-  ).fetchone()
+  row = _get_setting_row(chat_id)
   value = row['prompt'] if row is not None else None
   with _cache_lock:
     _prompt_cache[chat_id] = value
@@ -514,11 +535,7 @@ def get_permission(chat_id: str) -> int:
   if cached is not _MISSING:
     return cached  # type: ignore[return-value]
 
-  _ensure_split_ready()
-  conn = _get_settings_conn()
-  row = conn.execute(
-    'SELECT permission FROM chat_settings WHERE chat_id = ?', (chat_id,)
-  ).fetchone()
+  row = _get_setting_row(chat_id)
   value = int(row['permission']) if row is not None else 0
   with _cache_lock:
     _permission_cache[chat_id] = value
@@ -622,11 +639,7 @@ def get_llm2_model(chat_id: str) -> Optional[str]:
   if cached is not _MISSING:
     return cached if cached is not None else None
 
-  _ensure_split_ready()
-  conn = _get_settings_conn()
-  row = conn.execute(
-    'SELECT llm2_model FROM chat_settings WHERE chat_id = ?', (chat_id,)
-  ).fetchone()
+  row = _get_setting_row(chat_id)
   value = row['llm2_model'] if row is not None else None
   with _cache_lock:
     _llm2_model_cache[chat_id] = value
@@ -953,11 +966,7 @@ def get_mode(chat_id: str) -> str:
   if cached is not _MISSING:
     return cached  # type: ignore[return-value]
 
-  _ensure_split_ready()
-  conn = _get_settings_conn()
-  row = conn.execute(
-    'SELECT mode FROM chat_settings WHERE chat_id = ?', (chat_id,)
-  ).fetchone()
+  row = _get_setting_row(chat_id)
   value = row['mode'] if row is not None else DEFAULT_MODE
   if value not in VALID_MODES:
     value = DEFAULT_MODE
@@ -996,11 +1005,7 @@ def get_triggers(chat_id: str) -> set[str]:
   if cached is not _MISSING:
     raw = cached  # type: ignore[assignment]
   else:
-    _ensure_split_ready()
-    conn = _get_settings_conn()
-    row = conn.execute(
-      'SELECT triggers FROM chat_settings WHERE chat_id = ?', (chat_id,)
-    ).fetchone()
+    row = _get_setting_row(chat_id)
     raw = row['triggers'] if row is not None else DEFAULT_TRIGGERS
     with _cache_lock:
       _triggers_cache[chat_id] = raw
@@ -1041,11 +1046,7 @@ def get_subagent_enabled(chat_id: str) -> bool:
   if cached is not _MISSING:
     return cached  # type: ignore[return-value]
 
-  _ensure_split_ready()
-  conn = _get_settings_conn()
-  row = conn.execute(
-    'SELECT subagent_enabled FROM chat_settings WHERE chat_id = ?', (chat_id,)
-  ).fetchone()
+  row = _get_setting_row(chat_id)
   value = bool(row['subagent_enabled']) if row is not None else DEFAULT_SUBAGENT_ENABLED
   with _cache_lock:
     _subagent_enabled_cache[chat_id] = value
@@ -1071,6 +1072,40 @@ def set_subagent_enabled(chat_id: str, enabled: bool) -> None:
   with _cache_lock:
     _subagent_enabled_cache[chat_id] = enabled
   logger.info('DB set_subagent_enabled chat_id=%s enabled=%s', chat_id, enabled)
+
+
+# ---------------------------------------------------------------------------
+# Idle trigger
+# ---------------------------------------------------------------------------
+
+@_db_resilient('settings')
+def get_idle_trigger(chat_id: str) -> Optional[tuple[int, int]]:
+  """Return (min, max) for the idle trigger, or None if not set."""
+  row = _get_setting_row(chat_id)
+  min_val = row['idle_trigger_min'] if row is not None else None
+  if min_val is None:
+    return None
+  max_val = row['idle_trigger_max'] if row is not None else None
+  return (int(min_val), int(max_val) if max_val is not None else int(min_val))
+
+
+@_db_resilient('settings')
+def set_idle_trigger(chat_id: str, min_val: Optional[int], max_val: Optional[int]) -> None:
+  _ensure_split_ready()
+  conn = _get_settings_conn()
+  conn.execute(
+    """
+    INSERT INTO chat_settings (chat_id, idle_trigger_min, idle_trigger_max, updated_at)
+    VALUES (?, ?, ?, datetime('now'))
+    ON CONFLICT(chat_id) DO UPDATE SET
+      idle_trigger_min = excluded.idle_trigger_min,
+      idle_trigger_max = excluded.idle_trigger_max,
+      updated_at = excluded.updated_at
+    """,
+    (chat_id, min_val, max_val),
+  )
+  conn.commit()
+  logger.info('DB set_idle_trigger chat_id=%s min=%s max=%s', chat_id, min_val, max_val)
 
 
 # ---------------------------------------------------------------------------

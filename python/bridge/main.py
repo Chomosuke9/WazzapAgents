@@ -4,6 +4,7 @@ import asyncio
 import atexit
 import json
 import os
+import random
 import signal
 import time
 import uuid
@@ -46,6 +47,7 @@ try:
     get_subagent_enabled as db_get_subagent_enabled,
     set_subagent_enabled as db_set_subagent_enabled,
     clear_subagent_enabled_cache as db_clear_subagent_enabled_cache,
+    get_idle_trigger as db_get_idle_trigger,
   )
   from .dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop
   from .stickers import resolve_sticker
@@ -131,6 +133,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     get_subagent_enabled as db_get_subagent_enabled,
     set_subagent_enabled as db_set_subagent_enabled,
     clear_subagent_enabled_cache as db_clear_subagent_enabled_cache,
+    get_idle_trigger as db_get_idle_trigger,
   )
   from bridge.dashboard import record_stat, record_user_invoke, flush_to_db, start_flush_loop  # type: ignore
   from bridge.stickers import resolve_sticker  # type: ignore
@@ -754,6 +757,7 @@ async def handle_socket(ws):
   pending_send_request_chat: Dict[str, str] = {}
   recent_reply_signatures_by_chat: Dict[str, Deque[tuple[int, str]]] = defaultdict(deque)
   media_paths_by_chat: Dict[str, Dict[str, str]] = defaultdict(dict)
+  idle_msg_count: Dict[str, int] = defaultdict(int)
   tasks: Set[asyncio.Task] = set()
   logger.info("Gateway connected")
 
@@ -827,6 +831,19 @@ async def handle_socket(ws):
       items.popleft()
     return False
 
+  def _should_idle_trigger(chat_id: str, msg_count: int) -> bool:
+    """Check if the idle trigger should fire based on the message count."""
+    cfg = db_get_idle_trigger(chat_id)
+    if not cfg:
+      return False
+    min_val, max_val = cfg
+    if msg_count < min_val:
+      return False
+    if min_val == max_val:
+      return True
+    range_size = max_val - min_val
+    return random.random() < (1.0 / range_size)
+
   async def process_message_batch(payloads: list[dict]):
     if not payloads:
       return
@@ -871,13 +888,23 @@ async def handle_socket(ws):
       # also dropped: those messages preceded the reset boundary, so
       # treating them as "post-reset" history would defeat the point.
       if cmd_name == "reset":
-        per_chat[p_chat_id].clear()
-        db_invalidate_chat_caches(p_chat_id)
+        is_global_reset = cmd_args.strip().lower() == "global"
+        if is_global_reset and not payload.get("senderIsOwner"):
+          continue
+        if is_global_reset:
+          per_chat.clear()
+          idle_msg_count.clear()
+          db_reset_settings_connection()
+          logger.info("Memory and caches cleared for ALL chats via /reset global (inline)")
+        else:
+          per_chat[p_chat_id].clear()
+          idle_msg_count.pop(p_chat_id, None)
+          db_invalidate_chat_caches(p_chat_id)
+          logger.info(
+            "Memory and per-chat settings caches cleared for chat_id=%s via /reset",
+            p_chat_id,
+          )
         remaining_payloads.clear()
-        logger.info(
-          "Memory and per-chat settings caches cleared for chat_id=%s via /reset",
-          p_chat_id,
-        )
         continue
 
       history = per_chat[p_chat_id]
@@ -1090,15 +1117,29 @@ async def handle_socket(ws):
           # Prefix mode: check if any trigger payload matches prefix
           prefix_matched_payloads = [p for p in llm1_trigger_payloads if _message_matches_prefix(p, triggers)]
           if not prefix_matched_payloads:
-            # No prefix match — store history and skip
-            for payload in non_empty_payloads:
-              _append_or_merge_history_payload(history, payload)
-            logger.info(
-              "prefix mode: no match; skipping",
-              extra={"chat_id": chat_id, "triggers": sorted(triggers), "batch_size": len(llm1_trigger_payloads)},
-            )
-            _log_slow_batch("prefix_no_match")
-            return
+            # No prefix match — check idle trigger before skipping
+            idle_msg_count[chat_id] += len(llm1_trigger_payloads)
+            if _should_idle_trigger(chat_id, idle_msg_count[chat_id]):
+              idle_msg_count[chat_id] = 0
+              decision = LLM1Decision(
+                should_response=True,
+                confidence=100,
+                reason="Idle trigger: bot has been silent too long.",
+              )
+              llm1_ms = 0
+              logger.info(
+                "prefix mode: no match but idle trigger fired",
+                extra={"chat_id": chat_id, "idle_count": idle_msg_count[chat_id]},
+              )
+            else:
+              for payload in non_empty_payloads:
+                _append_or_merge_history_payload(history, payload)
+              logger.info(
+                "prefix mode: no match; skipping",
+                extra={"chat_id": chat_id, "triggers": sorted(triggers), "batch_size": len(llm1_trigger_payloads)},
+              )
+              _log_slow_batch("prefix_no_match")
+              return
           # Prefix matched — skip LLM1, go straight to LLM2
           decision = LLM1Decision(
             should_response=True,
@@ -1299,16 +1340,30 @@ async def handle_socket(ws):
               decision.react_expression,
               request_id=_make_request_id("react"),
             )
+          idle_msg_count[chat_id] = 0
           _log_slow_batch("llm1_express")
           return
 
         if not decision.should_response:
-          logger.info(
-            "llm1 skip; no response sent",
-            extra={"chat_id": chat_id},
-          )
-          _log_slow_batch("llm1_skip")
-          return
+          idle_msg_count[chat_id] += len(llm1_trigger_payloads)
+          if _should_idle_trigger(chat_id, idle_msg_count[chat_id]):
+            idle_msg_count[chat_id] = 0
+            decision = LLM1Decision(
+              should_response=True,
+              confidence=100,
+              reason="Idle trigger: bot has been silent too long.",
+            )
+            logger.info(
+              "llm1 skip overridden by idle trigger",
+              extra={"chat_id": chat_id, "idle_count": idle_msg_count[chat_id]},
+            )
+          else:
+            logger.info(
+              "llm1 skip; no response sent",
+              extra={"chat_id": chat_id},
+            )
+            _log_slow_batch("llm1_skip")
+            return
 
         allowed_context_ids = _collect_context_ids(history)
         fallback_reply_to = _normalize_context_msg_id(last_payload.get("contextMsgId"))
@@ -1398,6 +1453,7 @@ async def handle_socket(ws):
 
         llm2_ms = int((time.perf_counter() - llm2_started) * 1000)
         record_stat(chat_id, "llm2_calls")
+        idle_msg_count[chat_id] = 0
         # Track LLM2 token usage if available
         if reply_msg is not None:
           _usage = getattr(reply_msg, "usage_metadata", None)
