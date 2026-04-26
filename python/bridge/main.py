@@ -791,12 +791,17 @@ async def handle_socket(ws):
         request_id=_make_request_id("subagent_queue"),
       )
     except Exception as exc:  # pylint: disable=broad-except
+      # Log and re-raise so the webhook server's dedup-on-failure
+      # safeguard kicks in (it returns HTTP 500 + skips _record_queue_emit
+      # so a sub-agent retry within the dedup window is delivered, not
+      # silently suppressed).
       logger.warning(
         "Failed to deliver subagent queue notification chat=%s type=%s: %s",
         chat_id,
         event_type,
         exc,
       )
+      raise
 
   subagent_webhook.set_queue_handler(_on_subagent_queue_event)
 
