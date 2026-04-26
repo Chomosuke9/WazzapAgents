@@ -842,7 +842,7 @@ async def handle_socket(ws):
     if min_val == max_val:
       return True
     range_size = max_val - min_val
-    return random.random() < (1.0 / range_size)
+    return random.random() < (1.0 / (max_val - msg_count + 1))
 
   async def process_message_batch(payloads: list[dict]):
     if not payloads:
