@@ -2029,10 +2029,12 @@ async def handle_socket(ws):
         clear_chat_id = event.get("chatId")
         if clear_chat_id == "global":
           per_chat.clear()
+          idle_msg_count.clear()
           db_reset_settings_connection()
           logger.info("History and caches cleared for ALL chats via clear_history message")
         elif clear_chat_id:
           per_chat[clear_chat_id].clear()
+          idle_msg_count.pop(clear_chat_id, None)
           db_invalidate_chat_caches(clear_chat_id)
           logger.info("History cleared for chat_id=%s via clear_history message", clear_chat_id)
         continue
