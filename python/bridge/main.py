@@ -1120,6 +1120,7 @@ async def handle_socket(ws):
             # No prefix match — check idle trigger before skipping
             idle_msg_count[chat_id] += len(llm1_trigger_payloads)
             if _should_idle_trigger(chat_id, idle_msg_count[chat_id]):
+              triggered_count = idle_msg_count[chat_id]
               idle_msg_count[chat_id] = 0
               decision = LLM1Decision(
                 should_response=True,
@@ -1129,7 +1130,7 @@ async def handle_socket(ws):
               llm1_ms = 0
               logger.info(
                 "prefix mode: no match but idle trigger fired",
-                extra={"chat_id": chat_id, "idle_count": idle_msg_count[chat_id]},
+                extra={"chat_id": chat_id, "idle_count": triggered_count},
               )
             else:
               for payload in non_empty_payloads:
@@ -1140,24 +1141,25 @@ async def handle_socket(ws):
               )
               _log_slow_batch("prefix_no_match")
               return
-          # Prefix matched — skip LLM1, go straight to LLM2
-          decision = LLM1Decision(
-            should_response=True,
-            confidence=100,
-            reason="Prefix mode: bot was explicitly invoked.",
-          )
-          llm1_ms = 0
-          # Record invoking user for dashboard
-          for _pp in prefix_matched_payloads:
-            _pp_ref = _clean_text(_pp.get("senderRef"))
-            _pp_name = _clean_text(_pp.get("senderName"))
-            if _pp_ref:
-              record_user_invoke(chat_id, _pp_ref, _pp_name)
-          logger.info(
-            "prefix mode: matched %d/%d payloads; skipping LLM1",
-            len(prefix_matched_payloads), len(llm1_trigger_payloads),
-            extra={"chat_id": chat_id, "triggers": sorted(triggers)},
-          )
+          else:
+            # Prefix matched — skip LLM1, go straight to LLM2
+            decision = LLM1Decision(
+              should_response=True,
+              confidence=100,
+              reason="Prefix mode: bot was explicitly invoked.",
+            )
+            llm1_ms = 0
+            # Record invoking user for dashboard
+            for _pp in prefix_matched_payloads:
+              _pp_ref = _clean_text(_pp.get("senderRef"))
+              _pp_name = _clean_text(_pp.get("senderName"))
+              if _pp_ref:
+                record_user_invoke(chat_id, _pp_ref, _pp_name)
+            logger.info(
+              "prefix mode: matched %d/%d payloads; skipping LLM1",
+              len(prefix_matched_payloads), len(llm1_trigger_payloads),
+              extra={"chat_id": chat_id, "triggers": sorted(triggers)},
+            )
         elif chat_mode == "hybrid":
           # Hybrid mode: check prefix triggers first, fall back to auto (LLM1)
           prefix_matched_payloads = [p for p in llm1_trigger_payloads if _message_matches_prefix(p, triggers)]
@@ -1347,6 +1349,7 @@ async def handle_socket(ws):
         if not decision.should_response:
           idle_msg_count[chat_id] += len(llm1_trigger_payloads)
           if _should_idle_trigger(chat_id, idle_msg_count[chat_id]):
+            triggered_count = idle_msg_count[chat_id]
             idle_msg_count[chat_id] = 0
             decision = LLM1Decision(
               should_response=True,
@@ -1355,7 +1358,7 @@ async def handle_socket(ws):
             )
             logger.info(
               "llm1 skip overridden by idle trigger",
-              extra={"chat_id": chat_id, "idle_count": idle_msg_count[chat_id]},
+              extra={"chat_id": chat_id, "idle_count": triggered_count},
             )
           else:
             logger.info(
