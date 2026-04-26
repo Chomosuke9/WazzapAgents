@@ -18,6 +18,7 @@ const HELP_TEXT = `*WazzapAgents - Daftar Perintah*
 • \`/model\` — Pilih model AI
 • \`/mode\` [auto|prefix|hybrid] — Mode respon
 • \`/trigger\` [opsi] — Atur pemicu respon
+• \`/idle\` [n|n-m|off] — Auto-trigger LLM2 setelah n pesan tanpa bicara
 • \`/group-status\` [text/media] — Kirim group status
 
 _Ketik perintah tanpa argumen untuk melihat status saat ini._`;

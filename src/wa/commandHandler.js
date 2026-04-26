@@ -204,7 +204,7 @@ async function handleCommandListener(msg, context) {
       return true;
 
     case "idle":
-      await handleIdle({ chatId, senderIsOwner, args });
+      await handleIdle({ chatId, senderIsOwner, senderIsAdmin, args });
       return true;
 
     default:

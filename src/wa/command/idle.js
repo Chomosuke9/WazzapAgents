@@ -26,13 +26,13 @@ function formatTrigger(trigger) {
   return `${trigger.min}-${trigger.max} messages`;
 }
 
-async function handleIdle({ chatId, senderIsOwner, args }) {
+async function handleIdle({ chatId, senderIsOwner, senderIsAdmin, args }) {
   const sock = getSock();
 
-  if (!senderIsOwner) {
+  if (!senderIsOwner && !senderIsAdmin) {
     try {
       await sock.sendMessage(chatId, {
-        text: "Only bot owner can use `/idle`.",
+        text: "Only admins can use `/idle`.",
       });
     } catch (err) {
       /* ignore */
@@ -61,6 +61,17 @@ async function handleIdle({ chatId, senderIsOwner, args }) {
   const parts = args.trim().toLowerCase().split(/\s+/);
   const isGlobal = parts[0] === "global";
   const value = isGlobal ? parts.slice(1).join(" ") : parts.join(" ");
+
+  if (isGlobal && !senderIsOwner) {
+    try {
+      await sock.sendMessage(chatId, {
+        text: "Only bot owner can use `/idle global`.",
+      });
+    } catch (err) {
+      /* ignore */
+    }
+    return;
+  }
 
   if (value === "off") {
     if (isGlobal) {
