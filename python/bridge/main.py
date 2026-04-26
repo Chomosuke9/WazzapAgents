@@ -1928,7 +1928,11 @@ async def handle_socket(ws):
       # before the debounce window expires can't see stale history.
       if event_type == "clear_history":
         clear_chat_id = event.get("chatId")
-        if clear_chat_id:
+        if clear_chat_id == "global":
+          per_chat.clear()
+          db_reset_settings_connection()
+          logger.info("History and caches cleared for ALL chats via clear_history message")
+        elif clear_chat_id:
           per_chat[clear_chat_id].clear()
           db_invalidate_chat_caches(clear_chat_id)
           logger.info("History cleared for chat_id=%s via clear_history message", clear_chat_id)
@@ -1937,15 +1941,22 @@ async def handle_socket(ws):
       # Handle invalidate_llm2_model message from Node.js (after model change)
       if event_type == "invalidate_llm2_model":
         clear_chat_id = event.get("chatId")
-        db_clear_llm2_model_cache(clear_chat_id)
-        logger.info("LLM2 model cache cleared for chat_id=%s via invalidate_llm2_model message", clear_chat_id)
+        if clear_chat_id == "global":
+          db_reset_settings_connection()
+          logger.info("LLM2 model cache cleared for ALL chats via invalidate_llm2_model message")
+        else:
+          db_clear_llm2_model_cache(clear_chat_id)
+          logger.info("LLM2 model cache cleared for chat_id=%s via invalidate_llm2_model message", clear_chat_id)
         continue
 
       # Handle set_llm2_model message from Node.js (authoritative sync)
       if event_type == "set_llm2_model":
         chat_id = event.get("chatId")
         model_id = event.get("modelId")
-        if chat_id:
+        if chat_id == "global":
+          db_reset_settings_connection()
+          logger.info("LLM2 model set globally via set_llm2_model message model_id=%s", model_id)
+        elif chat_id:
           db_set_llm2_model(chat_id, model_id)
           logger.info("LLM2 model set via set_llm2_model message chat_id=%s model_id=%s", chat_id, model_id)
         continue
@@ -1963,7 +1974,10 @@ async def handle_socket(ws):
       if event_type == "set_subagent_enabled":
         chat_id = event.get("chatId")
         enabled = bool(event.get("enabled"))
-        if chat_id:
+        if chat_id == "global":
+          db_reset_settings_connection()
+          logger.info("subagent_enabled cache invalidated GLOBALLY")
+        elif chat_id:
           db_clear_subagent_enabled_cache(chat_id)
           # Reset the settings DB connection too so SQLite re-reads the row
           # Node just wrote; without this, the cached connection may serve
@@ -1983,7 +1997,10 @@ async def handle_socket(ws):
       # report as "settings change doesn't take effect until restart".
       if event_type == "invalidate_chat_settings":
         chat_id = event.get("chatId")
-        if chat_id:
+        if chat_id == "global":
+          db_reset_settings_connection()
+          logger.info("chat settings caches invalidated GLOBALLY")
+        elif chat_id:
           db_invalidate_chat_caches(chat_id)
           logger.info(
             "chat settings caches invalidated chat_id=%s",
@@ -2026,7 +2043,7 @@ async def handle_socket(ws):
           await send_message(
             ws,
             chat_id,
-            f"Pesan dari {_mute_name} dihapus (muted, {_remaining}m tersisa).",
+            f"Message from {_mute_name} deleted (muted, {_remaining}m remaining).",
             None,
             request_id=_make_request_id("mute_notify"),
           )

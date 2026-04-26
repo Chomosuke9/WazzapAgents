@@ -1,13 +1,13 @@
-import initSqlJs from 'sql.js';
-import path from 'path';
-import fs from 'fs';
-import logger from './logger.js';
-import config from './config.js';
+import initSqlJs from "sql.js";
+import path from "path";
+import fs from "fs";
+import logger from "./logger.js";
+import config from "./config.js";
 
-const VALID_MODES = new Set(['auto', 'prefix', 'hybrid']);
-const DEFAULT_MODE = 'prefix';
-const VALID_TRIGGERS = new Set(['tag', 'reply', 'join', 'name']);
-const DEFAULT_TRIGGERS = 'tag,reply,name';
+const VALID_MODES = new Set(["auto", "prefix", "hybrid"]);
+const DEFAULT_MODE = "prefix";
+const VALID_TRIGGERS = new Set(["tag", "reply", "join", "name"]);
+const DEFAULT_TRIGGERS = "tag,reply,name";
 
 let _sql = null;
 
@@ -76,9 +76,9 @@ function refreshDbFromDiskIfChanged(state, initTablesFn) {
     const data = loadDbDataFromDisk(state.dbPath);
     replaceDb(state, data, initTablesFn);
     state.lastLoadedMtimeMs = diskMtimeMs;
-    logger.debug({ dbPath: state.dbPath }, 'DB refreshed from disk');
+    logger.debug({ dbPath: state.dbPath }, "DB refreshed from disk");
   } catch (err) {
-    logger.warn({ err, dbPath: state.dbPath }, 'DB refresh from disk failed');
+    logger.warn({ err, dbPath: state.dbPath }, "DB refresh from disk failed");
   }
 }
 
@@ -92,7 +92,7 @@ function saveDb(state) {
     fs.renameSync(tempPath, state.dbPath);
     state.lastLoadedMtimeMs = getFileMtimeMs(state.dbPath) || Date.now();
   } catch (err) {
-    logger.error({ err, dbPath: state.dbPath }, 'DB save failed');
+    logger.error({ err, dbPath: state.dbPath }, "DB save failed");
   }
 }
 
@@ -113,9 +113,11 @@ function initSettingsTables(db) {
   // Migration for existing installs whose chat_settings table predates the
   // subagent_enabled column. Without this, set/get below would fail with
   // "no such column" until the file is recreated.
-  const chatSettingsCols = getColumns(db, 'chat_settings');
-  if (!chatSettingsCols.has('subagent_enabled')) {
-    db.run('ALTER TABLE chat_settings ADD COLUMN subagent_enabled INTEGER NOT NULL DEFAULT 0');
+  const chatSettingsCols = getColumns(db, "chat_settings");
+  if (!chatSettingsCols.has("subagent_enabled")) {
+    db.run(
+      "ALTER TABLE chat_settings ADD COLUMN subagent_enabled INTEGER NOT NULL DEFAULT 0",
+    );
   }
 
   db.run(`
@@ -130,9 +132,11 @@ function initSettingsTables(db) {
   `);
 
   // Migration: add vision_support column if it doesn't exist
-  const columns = getColumns(db, 'llm_models');
-  if (!columns.has('vision_support')) {
-    db.run('ALTER TABLE llm_models ADD COLUMN vision_support INTEGER NOT NULL DEFAULT 0');
+  const columns = getColumns(db, "llm_models");
+  if (!columns.has("vision_support")) {
+    db.run(
+      "ALTER TABLE llm_models ADD COLUMN vision_support INTEGER NOT NULL DEFAULT 0",
+    );
   }
 
   db.run(`
@@ -208,34 +212,44 @@ function escapeIdentifier(identifier) {
 function tableExists(db, tableName) {
   const rows = queryRows(
     db,
-    'SELECT 1 AS ok FROM sqlite_master WHERE type = ? AND name = ? LIMIT 1',
-    'table',
-    tableName
+    "SELECT 1 AS ok FROM sqlite_master WHERE type = ? AND name = ? LIMIT 1",
+    "table",
+    tableName,
   );
   return rows.length > 0;
 }
 
 function hasRows(db, tableName) {
   if (!tableExists(db, tableName)) return false;
-  const rows = queryRows(db, `SELECT 1 AS ok FROM ${escapeIdentifier(tableName)} LIMIT 1`);
+  const rows = queryRows(
+    db,
+    `SELECT 1 AS ok FROM ${escapeIdentifier(tableName)} LIMIT 1`,
+  );
   return rows.length > 0;
 }
 
 function getColumns(db, tableName) {
   if (!tableExists(db, tableName)) return new Set();
-  const rows = queryRows(db, `PRAGMA table_info(${escapeIdentifier(tableName)})`);
+  const rows = queryRows(
+    db,
+    `PRAGMA table_info(${escapeIdentifier(tableName)})`,
+  );
   return new Set(rows.map((r) => String(r.name)));
 }
 
 function migrateFromLegacyIfNeeded() {
-  const legacyDbPath = path.join(config.dataDir, 'bot.db');
+  const legacyDbPath = path.join(config.dataDir, "bot.db");
   if (!fs.existsSync(legacyDbPath)) return;
 
   const settingsPath = getSettingsDbPath();
   const statsPath = getStatsDbPath();
   const moderationPath = getModerationDbPath();
   const normalizedLegacy = path.resolve(legacyDbPath);
-  if ([settingsPath, statsPath, moderationPath].some((p) => path.resolve(p) === normalizedLegacy)) {
+  if (
+    [settingsPath, statsPath, moderationPath].some(
+      (p) => path.resolve(p) === normalizedLegacy,
+    )
+  ) {
     return;
   }
 
@@ -243,29 +257,40 @@ function migrateFromLegacyIfNeeded() {
   try {
     legacy = new _sql.Database(loadDbDataFromDisk(legacyDbPath));
   } catch (err) {
-    logger.warn({ err, legacyDbPath }, 'Failed opening legacy bot.db for migration');
+    logger.warn(
+      { err, legacyDbPath },
+      "Failed opening legacy bot.db for migration",
+    );
     return;
   }
 
   try {
-    const legacyChatSettingsColumns = getColumns(legacy, 'chat_settings');
+    const legacyChatSettingsColumns = getColumns(legacy, "chat_settings");
 
-    if (_settingsState.db && !hasRows(_settingsState.db, 'chat_settings') && legacyChatSettingsColumns.size > 0) {
-      const chatSettingsRows = queryRows(legacy, `
+    if (
+      _settingsState.db &&
+      !hasRows(_settingsState.db, "chat_settings") &&
+      legacyChatSettingsColumns.size > 0
+    ) {
+      const chatSettingsRows = queryRows(
+        legacy,
+        `
         SELECT
           chat_id,
           prompt,
           COALESCE(permission, 0) AS permission,
-          ${legacyChatSettingsColumns.has('mode') ? 'mode' : `'${DEFAULT_MODE}'`} AS mode,
-          ${legacyChatSettingsColumns.has('triggers') ? 'triggers' : `'${DEFAULT_TRIGGERS}'`} AS triggers,
-          ${legacyChatSettingsColumns.has('llm2_model') ? 'llm2_model' : 'NULL'} AS llm2_model,
+          ${legacyChatSettingsColumns.has("mode") ? "mode" : `'${DEFAULT_MODE}'`} AS mode,
+          ${legacyChatSettingsColumns.has("triggers") ? "triggers" : `'${DEFAULT_TRIGGERS}'`} AS triggers,
+          ${legacyChatSettingsColumns.has("llm2_model") ? "llm2_model" : "NULL"} AS llm2_model,
           COALESCE(updated_at, datetime('now')) AS updated_at
         FROM chat_settings
-      `);
-      _settingsState.db.run('BEGIN TRANSACTION');
+      `,
+      );
+      _settingsState.db.run("BEGIN TRANSACTION");
       try {
         for (const row of chatSettingsRows) {
-          _settingsState.db.run(`
+          _settingsState.db.run(
+            `
             INSERT INTO chat_settings (chat_id, prompt, permission, mode, triggers, llm2_model, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
@@ -275,113 +300,204 @@ function migrateFromLegacyIfNeeded() {
               triggers = excluded.triggers,
               llm2_model = excluded.llm2_model,
               updated_at = excluded.updated_at
-          `, [row.chat_id, row.prompt, row.permission, row.mode, row.triggers, row.llm2_model, row.updated_at]);
+          `,
+            [
+              row.chat_id,
+              row.prompt,
+              row.permission,
+              row.mode,
+              row.triggers,
+              row.llm2_model,
+              row.updated_at,
+            ],
+          );
         }
-        _settingsState.db.run('COMMIT');
+        _settingsState.db.run("COMMIT");
       } catch (err) {
-        _settingsState.db.run('ROLLBACK');
+        _settingsState.db.run("ROLLBACK");
         throw err;
       }
       if (chatSettingsRows.length > 0) saveDb(_settingsState);
-      logger.info({ rows: chatSettingsRows.length }, 'Migrated legacy chat_settings to settings.db');
+      logger.info(
+        { rows: chatSettingsRows.length },
+        "Migrated legacy chat_settings to settings.db",
+      );
     }
 
-    if (_settingsState.db && !hasRows(_settingsState.db, 'llm_models') && tableExists(legacy, 'llm_models')) {
-      const legacyLlmColumns = getColumns(legacy, 'llm_models');
-      const hasVisionSupport = legacyLlmColumns.has('vision_support');
-      const llmRows = queryRows(legacy, `
-        SELECT model_id, display_name, description, COALESCE(is_active, 1) AS is_active, COALESCE(sort_order, 0) AS sort_order${hasVisionSupport ? ', COALESCE(vision_support, 0) AS vision_support' : ', 0 AS vision_support'}
+    if (
+      _settingsState.db &&
+      !hasRows(_settingsState.db, "llm_models") &&
+      tableExists(legacy, "llm_models")
+    ) {
+      const legacyLlmColumns = getColumns(legacy, "llm_models");
+      const hasVisionSupport = legacyLlmColumns.has("vision_support");
+      const llmRows = queryRows(
+        legacy,
+        `
+        SELECT model_id, display_name, description, COALESCE(is_active, 1) AS is_active, COALESCE(sort_order, 0) AS sort_order${hasVisionSupport ? ", COALESCE(vision_support, 0) AS vision_support" : ", 0 AS vision_support"}
         FROM llm_models
-      `);
-      _settingsState.db.run('BEGIN TRANSACTION');
+      `,
+      );
+      _settingsState.db.run("BEGIN TRANSACTION");
       try {
         for (const row of llmRows) {
-          _settingsState.db.run(`
+          _settingsState.db.run(
+            `
             INSERT OR REPLACE INTO llm_models (model_id, display_name, description, is_active, sort_order, vision_support)
             VALUES (?, ?, ?, ?, ?, ?)
-          `, [row.model_id, row.display_name, row.description, row.is_active, row.sort_order, row.vision_support]);
+          `,
+            [
+              row.model_id,
+              row.display_name,
+              row.description,
+              row.is_active,
+              row.sort_order,
+              row.vision_support,
+            ],
+          );
         }
-        _settingsState.db.run('COMMIT');
+        _settingsState.db.run("COMMIT");
       } catch (err) {
-        _settingsState.db.run('ROLLBACK');
+        _settingsState.db.run("ROLLBACK");
         throw err;
       }
       if (llmRows.length > 0) saveDb(_settingsState);
-      logger.info({ rows: llmRows.length }, 'Migrated legacy llm_models to settings.db');
+      logger.info(
+        { rows: llmRows.length },
+        "Migrated legacy llm_models to settings.db",
+      );
     }
 
-    if (_statsState.db && !hasRows(_statsState.db, 'chat_stats') && tableExists(legacy, 'chat_stats')) {
-      const statRows = queryRows(legacy, `
+    if (
+      _statsState.db &&
+      !hasRows(_statsState.db, "chat_stats") &&
+      tableExists(legacy, "chat_stats")
+    ) {
+      const statRows = queryRows(
+        legacy,
+        `
         SELECT chat_id, period_type, period_key, stat_key, stat_value
         FROM chat_stats
-      `);
-      _statsState.db.run('BEGIN TRANSACTION');
+      `,
+      );
+      _statsState.db.run("BEGIN TRANSACTION");
       try {
         for (const row of statRows) {
-          _statsState.db.run(`
+          _statsState.db.run(
+            `
             INSERT OR REPLACE INTO chat_stats (chat_id, period_type, period_key, stat_key, stat_value)
             VALUES (?, ?, ?, ?, ?)
-          `, [row.chat_id, row.period_type, row.period_key, row.stat_key, row.stat_value]);
+          `,
+            [
+              row.chat_id,
+              row.period_type,
+              row.period_key,
+              row.stat_key,
+              row.stat_value,
+            ],
+          );
         }
-        _statsState.db.run('COMMIT');
+        _statsState.db.run("COMMIT");
       } catch (err) {
-        _statsState.db.run('ROLLBACK');
+        _statsState.db.run("ROLLBACK");
         throw err;
       }
       if (statRows.length > 0) saveDb(_statsState);
-      logger.info({ rows: statRows.length }, 'Migrated legacy chat_stats to stats.db');
+      logger.info(
+        { rows: statRows.length },
+        "Migrated legacy chat_stats to stats.db",
+      );
     }
 
-    if (_statsState.db && !hasRows(_statsState.db, 'chat_user_stats') && tableExists(legacy, 'chat_user_stats')) {
-      const userRows = queryRows(legacy, `
+    if (
+      _statsState.db &&
+      !hasRows(_statsState.db, "chat_user_stats") &&
+      tableExists(legacy, "chat_user_stats")
+    ) {
+      const userRows = queryRows(
+        legacy,
+        `
         SELECT chat_id, period_type, period_key, sender_ref, sender_name, invoke_count
         FROM chat_user_stats
-      `);
-      _statsState.db.run('BEGIN TRANSACTION');
+      `,
+      );
+      _statsState.db.run("BEGIN TRANSACTION");
       try {
         for (const row of userRows) {
-          _statsState.db.run(`
+          _statsState.db.run(
+            `
             INSERT OR REPLACE INTO chat_user_stats (chat_id, period_type, period_key, sender_ref, sender_name, invoke_count)
             VALUES (?, ?, ?, ?, ?, ?)
-          `, [row.chat_id, row.period_type, row.period_key, row.sender_ref, row.sender_name, row.invoke_count]);
+          `,
+            [
+              row.chat_id,
+              row.period_type,
+              row.period_key,
+              row.sender_ref,
+              row.sender_name,
+              row.invoke_count,
+            ],
+          );
         }
-        _statsState.db.run('COMMIT');
+        _statsState.db.run("COMMIT");
       } catch (err) {
-        _statsState.db.run('ROLLBACK');
+        _statsState.db.run("ROLLBACK");
         throw err;
       }
       if (userRows.length > 0) saveDb(_statsState);
-      logger.info({ rows: userRows.length }, 'Migrated legacy chat_user_stats to stats.db');
+      logger.info(
+        { rows: userRows.length },
+        "Migrated legacy chat_user_stats to stats.db",
+      );
     }
 
-    if (_moderationState.db && !hasRows(_moderationState.db, 'chat_mutes') && tableExists(legacy, 'chat_mutes')) {
-      const muteRows = queryRows(legacy, `
+    if (
+      _moderationState.db &&
+      !hasRows(_moderationState.db, "chat_mutes") &&
+      tableExists(legacy, "chat_mutes")
+    ) {
+      const muteRows = queryRows(
+        legacy,
+        `
         SELECT chat_id, sender_ref, muted_at, duration_m
         FROM chat_mutes
-      `);
-      _moderationState.db.run('BEGIN TRANSACTION');
+      `,
+      );
+      _moderationState.db.run("BEGIN TRANSACTION");
       try {
         for (const row of muteRows) {
-          _moderationState.db.run(`
+          _moderationState.db.run(
+            `
             INSERT OR REPLACE INTO chat_mutes (chat_id, sender_ref, muted_at, duration_m)
             VALUES (?, ?, ?, ?)
-          `, [row.chat_id, row.sender_ref, row.muted_at, row.duration_m]);
+          `,
+            [row.chat_id, row.sender_ref, row.muted_at, row.duration_m],
+          );
         }
-        _moderationState.db.run('COMMIT');
+        _moderationState.db.run("COMMIT");
       } catch (err) {
-        _moderationState.db.run('ROLLBACK');
+        _moderationState.db.run("ROLLBACK");
         throw err;
       }
       if (muteRows.length > 0) saveDb(_moderationState);
-      logger.info({ rows: muteRows.length }, 'Migrated legacy chat_mutes to moderation.db');
+      logger.info(
+        { rows: muteRows.length },
+        "Migrated legacy chat_mutes to moderation.db",
+      );
     }
   } catch (err) {
-    logger.warn({ err }, 'Legacy DB migration skipped due to error');
+    logger.warn({ err }, "Legacy DB migration skipped due to error");
   }
 }
 
 async function init() {
-  if (_settingsState.db && _statsState.db && _moderationState.db && _subagentState.db) return;
+  if (
+    _settingsState.db &&
+    _statsState.db &&
+    _moderationState.db &&
+    _subagentState.db
+  )
+    return;
 
   _sql = await initSqlJs();
 
@@ -397,22 +513,34 @@ async function init() {
   try {
     settingsData = loadDbDataFromDisk(settingsPath);
   } catch (err) {
-    logger.warn({ err, dbPath: settingsPath }, 'Could not read settings DB, creating new');
+    logger.warn(
+      { err, dbPath: settingsPath },
+      "Could not read settings DB, creating new",
+    );
   }
   try {
     statsData = loadDbDataFromDisk(statsPath);
   } catch (err) {
-    logger.warn({ err, dbPath: statsPath }, 'Could not read stats DB, creating new');
+    logger.warn(
+      { err, dbPath: statsPath },
+      "Could not read stats DB, creating new",
+    );
   }
   try {
     moderationData = loadDbDataFromDisk(moderationPath);
   } catch (err) {
-    logger.warn({ err, dbPath: moderationPath }, 'Could not read moderation DB, creating new');
+    logger.warn(
+      { err, dbPath: moderationPath },
+      "Could not read moderation DB, creating new",
+    );
   }
   try {
     subagentData = loadDbDataFromDisk(subagentPath);
   } catch (err) {
-    logger.warn({ err, dbPath: subagentPath }, 'Could not read subagent DB, creating new');
+    logger.warn(
+      { err, dbPath: subagentPath },
+      "Could not read subagent DB, creating new",
+    );
   }
 
   replaceDb(_settingsState, settingsData, initSettingsTables);
@@ -421,13 +549,17 @@ async function init() {
   replaceDb(_subagentState, subagentData, initSubagentTables);
   _settingsState.lastLoadedMtimeMs = getFileMtimeMs(settingsPath) || Date.now();
   _statsState.lastLoadedMtimeMs = getFileMtimeMs(statsPath) || Date.now();
-  _moderationState.lastLoadedMtimeMs = getFileMtimeMs(moderationPath) || Date.now();
+  _moderationState.lastLoadedMtimeMs =
+    getFileMtimeMs(moderationPath) || Date.now();
   _subagentState.lastLoadedMtimeMs = getFileMtimeMs(subagentPath) || Date.now();
 
   migrateFromLegacyIfNeeded();
   migrateSubagentDbIntoSettings();
 
-  logger.info({ settingsPath, statsPath, moderationPath }, 'DB initialized (split)');
+  logger.info(
+    { settingsPath, statsPath, moderationPath },
+    "DB initialized (split)",
+  );
 }
 
 function migrateSubagentDbIntoSettings() {
@@ -440,14 +572,17 @@ function migrateSubagentDbIntoSettings() {
   if (!_subagentState.db || !_settingsState.db) return;
   let rows;
   try {
-    rows = queryRows(_subagentState.db, 'SELECT chat_id, enabled FROM subagent_enabled');
+    rows = queryRows(
+      _subagentState.db,
+      "SELECT chat_id, enabled FROM subagent_enabled",
+    );
   } catch (err) {
-    logger.warn({ err }, 'subagent.db migration: query failed');
+    logger.warn({ err }, "subagent.db migration: query failed");
     return;
   }
   if (!rows || rows.length === 0) return;
   let migrated = 0;
-  _settingsState.db.run('BEGIN TRANSACTION');
+  _settingsState.db.run("BEGIN TRANSACTION");
   try {
     for (const row of rows) {
       if (row.enabled !== 1) continue;
@@ -457,19 +592,22 @@ function migrateSubagentDbIntoSettings() {
          ON CONFLICT(chat_id) DO UPDATE SET
            subagent_enabled = MAX(chat_settings.subagent_enabled, excluded.subagent_enabled),
            updated_at = excluded.updated_at`,
-        [row.chat_id]
+        [row.chat_id],
       );
       migrated += 1;
     }
-    _settingsState.db.run('COMMIT');
+    _settingsState.db.run("COMMIT");
   } catch (err) {
-    _settingsState.db.run('ROLLBACK');
-    logger.warn({ err }, 'subagent.db migration: rollback');
+    _settingsState.db.run("ROLLBACK");
+    logger.warn({ err }, "subagent.db migration: rollback");
     return;
   }
   if (migrated > 0) {
     saveDb(_settingsState);
-    logger.info({ rows: migrated }, 'Migrated subagent.db rows into chat_settings.subagent_enabled');
+    logger.info(
+      { rows: migrated },
+      "Migrated subagent.db rows into chat_settings.subagent_enabled",
+    );
   }
 }
 
@@ -514,42 +652,65 @@ function getAllFromState(state, initTablesFn, sql, ...params) {
 }
 
 function getPrompt(chatId) {
-  const row = getOneFromState(_settingsState, initSettingsTables, 'SELECT prompt FROM chat_settings WHERE chat_id = ?', chatId);
+  const row = getOneFromState(
+    _settingsState,
+    initSettingsTables,
+    "SELECT prompt FROM chat_settings WHERE chat_id = ?",
+    chatId,
+  );
   return row?.prompt ?? null;
 }
 
 function setPrompt(chatId, prompt) {
-  runSettingsQuery(`
+  runSettingsQuery(
+    `
     INSERT INTO chat_settings (chat_id, prompt, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(chat_id) DO UPDATE SET
       prompt = excluded.prompt,
       updated_at = excluded.updated_at
-  `, chatId, prompt);
+  `,
+    chatId,
+    prompt,
+  );
   saveDb(_settingsState);
-  logger.info({ chatId, promptLen: prompt?.length || 0 }, 'DB set_prompt');
+  logger.info({ chatId, promptLen: prompt?.length || 0 }, "DB set_prompt");
 }
 
 function getPermission(chatId) {
-  const row = getOneFromState(_settingsState, initSettingsTables, 'SELECT permission FROM chat_settings WHERE chat_id = ?', chatId);
+  const row = getOneFromState(
+    _settingsState,
+    initSettingsTables,
+    "SELECT permission FROM chat_settings WHERE chat_id = ?",
+    chatId,
+  );
   return row?.permission ?? 0;
 }
 
 function setPermission(chatId, level) {
   const clamped = Math.max(0, Math.min(3, parseInt(level, 10) || 0));
-  runSettingsQuery(`
+  runSettingsQuery(
+    `
     INSERT INTO chat_settings (chat_id, permission, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(chat_id) DO UPDATE SET
       permission = excluded.permission,
       updated_at = excluded.updated_at
-  `, chatId, clamped);
+  `,
+    chatId,
+    clamped,
+  );
   saveDb(_settingsState);
-  logger.info({ chatId, level: clamped }, 'DB set_permission');
+  logger.info({ chatId, level: clamped }, "DB set_permission");
 }
 
 function getMode(chatId) {
-  const row = getOneFromState(_settingsState, initSettingsTables, 'SELECT mode FROM chat_settings WHERE chat_id = ?', chatId);
+  const row = getOneFromState(
+    _settingsState,
+    initSettingsTables,
+    "SELECT mode FROM chat_settings WHERE chat_id = ?",
+    chatId,
+  );
   let value = row?.mode ?? DEFAULT_MODE;
   if (!VALID_MODES.has(value)) value = DEFAULT_MODE;
   return value;
@@ -557,51 +718,69 @@ function getMode(chatId) {
 
 function setMode(chatId, mode) {
   if (!VALID_MODES.has(mode)) mode = DEFAULT_MODE;
-  runSettingsQuery(`
+  runSettingsQuery(
+    `
     INSERT INTO chat_settings (chat_id, mode, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(chat_id) DO UPDATE SET
       mode = excluded.mode,
       updated_at = excluded.updated_at
-  `, chatId, mode);
+  `,
+    chatId,
+    mode,
+  );
   saveDb(_settingsState);
-  logger.info({ chatId, mode }, 'DB set_mode');
+  logger.info({ chatId, mode }, "DB set_mode");
 }
 
 function getTriggers(chatId) {
-  const row = getOneFromState(_settingsState, initSettingsTables, 'SELECT triggers FROM chat_settings WHERE chat_id = ?', chatId);
+  const row = getOneFromState(
+    _settingsState,
+    initSettingsTables,
+    "SELECT triggers FROM chat_settings WHERE chat_id = ?",
+    chatId,
+  );
   const raw = row?.triggers ?? DEFAULT_TRIGGERS;
-  return new Set(raw.split(',').filter((t) => VALID_TRIGGERS.has(t.trim().toLowerCase())).map((t) => t.trim().toLowerCase()));
+  return new Set(
+    raw
+      .split(",")
+      .filter((t) => VALID_TRIGGERS.has(t.trim().toLowerCase()))
+      .map((t) => t.trim().toLowerCase()),
+  );
 }
 
 function setTriggers(chatId, triggers) {
   const valid = [...triggers].filter((t) => VALID_TRIGGERS.has(t));
-  const raw = valid.sort().join(',') || '';
-  runSettingsQuery(`
+  const raw = valid.sort().join(",") || "";
+  runSettingsQuery(
+    `
     INSERT INTO chat_settings (chat_id, triggers, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(chat_id) DO UPDATE SET
       triggers = excluded.triggers,
       updated_at = excluded.updated_at
-  `, chatId, raw);
+  `,
+    chatId,
+    raw,
+  );
   saveDb(_settingsState);
-  logger.info({ chatId, triggers: raw }, 'DB set_triggers');
+  logger.info({ chatId, triggers: raw }, "DB set_triggers");
 }
 
 function clearSettings(chatId) {
-  runSettingsQuery('DELETE FROM chat_settings WHERE chat_id = ?', chatId);
+  runSettingsQuery("DELETE FROM chat_settings WHERE chat_id = ?", chatId);
   saveDb(_settingsState);
-  logger.info({ chatId }, 'DB clear_settings');
+  logger.info({ chatId }, "DB clear_settings");
 }
 
 function getStats(chatId, periodType, periodKey) {
   const rows = getAllFromState(
     _statsState,
     initStatsTables,
-    'SELECT stat_key, stat_value FROM chat_stats WHERE chat_id = ? AND period_type = ? AND period_key = ?',
+    "SELECT stat_key, stat_value FROM chat_stats WHERE chat_id = ? AND period_type = ? AND period_key = ?",
     chatId,
     periodType,
-    periodKey
+    periodKey,
   );
   const result = {};
   for (const row of rows) result[row.stat_key] = row.stat_value;
@@ -618,43 +797,62 @@ function getTopUsers(chatId, periodType, periodKey, limit = 5) {
     chatId,
     periodType,
     periodKey,
-    limit
+    limit,
   );
-  return rows.map((row) => ({ senderRef: row.sender_ref, senderName: row.sender_name, invokeCount: row.invoke_count }));
+  return rows.map((row) => ({
+    senderRef: row.sender_ref,
+    senderName: row.sender_name,
+    invokeCount: row.invoke_count,
+  }));
 }
 
 function getDefaultLlm2Model() {
   const row = getOneFromState(
     _settingsState,
     initSettingsTables,
-    'SELECT model_id, display_name, description, vision_support FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC LIMIT 1'
+    "SELECT model_id, display_name, description, vision_support FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC LIMIT 1",
   );
-  if (row) return { modelId: row.model_id, displayName: row.display_name, description: row.description, visionSupport: Boolean(row.vision_support) };
+  if (row)
+    return {
+      modelId: row.model_id,
+      displayName: row.display_name,
+      description: row.description,
+      visionSupport: Boolean(row.vision_support),
+    };
   return null;
 }
 
 function getLlm2Model(chatId) {
-  const row = getOneFromState(_settingsState, initSettingsTables, 'SELECT llm2_model FROM chat_settings WHERE chat_id = ?', chatId);
+  const row = getOneFromState(
+    _settingsState,
+    initSettingsTables,
+    "SELECT llm2_model FROM chat_settings WHERE chat_id = ?",
+    chatId,
+  );
   return row?.llm2_model ?? null;
 }
 
 function setLlm2Model(chatId, modelId) {
-  runSettingsQuery(`
+  runSettingsQuery(
+    `
     INSERT INTO chat_settings (chat_id, llm2_model, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(chat_id) DO UPDATE SET
       llm2_model = excluded.llm2_model,
       updated_at = excluded.updated_at
-  `, chatId, modelId);
+  `,
+    chatId,
+    modelId,
+  );
   saveDb(_settingsState);
-  logger.info({ chatId, modelId }, 'DB set_llm2_model');
+  logger.info({ chatId, modelId }, "DB set_llm2_model");
 }
 
 function getAllActiveModels() {
   const rows = getAllFromState(
     _settingsState,
     initSettingsTables,
-    'SELECT model_id, display_name, description, sort_order, vision_support FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC'
+    "SELECT model_id, display_name, description, sort_order, vision_support FROM llm_models WHERE is_active = 1 ORDER BY sort_order ASC",
   );
   return rows.map((row) => ({
     modelId: row.model_id,
@@ -669,7 +867,7 @@ function getAllModels() {
   const rows = getAllFromState(
     _settingsState,
     initSettingsTables,
-    'SELECT model_id, display_name, description, is_active, sort_order, vision_support FROM llm_models ORDER BY sort_order ASC'
+    "SELECT model_id, display_name, description, is_active, sort_order, vision_support FROM llm_models ORDER BY sort_order ASC",
   );
   return rows.map((row) => ({
     modelId: row.model_id,
@@ -681,92 +879,137 @@ function getAllModels() {
   }));
 }
 
-function addModel(modelId, displayName, description = '', sortOrder = null, visionSupport = false) {
+function addModel(
+  modelId,
+  displayName,
+  description = "",
+  sortOrder = null,
+  visionSupport = false,
+) {
   if (sortOrder === null) {
-    const maxOrder = getOneFromState(_settingsState, initSettingsTables, 'SELECT MAX(sort_order) as max_order FROM llm_models');
+    const maxOrder = getOneFromState(
+      _settingsState,
+      initSettingsTables,
+      "SELECT MAX(sort_order) as max_order FROM llm_models",
+    );
     sortOrder = (maxOrder?.max_order ?? -1) + 1;
   }
   try {
     runSettingsQuery(
-      'INSERT INTO llm_models (model_id, display_name, description, sort_order, vision_support) VALUES (?, ?, ?, ?, ?)',
+      "INSERT INTO llm_models (model_id, display_name, description, sort_order, vision_support) VALUES (?, ?, ?, ?, ?)",
       modelId,
       displayName,
       description,
       sortOrder,
-      visionSupport ? 1 : 0
+      visionSupport ? 1 : 0,
     );
     saveDb(_settingsState);
-    logger.info({ modelId, displayName, visionSupport }, 'DB add_model');
+    logger.info({ modelId, displayName, visionSupport }, "DB add_model");
     return true;
   } catch (err) {
-    if (err.message?.includes('UNIQUE constraint failed') || err.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') return false;
+    if (
+      err.message?.includes("UNIQUE constraint failed") ||
+      err.code === "SQLITE_CONSTRAINT_PRIMARYKEY"
+    )
+      return false;
     throw err;
   }
 }
 
-function updateModel(modelId, { displayName, description, isActive, sortOrder, visionSupport } = {}) {
-  const existing = getOneFromState(_settingsState, initSettingsTables, 'SELECT model_id FROM llm_models WHERE model_id = ?', modelId);
+function updateModel(
+  modelId,
+  { displayName, description, isActive, sortOrder, visionSupport } = {},
+) {
+  const existing = getOneFromState(
+    _settingsState,
+    initSettingsTables,
+    "SELECT model_id FROM llm_models WHERE model_id = ?",
+    modelId,
+  );
   if (!existing) return false;
   const updates = [];
   const values = [];
   if (displayName !== undefined) {
-    updates.push('display_name = ?');
+    updates.push("display_name = ?");
     values.push(displayName);
   }
   if (description !== undefined) {
-    updates.push('description = ?');
+    updates.push("description = ?");
     values.push(description);
   }
   if (isActive !== undefined) {
-    updates.push('is_active = ?');
+    updates.push("is_active = ?");
     values.push(isActive ? 1 : 0);
   }
   if (sortOrder !== undefined) {
-    updates.push('sort_order = ?');
+    updates.push("sort_order = ?");
     values.push(sortOrder);
   }
   if (visionSupport !== undefined) {
-    updates.push('vision_support = ?');
+    updates.push("vision_support = ?");
     values.push(visionSupport ? 1 : 0);
   }
   if (updates.length === 0) return true;
   values.push(modelId);
-  runSettingsQuery(`UPDATE llm_models SET ${updates.join(', ')} WHERE model_id = ?`, ...values);
+  runSettingsQuery(
+    `UPDATE llm_models SET ${updates.join(", ")} WHERE model_id = ?`,
+    ...values,
+  );
   saveDb(_settingsState);
-  logger.info({ modelId }, 'DB update_model');
+  logger.info({ modelId }, "DB update_model");
   return true;
 }
 
 function deleteModel(modelId) {
-  const existing = getOneFromState(_settingsState, initSettingsTables, 'SELECT model_id FROM llm_models WHERE model_id = ?', modelId);
+  const existing = getOneFromState(
+    _settingsState,
+    initSettingsTables,
+    "SELECT model_id FROM llm_models WHERE model_id = ?",
+    modelId,
+  );
   if (!existing) return { success: false, affectedChatIds: [] };
-  const affectedRows = getAllFromState(_settingsState, initSettingsTables, 'SELECT chat_id FROM chat_settings WHERE llm2_model = ?', modelId);
+  const affectedRows = getAllFromState(
+    _settingsState,
+    initSettingsTables,
+    "SELECT chat_id FROM chat_settings WHERE llm2_model = ?",
+    modelId,
+  );
   const affectedChatIds = affectedRows.map((r) => r.chat_id);
-  runSettingsQuery('DELETE FROM llm_models WHERE model_id = ?', modelId);
-  runSettingsQuery('UPDATE chat_settings SET llm2_model = NULL WHERE llm2_model = ?', modelId);
+  runSettingsQuery("DELETE FROM llm_models WHERE model_id = ?", modelId);
+  runSettingsQuery(
+    "UPDATE chat_settings SET llm2_model = NULL WHERE llm2_model = ?",
+    modelId,
+  );
   saveDb(_settingsState);
-  logger.info({ modelId, affectedChatIds }, 'DB delete_model');
+  logger.info({ modelId, affectedChatIds }, "DB delete_model");
   return { success: true, affectedChatIds };
 }
 
 function getOwnerContact() {
-  const row = getOneFromState(_settingsState, initSettingsTables,
-    'SELECT phone_number, display_name FROM owner_contact WHERE id = 1');
+  const row = getOneFromState(
+    _settingsState,
+    initSettingsTables,
+    "SELECT phone_number, display_name FROM owner_contact WHERE id = 1",
+  );
   if (!row) return null;
   return { phoneNumber: row.phone_number, displayName: row.display_name };
 }
 
 function setOwnerContact(phoneNumber, displayName) {
-  runSettingsQuery(`
+  runSettingsQuery(
+    `
     INSERT INTO owner_contact (id, phone_number, display_name, updated_at)
     VALUES (1, ?, ?, datetime('now'))
     ON CONFLICT(id) DO UPDATE SET
       phone_number = excluded.phone_number,
       display_name = excluded.display_name,
       updated_at = excluded.updated_at
-  `, phoneNumber, displayName);
+  `,
+    phoneNumber,
+    displayName,
+  );
   saveDb(_settingsState);
-  logger.info({ phoneNumber, displayName }, 'DB set_owner_contact');
+  logger.info({ phoneNumber, displayName }, "DB set_owner_contact");
 }
 
 function getSubagentEnabled(chatId) {
@@ -779,23 +1022,86 @@ function getSubagentEnabled(chatId) {
   const row = getOneFromState(
     _settingsState,
     initSettingsTables,
-    'SELECT subagent_enabled FROM chat_settings WHERE chat_id = ?',
-    chatId
+    "SELECT subagent_enabled FROM chat_settings WHERE chat_id = ?",
+    chatId,
   );
   return row?.subagent_enabled === 1;
 }
 
 function setSubagentEnabled(chatId, enabled) {
   const value = enabled ? 1 : 0;
-  runSettingsQuery(`
+  runSettingsQuery(
+    `
     INSERT INTO chat_settings (chat_id, subagent_enabled, updated_at)
     VALUES (?, ?, datetime('now'))
     ON CONFLICT(chat_id) DO UPDATE SET
       subagent_enabled = excluded.subagent_enabled,
       updated_at = excluded.updated_at
-  `, chatId, value);
+  `,
+    chatId,
+    value,
+  );
   saveDb(_settingsState);
-  logger.info({ chatId, enabled: value }, 'DB set_subagent_enabled');
+  logger.info({ chatId, enabled: value }, "DB set_subagent_enabled");
+}
+
+function setGlobalPrompt(prompt) {
+  runSettingsQuery(
+    "UPDATE chat_settings SET prompt = ?, updated_at = datetime('now')",
+    prompt,
+  );
+  saveDb(_settingsState);
+  logger.info({ promptLen: prompt?.length || 0 }, "DB set_global_prompt");
+}
+
+function setGlobalPermission(level) {
+  const clamped = Math.max(0, Math.min(3, parseInt(level, 10) || 0));
+  runSettingsQuery(
+    "UPDATE chat_settings SET permission = ?, updated_at = datetime('now')",
+    clamped,
+  );
+  saveDb(_settingsState);
+  logger.info({ level: clamped }, "DB set_global_permission");
+}
+
+function setGlobalMode(mode) {
+  if (!VALID_MODES.has(mode)) mode = DEFAULT_MODE;
+  runSettingsQuery(
+    "UPDATE chat_settings SET mode = ?, updated_at = datetime('now')",
+    mode,
+  );
+  saveDb(_settingsState);
+  logger.info({ mode }, "DB set_global_mode");
+}
+
+function setGlobalTriggers(triggers) {
+  const valid = [...triggers].filter((t) => VALID_TRIGGERS.has(t));
+  const raw = valid.sort().join(",") || "";
+  runSettingsQuery(
+    "UPDATE chat_settings SET triggers = ?, updated_at = datetime('now')",
+    raw,
+  );
+  saveDb(_settingsState);
+  logger.info({ triggers: raw }, "DB set_global_triggers");
+}
+
+function setGlobalLlm2Model(modelId) {
+  runSettingsQuery(
+    "UPDATE chat_settings SET llm2_model = ?, updated_at = datetime('now')",
+    modelId,
+  );
+  saveDb(_settingsState);
+  logger.info({ modelId }, "DB set_global_llm2_model");
+}
+
+function setGlobalSubagentEnabled(enabled) {
+  const value = enabled ? 1 : 0;
+  runSettingsQuery(
+    "UPDATE chat_settings SET subagent_enabled = ?, updated_at = datetime('now')",
+    value,
+  );
+  saveDb(_settingsState);
+  logger.info({ enabled: value }, "DB set_global_subagent_enabled");
 }
 
 function getDbPath() {
@@ -832,6 +1138,12 @@ export {
   setOwnerContact,
   getSubagentEnabled,
   setSubagentEnabled,
+  setGlobalPrompt,
+  setGlobalPermission,
+  setGlobalMode,
+  setGlobalTriggers,
+  setGlobalLlm2Model,
+  setGlobalSubagentEnabled,
   VALID_MODES,
   DEFAULT_MODE,
   VALID_TRIGGERS,

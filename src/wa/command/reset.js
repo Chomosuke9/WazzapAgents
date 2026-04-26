@@ -1,27 +1,56 @@
-import logger from '../../logger.js';
-import { getSock } from '../connection.js';
-import wsClient from '../../wsClient.js';
+import logger from "../../logger.js";
+import { getSock } from "../connection.js";
+import wsClient from "../../wsClient.js";
 
-async function handleReset({ chatId, chatType, senderIsAdmin, senderIsOwner, contextMsgId }) {
+async function handleReset({
+  chatId,
+  chatType,
+  senderIsAdmin,
+  senderIsOwner,
+  contextMsgId,
+  args,
+}) {
   const sock = getSock();
-  const isPrivate = chatType === 'private';
+  const isPrivate = chatType === "private";
 
   if (isPrivate || senderIsOwner || senderIsAdmin) {
     // proceed
   } else {
     try {
-      await sock.sendMessage(chatId, { text: 'Only group admins can use `/reset`.' });
-    } catch (err) { /* ignore */ }
+      await sock.sendMessage(chatId, {
+        text: "Only group admins can use `/reset`.",
+      });
+    } catch (err) {
+      /* ignore */
+    }
     return;
   }
 
-  wsClient.sendReliable({ type: 'clear_history', chatId });
+  const isGlobal = args?.trim().toLowerCase() === "global";
+  if (isGlobal && !senderIsOwner) {
+    try {
+      await sock.sendMessage(chatId, {
+        text: "Only bot owner can perform a global reset.",
+      });
+    } catch (err) {
+      /* ignore */
+    }
+    return;
+  }
+
+  const targetId = isGlobal ? "global" : chatId;
+  wsClient.sendReliable({ type: "clear_history", chatId: targetId });
 
   try {
-    await sock.sendMessage(chatId, { text: 'Bot memory for this chat has been reset.' });
-  } catch (err) { /* ignore */ }
+    const text = isGlobal
+      ? "Bot memory for all chats has been reset."
+      : "Bot memory for this chat has been reset.";
+    await sock.sendMessage(chatId, { text });
+  } catch (err) {
+    /* ignore */
+  }
 
-  logger.info({ chatId }, 'Memory cleared via /reset');
+  logger.info({ chatId, isGlobal }, "Memory cleared via /reset");
 }
 
 export { handleReset };
