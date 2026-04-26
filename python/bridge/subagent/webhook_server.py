@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Dict
+import time
+from typing import Awaitable, Callable, Dict, Optional, Tuple
 
 try:
   from aiohttp import web
@@ -30,13 +31,28 @@ except ImportError:
 logger = setup_logging()
 
 
+QueueEventHandler = Callable[[str, str, int, int], Awaitable[None]]
+# Signature: handler(chat_id, event_type, position, queue_size) -> awaitable
+
+
 class SubAgentWebhookServer:
+  # Dedup window for queue webhooks: skip a (session_id, position,
+  # queue_size) tuple if we've already dispatched the same triplet in
+  # the last ``_QUEUE_DEDUP_WINDOW_S`` seconds. This is a belt-and-
+  # braces guard against the sub-agent double-firing after a webhook
+  # retry — we do NOT want the user to see "current queue: 1" twice
+  # back-to-back.
+  _QUEUE_DEDUP_WINDOW_S = 5.0
+
   def __init__(self, tracker: SubTaskTracker, port: int | None = None) -> None:
     self._tracker = tracker
     self._port = port or SUBAGENT_WEBHOOK_PORT
     self._completion_events: Dict[str, asyncio.Event] = {}
     self._runner: web.AppRunner | None = None
     self._site: web.TCPSite | None = None
+    self._queue_handler: Optional[QueueEventHandler] = None
+    # session_id -> (position, queue_size, last_emit_ts)
+    self._queue_last_emit: Dict[str, Tuple[int, int, float]] = {}
 
   async def start(self) -> None:
     if web is None:
@@ -73,6 +89,34 @@ class SubAgentWebhookServer:
   def unregister_completion_event(self, session_id: str) -> None:
     """Remove completion event to prevent memory leak."""
     self._completion_events.pop(session_id, None)
+
+  def set_queue_handler(self, handler: Optional[QueueEventHandler]) -> None:
+    """Register (or clear, with ``None``) the async handler invoked for
+    every ``queued`` / ``queue_advanced`` webhook from WazzapSubAgents.
+
+    Registered by ``main.py::handle_socket`` so the handler closes over
+    the live ``ws`` connection. Cleared when the gateway disconnects so
+    a stale ws is never written to.
+    """
+    self._queue_handler = handler
+
+  def _dedup_queue_event(self, session_id: str, position: int, queue_size: int) -> bool:
+    """Return True if this (session_id, position, queue_size) tuple is a
+    dup of one emitted within the last ``_QUEUE_DEDUP_WINDOW_S`` seconds
+    and should be suppressed.
+    """
+    now = time.time()
+    prev = self._queue_last_emit.get(session_id)
+    if prev is not None:
+      prev_pos, prev_qs, prev_ts = prev
+      if (
+        prev_pos == position
+        and prev_qs == queue_size
+        and (now - prev_ts) < self._QUEUE_DEDUP_WINDOW_S
+      ):
+        return True
+    self._queue_last_emit[session_id] = (position, queue_size, now)
+    return False
 
   async def _handle_callback(self, request: web.Request) -> web.Response:
     try:
@@ -114,10 +158,81 @@ class SubAgentWebhookServer:
       event = self._completion_events.pop(session_id, None)
       if event is not None:
         event.set()
+      # Drop dedup state — once the session is finalised, any future
+      # webhook with the same session_id is a real new event (extremely
+      # unlikely in practice, but cheap to be tidy).
+      self._queue_last_emit.pop(session_id, None)
       logger.info(
         "SubAgent complete: session=%s success=%s",
         session_id,
         result.get("success"),
+      )
+      return web.json_response({"status": "ok"})
+
+    if msg_type in ("queued", "queue_advanced", "queue_status"):
+      # The sub-agent is letting us know this session's position in the
+      # global FIFO queue. We forward the position to the WhatsApp chat
+      # via ``self._queue_handler`` (registered by main.py with a closure
+      # over the live ws connection). The handler decides on the exact
+      # WA wording — this layer just dedups and routes.
+      try:
+        position = int(data.get("position", 0) or 0)
+        queue_size = int(data.get("queue_size", 0) or 0)
+      except (TypeError, ValueError):
+        logger.warning(
+          "SubAgent queue webhook: bad position/queue_size session=%s data=%s",
+          session_id,
+          data,
+        )
+        return web.Response(status=400, text="Bad position/queue_size")
+
+      if self._dedup_queue_event(session_id, position, queue_size):
+        logger.debug(
+          "SubAgent queue webhook deduped: session=%s type=%s position=%s",
+          session_id,
+          msg_type,
+          position,
+        )
+        return web.json_response({"status": "deduped"})
+
+      chat_id = self._tracker.get_chat_for_session(session_id)
+      if not chat_id:
+        # Session not (or no longer) tracked. Logging at INFO not WARN
+        # because this is genuinely possible: the queue webhook can
+        # race the bridge's own ``finalize`` call on a fast-path error.
+        logger.info(
+          "SubAgent queue webhook: no active task for session=%s type=%s",
+          session_id,
+          msg_type,
+        )
+        return web.json_response({"status": "no_active_task"})
+
+      handler = self._queue_handler
+      if handler is None:
+        logger.info(
+          "SubAgent queue webhook: no handler registered (gateway disconnected?) session=%s",
+          session_id,
+        )
+        return web.json_response({"status": "no_handler"})
+
+      try:
+        await handler(chat_id, msg_type, position, queue_size)
+      except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+          "SubAgent queue handler failed session=%s type=%s: %s",
+          session_id,
+          msg_type,
+          exc,
+        )
+        return web.json_response({"status": "handler_error"}, status=500)
+
+      logger.info(
+        "SubAgent queue webhook delivered session=%s chat=%s type=%s position=%s queue_size=%s",
+        session_id,
+        chat_id,
+        msg_type,
+        position,
+        queue_size,
       )
       return web.json_response({"status": "ok"})
 

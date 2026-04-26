@@ -1,0 +1,231 @@
+"""Tests for queue-event webhook handling in
+``bridge/subagent/webhook_server.py``.
+
+These pin the contract that:
+
+- ``queued`` and ``queue_advanced`` callbacks from WazzapSubAgents are
+  routed to the registered handler with the right (chat_id, type,
+  position, queue_size) arguments;
+- duplicate webhooks (same session_id + position + queue_size) are
+  suppressed within the dedup window;
+- unknown / already-finished sessions are dropped without crashing;
+- the eventual WhatsApp text matches the literal format the user spec
+  demands.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, List, Tuple
+from unittest.mock import AsyncMock
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from bridge.subagent.tracker import SubTaskTracker  # noqa: E402
+from bridge.subagent.models import SubTask  # noqa: E402
+from bridge.subagent.webhook_server import SubAgentWebhookServer  # noqa: E402
+
+
+class _FakeRequest:
+  """Minimal aiohttp.Request stand-in. ``_handle_callback`` only calls
+  ``await request.json()`` so this is all we need.
+  """
+
+  def __init__(self, payload: dict) -> None:
+    self._payload = payload
+
+  async def json(self) -> dict:
+    return self._payload
+
+
+def _make_tracker_with_session(session_id: str, chat_id: str) -> SubTaskTracker:
+  tracker = SubTaskTracker()
+  tracker.register(SubTask(
+    session_id=session_id,
+    chat_id=chat_id,
+    instruction="dummy",
+  ))
+  return tracker
+
+
+@pytest.mark.asyncio
+async def test_queued_webhook_dispatches_to_handler():
+  tracker = _make_tracker_with_session("sess-B", "chat-bob@s.whatsapp.net")
+  server = SubAgentWebhookServer(tracker, port=0)
+  handler = AsyncMock()
+  server.set_queue_handler(handler)
+
+  resp = await server._handle_callback(_FakeRequest({
+    "type": "queued",
+    "session_id": "sess-B",
+    "position": 1,
+    "queue_size": 1,
+  }))
+
+  assert resp.status == 200
+  handler.assert_awaited_once_with("chat-bob@s.whatsapp.net", "queued", 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_queue_advanced_webhook_dispatches_to_handler():
+  tracker = _make_tracker_with_session("sess-C", "chat-carol@s.whatsapp.net")
+  server = SubAgentWebhookServer(tracker, port=0)
+  handler = AsyncMock()
+  server.set_queue_handler(handler)
+
+  resp = await server._handle_callback(_FakeRequest({
+    "type": "queue_advanced",
+    "session_id": "sess-C",
+    "position": 1,
+    "queue_size": 1,
+  }))
+
+  assert resp.status == 200
+  handler.assert_awaited_once_with(
+    "chat-carol@s.whatsapp.net", "queue_advanced", 1, 1
+  )
+
+
+@pytest.mark.asyncio
+async def test_dedup_suppresses_repeated_queue_event_within_window():
+  tracker = _make_tracker_with_session("sess-D", "chat-dave@s.whatsapp.net")
+  server = SubAgentWebhookServer(tracker, port=0)
+  handler = AsyncMock()
+  server.set_queue_handler(handler)
+
+  payload = {
+    "type": "queued",
+    "session_id": "sess-D",
+    "position": 1,
+    "queue_size": 1,
+  }
+  await server._handle_callback(_FakeRequest(dict(payload)))
+  await server._handle_callback(_FakeRequest(dict(payload)))
+
+  assert handler.await_count == 1, (
+    "Duplicate (session, position, queue_size) within the dedup window "
+    "must NOT fan out a second WhatsApp notification."
+  )
+
+  # A different position is a real new event and must dispatch.
+  await server._handle_callback(_FakeRequest({
+    "type": "queue_advanced",
+    "session_id": "sess-D",
+    "position": 2,
+    "queue_size": 2,
+  }))
+  assert handler.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_queue_event_for_unknown_session_is_dropped_silently():
+  tracker = SubTaskTracker()  # no sessions registered
+  server = SubAgentWebhookServer(tracker, port=0)
+  handler = AsyncMock()
+  server.set_queue_handler(handler)
+
+  resp = await server._handle_callback(_FakeRequest({
+    "type": "queued",
+    "session_id": "ghost",
+    "position": 1,
+    "queue_size": 1,
+  }))
+
+  assert resp.status == 200
+  handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_queue_event_with_no_handler_registered_is_noop():
+  tracker = _make_tracker_with_session("sess-E", "chat-erin@s.whatsapp.net")
+  server = SubAgentWebhookServer(tracker, port=0)
+  # Do NOT register a handler — simulates the "gateway disconnected"
+  # window between WS connections.
+
+  resp = await server._handle_callback(_FakeRequest({
+    "type": "queued",
+    "session_id": "sess-E",
+    "position": 1,
+    "queue_size": 1,
+  }))
+
+  # The webhook must succeed (200) so the sub-agent doesn't keep
+  # retrying — but no message is sent.
+  assert resp.status == 200
+
+
+@pytest.mark.asyncio
+async def test_bad_position_returns_400():
+  tracker = _make_tracker_with_session("sess-F", "chat-frank")
+  server = SubAgentWebhookServer(tracker, port=0)
+  server.set_queue_handler(AsyncMock())
+
+  resp = await server._handle_callback(_FakeRequest({
+    "type": "queued",
+    "session_id": "sess-F",
+    "position": "not-an-int",
+    "queue_size": 1,
+  }))
+
+  assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_handler_renders_expected_whatsapp_text():
+  """End-to-end-ish: simulate the wiring done in main.py's
+  ``handle_socket`` so we cover the literal text the user will see.
+  This is the source-of-truth for the spec strings.
+  """
+
+  tracker = _make_tracker_with_session("sess-X", "chat-x@s.whatsapp.net")
+  server = SubAgentWebhookServer(tracker, port=0)
+
+  sent: List[Tuple[str, str]] = []
+
+  async def fake_send(chat_id: str, text: str) -> None:
+    sent.append((chat_id, text))
+
+  async def main_py_style_handler(
+    chat_id: str, event_type: str, position: int, queue_size: int
+  ) -> None:
+    # Mirrors the handler in WazzapAgents/python/bridge/main.py.
+    if event_type == "queued":
+      text = f"container is used by other session.\ncurrent queue: {position}"
+    else:
+      text = f"current queue: {position}"
+    await fake_send(chat_id, text)
+
+  server.set_queue_handler(main_py_style_handler)
+
+  await server._handle_callback(_FakeRequest({
+    "type": "queued",
+    "session_id": "sess-X",
+    "position": 1,
+    "queue_size": 1,
+  }))
+  await server._handle_callback(_FakeRequest({
+    "type": "queue_advanced",
+    "session_id": "sess-X",
+    "position": 2,
+    "queue_size": 2,
+  }))
+
+  assert sent == [
+    ("chat-x@s.whatsapp.net",
+     "container is used by other session.\ncurrent queue: 1"),
+    ("chat-x@s.whatsapp.net", "current queue: 2"),
+  ]
+
+
+@pytest.mark.asyncio
+async def test_get_chat_for_session_returns_none_after_finalize():
+  tracker = _make_tracker_with_session("sess-G", "chat-gary")
+  assert tracker.get_chat_for_session("sess-G") == "chat-gary"
+  tracker.finalize("sess-G", {"success": True, "report": "done"})
+  assert tracker.get_chat_for_session("sess-G") is None

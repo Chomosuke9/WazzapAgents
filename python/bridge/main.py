@@ -765,6 +765,41 @@ async def handle_socket(ws):
     tasks.add(task)
     task.add_done_callback(tasks.discard)
 
+  # Forward sub-agent queue webhooks to WhatsApp. The webhook server
+  # closes over this handler; the handler closes over the live ``ws``
+  # so it can call ``send_message`` directly. The handler is cleared
+  # in the ``finally`` block below when the gateway disconnects so a
+  # stale ws is never written to.
+  async def _on_subagent_queue_event(
+    chat_id: str,
+    event_type: str,
+    position: int,
+    queue_size: int,
+  ) -> None:
+    if event_type == "queued":
+      text = f"container is used by other session.\ncurrent queue: {position}"
+    else:
+      # ``queue_advanced`` / ``queue_status`` are position updates; skip
+      # the "used by other session" preamble — the user already saw it.
+      text = f"current queue: {position}"
+    try:
+      await send_message(
+        ws,
+        chat_id,
+        text,
+        None,
+        request_id=_make_request_id("subagent_queue"),
+      )
+    except Exception as exc:  # pylint: disable=broad-except
+      logger.warning(
+        "Failed to deliver subagent queue notification chat=%s type=%s: %s",
+        chat_id,
+        event_type,
+        exc,
+      )
+
+  subagent_webhook.set_queue_handler(_on_subagent_queue_event)
+
   def _is_duplicate_reply(chat_id: str, text: str | None) -> bool:
     if REPLY_DEDUP_WINDOW_MS <= 0:
       return False
@@ -2103,6 +2138,10 @@ async def handle_socket(ws):
     flush_to_db()
     db_checkpoint_all_dbs()
     db_close_all_connections()
+    # Detach the queue handler so the webhook server doesn't try to
+    # write to a closed ws if a sub-agent queue webhook arrives while
+    # we are between gateway connections.
+    subagent_webhook.set_queue_handler(None)
     for task in tasks:
       task.cancel()
     if tasks:
