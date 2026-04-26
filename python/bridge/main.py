@@ -872,6 +872,8 @@ async def handle_socket(ws):
       # treating them as "post-reset" history would defeat the point.
       if cmd_name == "reset":
         is_global_reset = cmd_args.strip().lower() == "global"
+        if is_global_reset and not payload.get("senderIsOwner"):
+          continue
         if is_global_reset:
           per_chat.clear()
           db_reset_settings_connection()
