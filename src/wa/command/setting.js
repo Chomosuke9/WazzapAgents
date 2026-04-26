@@ -1,7 +1,7 @@
 import logger from '../../logger.js';
 import { getSock } from '../connection.js';
 import { sendNativeFlow } from '../interactive/index.js';
-import { getLlm2Model, getDefaultLlm2Model, getAllModels, getAllActiveModels, getPermission, getMode } from '../../db.js';
+import { getLlm2Model, getDefaultLlm2Model, getAllModels, getAllActiveModels, getPermission, getMode, getIdleTrigger } from '../../db.js';
 
 async function handleSettings({ chatId, chatType, senderId, senderIsAdmin, senderIsOwner, args }) {
   const sock = getSock();
@@ -22,6 +22,8 @@ async function handleSettings({ chatId, chatType, senderId, senderIsAdmin, sende
 
   const currentPermission = getPermission(chatId);
   const currentMode = getMode(chatId);
+  const idleTrigger = getIdleTrigger(chatId);
+  const idleLabel = idleTrigger ? (idleTrigger.min === idleTrigger.max ? `${idleTrigger.min} messages` : `${idleTrigger.min}-${idleTrigger.max} messages`) : 'OFF';
 
   const permissionLabels = ['Forbidden', 'Delete only', 'Delete & mute', 'All moderation'];
   const permissionLabel = permissionLabels[currentPermission] || String(currentPermission);
@@ -86,7 +88,7 @@ async function handleSettings({ chatId, chatType, senderId, senderIsAdmin, sende
   ];
 
   try {
-    await sendNativeFlow(sock, chatId, `Chat Settings\n\nCurrent:\n- Mode: ${currentMode}\n- Model: ${activeModelName}\n- Permission: Level ${currentPermission} (${permissionLabel})`, buttons, { footer: 'Click a button' });
+    await sendNativeFlow(sock, chatId, `Chat Settings\n\nCurrent:\n- Mode: ${currentMode}\n- Model: ${activeModelName}\n- Permission: Level ${currentPermission} (${permissionLabel})\n- Idle Trigger: ${idleLabel}`, buttons, { footer: 'Click a button' });
   } catch (err) {
     logger.warn({ err, chatId }, 'failed sending /settings interactive');
     try {

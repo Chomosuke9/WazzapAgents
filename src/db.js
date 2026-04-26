@@ -8,6 +8,7 @@ const VALID_MODES = new Set(["auto", "prefix", "hybrid"]);
 const DEFAULT_MODE = "prefix";
 const VALID_TRIGGERS = new Set(["tag", "reply", "join", "name"]);
 const DEFAULT_TRIGGERS = "tag,reply,name";
+const GLOBAL_CHAT_ID = "__global__";
 
 let _sql = null;
 
@@ -106,6 +107,8 @@ function initSettingsTables(db) {
       triggers         TEXT NOT NULL DEFAULT '${DEFAULT_TRIGGERS}',
       llm2_model       TEXT,
       subagent_enabled INTEGER NOT NULL DEFAULT 0,
+      idle_trigger_min INTEGER DEFAULT NULL,
+      idle_trigger_max INTEGER DEFAULT NULL,
       updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
@@ -119,6 +122,23 @@ function initSettingsTables(db) {
       "ALTER TABLE chat_settings ADD COLUMN subagent_enabled INTEGER NOT NULL DEFAULT 0",
     );
   }
+  if (!chatSettingsCols.has("idle_trigger_min")) {
+    db.run(
+      "ALTER TABLE chat_settings ADD COLUMN idle_trigger_min INTEGER DEFAULT NULL",
+    );
+  }
+  if (!chatSettingsCols.has("idle_trigger_max")) {
+    db.run(
+      "ALTER TABLE chat_settings ADD COLUMN idle_trigger_max INTEGER DEFAULT NULL",
+    );
+  }
+
+  // Ensure a __global__ defaults row exists so setGlobal* updates it and
+  // get* functions can fall back to it for chats without a specific row.
+  db.run(
+    `INSERT OR IGNORE INTO chat_settings (chat_id) VALUES (?)`,
+    [GLOBAL_CHAT_ID],
+  );
 
   db.run(`
     CREATE TABLE IF NOT EXISTS llm_models (
@@ -651,66 +671,81 @@ function getAllFromState(state, initTablesFn, sql, ...params) {
   return results;
 }
 
-function getPrompt(chatId) {
-  const row = getOneFromState(
+function ensureChatRow(chatId) {
+  if (chatId === GLOBAL_CHAT_ID) return;
+  const existing = getOneFromState(
     _settingsState,
     initSettingsTables,
-    "SELECT prompt FROM chat_settings WHERE chat_id = ?",
+    "SELECT 1 FROM chat_settings WHERE chat_id = ?",
     chatId,
   );
+  if (!existing) {
+    runSettingsQuery(
+      `INSERT INTO chat_settings
+        (chat_id, prompt, permission, mode, triggers, llm2_model,
+         subagent_enabled, idle_trigger_min, idle_trigger_max, updated_at)
+      SELECT ?, prompt, permission, mode, triggers, llm2_model,
+             subagent_enabled, idle_trigger_min, idle_trigger_max, datetime('now')
+      FROM chat_settings WHERE chat_id = ?`,
+      chatId,
+      GLOBAL_CHAT_ID,
+    );
+  }
+}
+
+function getSettingRow(chatId) {
+  let row = getOneFromState(
+    _settingsState,
+    initSettingsTables,
+    "SELECT * FROM chat_settings WHERE chat_id = ?",
+    chatId,
+  );
+  if (!row) {
+    row = getOneFromState(
+      _settingsState,
+      initSettingsTables,
+      "SELECT * FROM chat_settings WHERE chat_id = ?",
+      GLOBAL_CHAT_ID,
+    );
+  }
+  return row;
+}
+
+function getPrompt(chatId) {
+  const row = getSettingRow(chatId);
   return row?.prompt ?? null;
 }
 
 function setPrompt(chatId, prompt) {
+  ensureChatRow(chatId);
   runSettingsQuery(
-    `
-    INSERT INTO chat_settings (chat_id, prompt, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      prompt = excluded.prompt,
-      updated_at = excluded.updated_at
-  `,
-    chatId,
+    "UPDATE chat_settings SET prompt = ?, updated_at = datetime('now') WHERE chat_id = ?",
     prompt,
+    chatId,
   );
   saveDb(_settingsState);
   logger.info({ chatId, promptLen: prompt?.length || 0 }, "DB set_prompt");
 }
 
 function getPermission(chatId) {
-  const row = getOneFromState(
-    _settingsState,
-    initSettingsTables,
-    "SELECT permission FROM chat_settings WHERE chat_id = ?",
-    chatId,
-  );
+  const row = getSettingRow(chatId);
   return row?.permission ?? 0;
 }
 
 function setPermission(chatId, level) {
   const clamped = Math.max(0, Math.min(3, parseInt(level, 10) || 0));
+  ensureChatRow(chatId);
   runSettingsQuery(
-    `
-    INSERT INTO chat_settings (chat_id, permission, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      permission = excluded.permission,
-      updated_at = excluded.updated_at
-  `,
-    chatId,
+    "UPDATE chat_settings SET permission = ?, updated_at = datetime('now') WHERE chat_id = ?",
     clamped,
+    chatId,
   );
   saveDb(_settingsState);
   logger.info({ chatId, level: clamped }, "DB set_permission");
 }
 
 function getMode(chatId) {
-  const row = getOneFromState(
-    _settingsState,
-    initSettingsTables,
-    "SELECT mode FROM chat_settings WHERE chat_id = ?",
-    chatId,
-  );
+  const row = getSettingRow(chatId);
   let value = row?.mode ?? DEFAULT_MODE;
   if (!VALID_MODES.has(value)) value = DEFAULT_MODE;
   return value;
@@ -718,28 +753,18 @@ function getMode(chatId) {
 
 function setMode(chatId, mode) {
   if (!VALID_MODES.has(mode)) mode = DEFAULT_MODE;
+  ensureChatRow(chatId);
   runSettingsQuery(
-    `
-    INSERT INTO chat_settings (chat_id, mode, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      mode = excluded.mode,
-      updated_at = excluded.updated_at
-  `,
-    chatId,
+    "UPDATE chat_settings SET mode = ?, updated_at = datetime('now') WHERE chat_id = ?",
     mode,
+    chatId,
   );
   saveDb(_settingsState);
   logger.info({ chatId, mode }, "DB set_mode");
 }
 
 function getTriggers(chatId) {
-  const row = getOneFromState(
-    _settingsState,
-    initSettingsTables,
-    "SELECT triggers FROM chat_settings WHERE chat_id = ?",
-    chatId,
-  );
+  const row = getSettingRow(chatId);
   const raw = row?.triggers ?? DEFAULT_TRIGGERS;
   return new Set(
     raw
@@ -752,16 +777,11 @@ function getTriggers(chatId) {
 function setTriggers(chatId, triggers) {
   const valid = [...triggers].filter((t) => VALID_TRIGGERS.has(t));
   const raw = valid.sort().join(",") || "";
+  ensureChatRow(chatId);
   runSettingsQuery(
-    `
-    INSERT INTO chat_settings (chat_id, triggers, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      triggers = excluded.triggers,
-      updated_at = excluded.updated_at
-  `,
-    chatId,
+    "UPDATE chat_settings SET triggers = ?, updated_at = datetime('now') WHERE chat_id = ?",
     raw,
+    chatId,
   );
   saveDb(_settingsState);
   logger.info({ chatId, triggers: raw }, "DB set_triggers");
@@ -823,26 +843,16 @@ function getDefaultLlm2Model() {
 }
 
 function getLlm2Model(chatId) {
-  const row = getOneFromState(
-    _settingsState,
-    initSettingsTables,
-    "SELECT llm2_model FROM chat_settings WHERE chat_id = ?",
-    chatId,
-  );
+  const row = getSettingRow(chatId);
   return row?.llm2_model ?? null;
 }
 
 function setLlm2Model(chatId, modelId) {
+  ensureChatRow(chatId);
   runSettingsQuery(
-    `
-    INSERT INTO chat_settings (chat_id, llm2_model, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      llm2_model = excluded.llm2_model,
-      updated_at = excluded.updated_at
-  `,
-    chatId,
+    "UPDATE chat_settings SET llm2_model = ?, updated_at = datetime('now') WHERE chat_id = ?",
     modelId,
+    chatId,
   );
   saveDb(_settingsState);
   logger.info({ chatId, modelId }, "DB set_llm2_model");
@@ -1013,33 +1023,17 @@ function setOwnerContact(phoneNumber, displayName) {
 }
 
 function getSubagentEnabled(chatId) {
-  // Read from settings.db / chat_settings — the same source of truth that
-  // the Python bridge (python/bridge/db.py::get_subagent_enabled) reads
-  // from. The historical subagent.db split caused /subagent on writes from
-  // Node to never reach Python's lookup, so allow_subagent stayed false
-  // and execute_subtask was never offered to LLM2. See migration in
-  // initSettingsTables() that backfills old subagent.db rows.
-  const row = getOneFromState(
-    _settingsState,
-    initSettingsTables,
-    "SELECT subagent_enabled FROM chat_settings WHERE chat_id = ?",
-    chatId,
-  );
+  const row = getSettingRow(chatId);
   return row?.subagent_enabled === 1;
 }
 
 function setSubagentEnabled(chatId, enabled) {
   const value = enabled ? 1 : 0;
+  ensureChatRow(chatId);
   runSettingsQuery(
-    `
-    INSERT INTO chat_settings (chat_id, subagent_enabled, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      subagent_enabled = excluded.subagent_enabled,
-      updated_at = excluded.updated_at
-  `,
-    chatId,
+    "UPDATE chat_settings SET subagent_enabled = ?, updated_at = datetime('now') WHERE chat_id = ?",
     value,
+    chatId,
   );
   saveDb(_settingsState);
   logger.info({ chatId, enabled: value }, "DB set_subagent_enabled");
@@ -1104,6 +1098,36 @@ function setGlobalSubagentEnabled(enabled) {
   logger.info({ enabled: value }, "DB set_global_subagent_enabled");
 }
 
+function getIdleTrigger(chatId) {
+  const row = getSettingRow(chatId);
+  const min = row?.idle_trigger_min ?? null;
+  const max = row?.idle_trigger_max ?? null;
+  if (min == null) return null;
+  return { min, max: max ?? min };
+}
+
+function setIdleTrigger(chatId, min, max) {
+  ensureChatRow(chatId);
+  runSettingsQuery(
+    "UPDATE chat_settings SET idle_trigger_min = ?, idle_trigger_max = ?, updated_at = datetime('now') WHERE chat_id = ?",
+    min,
+    max,
+    chatId,
+  );
+  saveDb(_settingsState);
+  logger.info({ chatId, min, max }, "DB set_idle_trigger");
+}
+
+function setGlobalIdleTrigger(min, max) {
+  runSettingsQuery(
+    "UPDATE chat_settings SET idle_trigger_min = ?, idle_trigger_max = ?, updated_at = datetime('now')",
+    min,
+    max,
+  );
+  saveDb(_settingsState);
+  logger.info({ min, max }, "DB set_global_idle_trigger");
+}
+
 function getDbPath() {
   return getSettingsDbPath();
 }
@@ -1144,6 +1168,9 @@ export {
   setGlobalTriggers,
   setGlobalLlm2Model,
   setGlobalSubagentEnabled,
+  getIdleTrigger,
+  setIdleTrigger,
+  setGlobalIdleTrigger,
   VALID_MODES,
   DEFAULT_MODE,
   VALID_TRIGGERS,
