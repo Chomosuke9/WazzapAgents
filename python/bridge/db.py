@@ -494,6 +494,32 @@ def _pop_all_chat_caches(chat_id: str) -> None:
     _subagent_enabled_cache.pop(chat_id, None)
 
 
+def _ensure_chat_row(chat_id: str) -> None:
+  """Ensure a per-chat row exists, copying all values from __global__ if needed.
+
+  This prevents INSERT...ON CONFLICT from creating rows with SQL column defaults
+  that shadow the __global__ fallback row with wrong values.
+  """
+  if chat_id == GLOBAL_CHAT_ID:
+    return
+  conn = _get_settings_conn()
+  existing = conn.execute(
+    'SELECT 1 FROM chat_settings WHERE chat_id = ?', (chat_id,)
+  ).fetchone()
+  if existing is None:
+    conn.execute(
+      """
+      INSERT INTO chat_settings
+        (chat_id, prompt, permission, mode, triggers, llm2_model,
+         subagent_enabled, idle_trigger_min, idle_trigger_max, updated_at)
+      SELECT ?, prompt, permission, mode, triggers, llm2_model,
+             subagent_enabled, idle_trigger_min, idle_trigger_max, datetime('now')
+      FROM chat_settings WHERE chat_id = ?
+      """,
+      (chat_id, GLOBAL_CHAT_ID),
+    )
+
+
 def _get_setting_row(chat_id: str) -> Optional[sqlite3.Row]:
   """Return the chat_settings row for *chat_id*, falling back to __global__."""
   _ensure_split_ready()
@@ -526,16 +552,11 @@ def get_prompt(chat_id: str) -> Optional[str]:
 @_db_resilient('settings')
 def set_prompt(chat_id: str, prompt: Optional[str]) -> None:
   _ensure_split_ready()
+  _ensure_chat_row(chat_id)
   conn = _get_settings_conn()
   conn.execute(
-    """
-    INSERT INTO chat_settings (chat_id, prompt, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      prompt = excluded.prompt,
-      updated_at = excluded.updated_at
-    """,
-    (chat_id, prompt),
+    'UPDATE chat_settings SET prompt = ?, updated_at = datetime(?) WHERE chat_id = ?',
+    (prompt, 'now', chat_id),
   )
   conn.commit()
   _pop_all_chat_caches(chat_id)
@@ -563,16 +584,11 @@ def get_permission(chat_id: str) -> int:
 def set_permission(chat_id: str, level: int) -> None:
   clamped = max(0, min(3, int(level)))
   _ensure_split_ready()
+  _ensure_chat_row(chat_id)
   conn = _get_settings_conn()
   conn.execute(
-    """
-    INSERT INTO chat_settings (chat_id, permission, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      permission = excluded.permission,
-      updated_at = excluded.updated_at
-    """,
-    (chat_id, clamped),
+    'UPDATE chat_settings SET permission = ?, updated_at = datetime(?) WHERE chat_id = ?',
+    (clamped, 'now', chat_id),
   )
   conn.commit()
   _pop_all_chat_caches(chat_id)
@@ -701,16 +717,11 @@ def get_model_vision_support(chat_id: str) -> bool:
 @_db_resilient('settings')
 def set_llm2_model(chat_id: str, model_id: Optional[str]) -> None:
   _ensure_split_ready()
+  _ensure_chat_row(chat_id)
   conn = _get_settings_conn()
   conn.execute(
-    """
-    INSERT INTO chat_settings (chat_id, llm2_model, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      llm2_model = excluded.llm2_model,
-      updated_at = excluded.updated_at
-    """,
-    (chat_id, model_id),
+    'UPDATE chat_settings SET llm2_model = ?, updated_at = datetime(?) WHERE chat_id = ?',
+    (model_id, 'now', chat_id),
   )
   conn.commit()
   _pop_all_chat_caches(chat_id)
@@ -1003,16 +1014,11 @@ def set_mode(chat_id: str, mode: str) -> None:
   if mode not in VALID_MODES:
     mode = DEFAULT_MODE
   _ensure_split_ready()
+  _ensure_chat_row(chat_id)
   conn = _get_settings_conn()
   conn.execute(
-    """
-    INSERT INTO chat_settings (chat_id, mode, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      mode = excluded.mode,
-      updated_at = excluded.updated_at
-    """,
-    (chat_id, mode),
+    'UPDATE chat_settings SET mode = ?, updated_at = datetime(?) WHERE chat_id = ?',
+    (mode, 'now', chat_id),
   )
   conn.commit()
   _pop_all_chat_caches(chat_id)
@@ -1041,16 +1047,11 @@ def set_triggers(chat_id: str, triggers: set[str]) -> None:
   valid = {t for t in triggers if t in VALID_TRIGGERS}
   raw = ','.join(sorted(valid)) if valid else ''
   _ensure_split_ready()
+  _ensure_chat_row(chat_id)
   conn = _get_settings_conn()
   conn.execute(
-    """
-    INSERT INTO chat_settings (chat_id, triggers, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      triggers = excluded.triggers,
-      updated_at = excluded.updated_at
-    """,
-    (chat_id, raw),
+    'UPDATE chat_settings SET triggers = ?, updated_at = datetime(?) WHERE chat_id = ?',
+    (raw, 'now', chat_id),
   )
   conn.commit()
   _pop_all_chat_caches(chat_id)
@@ -1082,16 +1083,11 @@ def get_subagent_enabled(chat_id: str) -> bool:
 def set_subagent_enabled(chat_id: str, enabled: bool) -> None:
   enabled = bool(enabled)
   _ensure_split_ready()
+  _ensure_chat_row(chat_id)
   conn = _get_settings_conn()
   conn.execute(
-    """
-    INSERT INTO chat_settings (chat_id, subagent_enabled, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      subagent_enabled = excluded.subagent_enabled,
-      updated_at = excluded.updated_at
-    """,
-    (chat_id, 1 if enabled else 0),
+    'UPDATE chat_settings SET subagent_enabled = ?, updated_at = datetime(?) WHERE chat_id = ?',
+    (1 if enabled else 0, 'now', chat_id),
   )
   conn.commit()
   _pop_all_chat_caches(chat_id)
@@ -1118,17 +1114,11 @@ def get_idle_trigger(chat_id: str) -> Optional[tuple[int, int]]:
 @_db_resilient('settings')
 def set_idle_trigger(chat_id: str, min_val: Optional[int], max_val: Optional[int]) -> None:
   _ensure_split_ready()
+  _ensure_chat_row(chat_id)
   conn = _get_settings_conn()
   conn.execute(
-    """
-    INSERT INTO chat_settings (chat_id, idle_trigger_min, idle_trigger_max, updated_at)
-    VALUES (?, ?, ?, datetime('now'))
-    ON CONFLICT(chat_id) DO UPDATE SET
-      idle_trigger_min = excluded.idle_trigger_min,
-      idle_trigger_max = excluded.idle_trigger_max,
-      updated_at = excluded.updated_at
-    """,
-    (chat_id, min_val, max_val),
+    'UPDATE chat_settings SET idle_trigger_min = ?, idle_trigger_max = ?, updated_at = datetime(?) WHERE chat_id = ?',
+    (min_val, max_val, 'now', chat_id),
   )
   conn.commit()
   _pop_all_chat_caches(chat_id)
