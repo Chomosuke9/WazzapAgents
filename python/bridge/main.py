@@ -1709,49 +1709,51 @@ async def handle_socket(ws):
             local_input_files: list[str] = []
             chat_store = media_paths_by_chat.get(chat_id, {})
             tmp_dir = tempfile.mkdtemp(prefix="subagent_ctx_")
-            file_idx = 1
+            try:
+              file_idx = 1
 
-            for cid in ctx_ids:
-              # --- media resolution ---
-              atts = chat_store.get(cid)
-              media_path = None
-              if isinstance(atts, list) and atts:
-                first = atts[0]
-                p = first.get("path") if isinstance(first, dict) else None
-                if p and os.path.isfile(p):
-                  media_path = p
-              elif isinstance(atts, str) and os.path.isfile(atts):
-                media_path = atts
+              for cid in ctx_ids:
+                # --- media resolution ---
+                atts = chat_store.get(cid)
+                media_path = None
+                if isinstance(atts, list) and atts:
+                  first = atts[0]
+                  p = first.get("path") if isinstance(first, dict) else None
+                  if p and os.path.isfile(p):
+                    media_path = p
+                elif isinstance(atts, str) and os.path.isfile(atts):
+                  media_path = atts
 
-              if media_path:
-                ext = os.path.splitext(media_path)[1] or ".bin"
-                renamed = os.path.join(tmp_dir, f"media{file_idx}{ext}")
-                shutil.copyfile(media_path, renamed)
-                local_input_files.append(renamed)
-                file_idx += 1
+                if media_path:
+                  ext = os.path.splitext(media_path)[1] or ".bin"
+                  renamed = os.path.join(tmp_dir, f"media{file_idx}{ext}")
+                  shutil.copyfile(media_path, renamed)
+                  local_input_files.append(renamed)
+                  file_idx += 1
 
-              # --- text resolution (on-demand scan of history deque) ---
-              msg_text = None
-              for msg in history:
-                if msg.context_msg_id == cid and msg.text:
-                  msg_text = msg.text
-                  break
+                # --- text resolution (on-demand scan of history deque) ---
+                msg_text = None
+                for msg in history:
+                  if msg.context_msg_id == cid and msg.text:
+                    msg_text = msg.text
+                    break
 
-              if msg_text:
-                txt_path = os.path.join(tmp_dir, f"user_message{file_idx}.txt")
-                with open(txt_path, "w", encoding="utf-8") as f:
-                  f.write(msg_text)
-                local_input_files.append(txt_path)
-                file_idx += 1
+                if msg_text:
+                  txt_path = os.path.join(tmp_dir, f"user_message{file_idx}.txt")
+                  with open(txt_path, "w", encoding="utf-8") as f:
+                    f.write(msg_text)
+                  local_input_files.append(txt_path)
+                  file_idx += 1
 
-            # The bridge stores inbound media under MEDIA_DIR (e.g.
-            # ``data/media/...``), but the sub-agent process runs in a
-            # separate container/host that cannot read those paths. Stage
-            # them into the cross-process exchange directory so the paths
-            # we hand to /execute resolve on both sides. See
-            # ``subagent/output.py::input_staging_root`` for the contract.
-            input_files = stage_input_files(session_id, local_input_files)
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+              # The bridge stores inbound media under MEDIA_DIR (e.g.
+              # ``data/media/...``), but the sub-agent process runs in a
+              # separate container/host that cannot read those paths. Stage
+              # them into the cross-process exchange directory so the paths
+              # we hand to /execute resolve on both sides. See
+              # ``subagent/output.py::input_staging_root`` for the contract.
+              input_files = stage_input_files(session_id, local_input_files)
+            finally:
+              shutil.rmtree(tmp_dir, ignore_errors=True)
 
             task = SubTask(session_id=session_id, instruction=instruction, chat_id=chat_id)
             subagent_tracker.register(task)

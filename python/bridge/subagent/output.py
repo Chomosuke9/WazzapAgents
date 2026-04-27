@@ -417,8 +417,12 @@ def stage_output_files(
         try:
           shutil.move(optimized, real_dest)
           size = os.path.getsize(real_dest)
-        except OSError:
-          pass
+        except OSError as opt_err:
+          logger.warning("MP4 optimization move failed for %s: %s", real_dest, opt_err)
+          try:
+            os.unlink(optimized)
+          except OSError:
+            pass
     staged.append(StagedFile(
       path=real_dest,
       name=final_name,
