@@ -187,7 +187,9 @@ instead. The acknowledgement goes in the `confirmation_text` parameter of
 
 The sub-agent has NO access to chat history — write `instruction` as a
 self-contained brief. Pass `context_msg_ids` for messages whose media
-attachments the sub-agent needs (or `null` if none).
+attachments OR text content the sub-agent needs (or `null` if none).
+For text-only messages (e.g. a user pasting a long story), the bridge
+automatically converts the text into a .txt file for the sub-agent.
 </subagent>"""
 
 

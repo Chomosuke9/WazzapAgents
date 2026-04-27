@@ -329,8 +329,9 @@ LLM2_SUBAGENT_TOOL = {
           },
           "description": (
             "List of 6-digit contextMsgIds whose messages contain media attachments "
-            "to provide as input to the sub-agent. The bridge will resolve each ID to the "
-            "corresponding file path automatically. Only include IDs that are explicitly "
+            "or text content to provide as input to the sub-agent. The bridge resolves "
+            "each ID to the corresponding file path automatically — for text-only messages, "
+            "the text is converted to a .txt file. Only include IDs that are explicitly "
             "relevant to the instruction. Pass null when no input files are needed."
           ),
         },

@@ -15,6 +15,7 @@ from bridge.subagent.output import (
   MAX_FILE_SIZE_BYTES,
   StagedFile,
   SkippedFile,
+  _is_animated_webp,
   cleanup_input_staging,
   detect_kind,
   format_file_list,
@@ -135,6 +136,120 @@ class TestDetectKind:
     kind, mime = detect_kind("/tmp/report.docx")
     assert kind == "document"
     assert "wordprocessingml" in mime
+
+  # ---- WhatsApp format whitelist: unsupported formats become document ----
+
+  def test_webm_is_document(self):
+    kind, _ = detect_kind("/tmp/foo.webm")
+    assert kind == "document"
+
+  def test_mkv_is_document(self):
+    kind, _ = detect_kind("/tmp/foo.mkv")
+    assert kind == "document"
+
+  def test_avi_is_document(self):
+    kind, _ = detect_kind("/tmp/foo.avi")
+    assert kind == "document"
+
+  def test_gif_is_document(self):
+    kind, _ = detect_kind("/tmp/foo.gif")
+    assert kind == "document"
+
+  def test_wav_is_document(self):
+    kind, _ = detect_kind("/tmp/foo.wav")
+    assert kind == "document"
+
+  def test_flac_is_document(self):
+    kind, _ = detect_kind("/tmp/foo.flac")
+    assert kind == "document"
+
+  def test_static_webp_is_image(self, tmp_path):
+    # Static WebP: RIFF....WEBPVP8 (no VP8X chunk)
+    p = tmp_path / "static.webp"
+    p.write_bytes(b'RIFF' + b'\x00' * 4 + b'WEBPVP8 ' + b'\x00' * 20)
+    kind, _ = detect_kind(str(p))
+    assert kind == "image"
+
+  def test_animated_webp_is_document(self, tmp_path):
+    # Animated WebP: VP8X chunk with animation bit (bit 1 of flags byte at offset 20)
+    header = bytearray(21)
+    header[0:4] = b'RIFF'
+    header[8:12] = b'WEBP'
+    header[12:16] = b'VP8X'
+    header[20] = 0x02  # animation bit set
+    p = tmp_path / "animated.webp"
+    p.write_bytes(bytes(header) + b'\x00' * 20)
+    kind, _ = detect_kind(str(p))
+    assert kind == "document"
+
+  def test_mp4_is_still_video(self):
+    kind, mime = detect_kind("/tmp/foo.mp4")
+    assert kind == "video"
+    assert mime == "video/mp4"
+
+  def test_mp3_is_still_audio(self):
+    kind, _ = detect_kind("/tmp/foo.mp3")
+    assert kind == "audio"
+
+  def test_m4a_is_still_audio(self):
+    kind, _ = detect_kind("/tmp/foo.m4a")
+    assert kind == "audio"
+
+  def test_ogg_is_still_audio(self):
+    kind, _ = detect_kind("/tmp/foo.ogg")
+    assert kind == "audio"
+
+  def test_png_is_still_image(self):
+    kind, _ = detect_kind("/tmp/foo.png")
+    assert kind == "image"
+
+  def test_jpg_is_still_image(self):
+    kind, _ = detect_kind("/tmp/foo.jpg")
+    assert kind == "image"
+
+
+# ---------------------------------------------------------------------------
+# _is_animated_webp
+# ---------------------------------------------------------------------------
+
+class TestIsAnimatedWebp:
+  def test_animated_webp_detected(self, tmp_path):
+    header = bytearray(21)
+    header[0:4] = b'RIFF'
+    header[8:12] = b'WEBP'
+    header[12:16] = b'VP8X'
+    header[20] = 0x02  # animation bit
+    p = tmp_path / "anim.webp"
+    p.write_bytes(bytes(header) + b'\x00' * 20)
+    assert _is_animated_webp(str(p)) is True
+
+  def test_static_webp_not_detected(self, tmp_path):
+    header = bytearray(21)
+    header[0:4] = b'RIFF'
+    header[8:12] = b'WEBP'
+    header[12:16] = b'VP8X'
+    header[20] = 0x00  # no animation bit
+    p = tmp_path / "static.webp"
+    p.write_bytes(bytes(header) + b'\x00' * 20)
+    assert _is_animated_webp(str(p)) is False
+
+  def test_non_vp8x_webp_not_animated(self, tmp_path):
+    p = tmp_path / "simple.webp"
+    p.write_bytes(b'RIFF' + b'\x00' * 4 + b'WEBPVP8 ' + b'\x00' * 20)
+    assert _is_animated_webp(str(p)) is False
+
+  def test_non_webp_file_returns_false(self, tmp_path):
+    p = tmp_path / "notwebp.png"
+    p.write_bytes(b'\x89PNG\r\n\x1a\n' + b'\x00' * 20)
+    assert _is_animated_webp(str(p)) is False
+
+  def test_missing_file_returns_false(self):
+    assert _is_animated_webp("/nonexistent/file.webp") is False
+
+  def test_too_short_file_returns_false(self, tmp_path):
+    p = tmp_path / "short.webp"
+    p.write_bytes(b'RIFF' + b'\x00' * 8)
+    assert _is_animated_webp(str(p)) is False
 
 
 # ---------------------------------------------------------------------------
