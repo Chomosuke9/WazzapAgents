@@ -308,7 +308,11 @@ def _optimize_mp4(src_path: str) -> str | None:
       capture_output=True, timeout=120,
     )
     if result.returncode != 0:
-      logger.warning("MP4 optimization failed (rc=%d)", result.returncode)
+      logger.warning(
+        "MP4 optimization failed (rc=%d): %s",
+        result.returncode,
+        result.stderr.decode(errors='replace')[:500] if result.stderr else "",
+      )
       os.unlink(tmp_path)
       return None
     return tmp_path
@@ -423,6 +427,11 @@ def stage_output_files(
             os.unlink(optimized)
           except OSError:
             pass
+          skipped.append(SkippedFile(
+            source_path=src, name=name,
+            reason=f"MP4 optimization move failed: {opt_err}",
+          ))
+          continue
     staged.append(StagedFile(
       path=real_dest,
       name=final_name,
