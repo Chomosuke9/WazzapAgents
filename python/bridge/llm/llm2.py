@@ -172,16 +172,16 @@ Only kick with clear justification. Cannot kick admins.
 # Mirrors the structure of _DELETE_RULES / _MUTE_RULES / _KICK_RULES.
 _SUBAGENT_RULES = """<subagent>
 SUB-AGENT is ALLOWED for this chat. You have an `execute_subtask` tool that
-delegates work to a separate background agent (bash + python).
+delegates work to a separate background agent (bash + python + javascript).
 
 Use `execute_subtask` for tasks that need real computation or file I/O:
-file processing, code execution, web scraping, or producing attachment files.
+file processing, code execution, analyzing files, web scraping, or producing attachment files.
 
 Do NOT use it for: conversational replies, greetings, opinions, anything you
 can answer from knowledge alone, or moderation actions.
 
 CRITICAL: When a task qualifies, call `execute_subtask` immediately — do NOT
-send a `reply_message` with an acknowledgement like "siap, aku proses dulu"
+send a `reply_message` with an acknowledgement like "Alright, i'll process that!"
 instead. The acknowledgement goes in the `confirmation_text` parameter of
 `execute_subtask`, not as a separate reply.
 
