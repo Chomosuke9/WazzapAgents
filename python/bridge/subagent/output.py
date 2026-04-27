@@ -315,8 +315,8 @@ def _optimize_mp4(src_path: str) -> str | None:
   except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
     logger.warning("MP4 optimization error: %s", exc)
     try:
-      os.unlink(tmp_path)
-    except OSError:
+      os.unlink(tmp_path)  # type: ignore[possibly-undefined]
+    except (OSError, NameError):
       pass
     return None
 

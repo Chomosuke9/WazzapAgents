@@ -526,7 +526,7 @@ async def _deliver_subagent_result(
     if final_task.status == "completed":
       raw_paths = final_task.result.get("output_files") or []
       if isinstance(raw_paths, list) and raw_paths:
-        staged_outputs = stage_output_files(session_id, raw_paths)
+        staged_outputs = await asyncio.to_thread(stage_output_files, session_id, raw_paths)
         if staged_outputs.skipped:
           logger.warning(
             "execute_subtask: skipped %d output file(s) session=%s",
