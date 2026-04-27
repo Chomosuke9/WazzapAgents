@@ -167,3 +167,42 @@ def test_active_context_caps_per_entry_length():
     assert "X" * 100 in block
     # And we should see the ellipsis sentinel.
     assert "…" in block
+
+
+def test_clear_history_for_chat_removes_finished():
+    tracker = _make_tracker_with_active()
+    tracker.finalize("sess-1", {"success": True, "report": "done"})
+    assert tracker.format_recent_finished("chat-1") is not None
+    tracker.clear_history_for_chat("chat-1")
+    assert tracker.format_recent_finished("chat-1") is None
+
+
+def test_clear_all_removes_all_history():
+    tracker = _make_tracker_with_active()
+    tracker.finalize("sess-1", {"success": True, "report": "done"})
+    tracker.clear_all()
+    assert tracker.format_recent_finished("chat-1") is None
+
+
+def test_clear_history_does_not_touch_active():
+    tracker = _make_tracker_with_active()
+    tracker.clear_history_for_chat("chat-1")
+    # Active task should still be visible
+    assert tracker.format_context("chat-1") is not None
+
+
+def test_idle_block_when_no_task():
+    tracker = SubTaskTracker()
+    block = tracker.format_idle("chat-1")
+    assert "No sub-agent task is currently running" in block
+    assert "execute_subtask" in block
+
+
+def test_format_recent_finished_mentions_different_task_ok():
+    """After wording change, the block must clarify that only the SAME
+    task is prohibited, not new different tasks."""
+    tracker = _make_tracker_with_active()
+    tracker.finalize("sess-1", {"success": True, "report": "done"})
+    block = tracker.format_recent_finished("chat-1")
+    assert "THIS SAME task" in block
+    assert "DIFFERENT new task" in block

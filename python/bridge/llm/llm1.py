@@ -68,6 +68,7 @@ try:
     build_llm1_prompt,
     _metadata_block,
   )
+  from .error_utils import _is_timeout_error, _error_chain
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
@@ -100,6 +101,7 @@ except ImportError:  # allow running as script
     build_llm1_prompt,
     _metadata_block,
   )
+  from bridge.llm.error_utils import _is_timeout_error, _error_chain  # type: ignore
 
 logger = setup_logging()
 
@@ -116,28 +118,6 @@ def _prompt_to_langchain_messages(prompt: list[dict]) -> list[SystemMessage | Hu
     else:
       messages.append(HumanMessage(content=content))
   return messages
-
-
-def _is_timeout_error(err: Exception) -> bool:
-  current: BaseException | None = err
-  depth = 0
-  while current is not None and depth < 8:
-    if "timeout" in type(current).__name__.lower():
-      return True
-    current = current.__cause__ or current.__context__
-    depth += 1
-  return False
-
-
-def _error_chain(err: Exception, limit: int = 8) -> list[str]:
-  chain: list[str] = []
-  current: BaseException | None = err
-  depth = 0
-  while current is not None and depth < limit:
-    chain.append(type(current).__name__)
-    current = current.__cause__ or current.__context__
-    depth += 1
-  return chain
 
 
 def _llm1_ctx(
@@ -381,7 +361,7 @@ async def call_llm1(
       except Exception as err:
         logger.warning(
           "LLM1 bind_tools with tool_choice=%s failed; retrying default bind_tools",
-          tool_choice_val,
+          "auto",
           exc_info=err,
           extra={
             **ctx,

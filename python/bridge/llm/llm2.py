@@ -18,6 +18,7 @@ try:
   from .schemas import build_llm2_tools
   from ..config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int
   from .prompt import _truncate_message
+  from .error_utils import _is_timeout_error, _error_chain
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
@@ -29,6 +30,7 @@ except ImportError:  # allow running as script
   from bridge.llm.schemas import build_llm2_tools  # type: ignore
   from bridge.config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int  # type: ignore
   from bridge.llm.prompt import _truncate_message  # type: ignore
+  from bridge.llm.error_utils import _is_timeout_error, _error_chain  # type: ignore
 
 logger = setup_logging()
 SYSTEM_PROMPT_PATH = Path(__file__).resolve().parent.parent.parent / "systemprompt.txt"
@@ -138,28 +140,6 @@ def _llm2_targets() -> list[LLM2Target]:
   return targets
 
 
-def _is_timeout_error(err: Exception) -> bool:
-  current: BaseException | None = err
-  depth = 0
-  while current is not None and depth < 8:
-    if "timeout" in type(current).__name__.lower():
-      return True
-    current = current.__cause__ or current.__context__
-    depth += 1
-  return False
-
-
-def _error_chain(err: Exception, limit: int = 8) -> list[str]:
-  chain: list[str] = []
-  current: BaseException | None = err
-  depth = 0
-  while current is not None and depth < limit:
-    chain.append(type(current).__name__)
-    current = current.__cause__ or current.__context__
-    depth += 1
-  return chain
-
-
 def _load_system_prompt() -> str:
   global _SYSTEM_PROMPT_CACHE
   if _SYSTEM_PROMPT_CACHE is not None:
@@ -194,42 +174,20 @@ _SUBAGENT_RULES = """<subagent>
 SUB-AGENT is ALLOWED for this chat. You have an `execute_subtask` tool that
 delegates work to a separate background agent (bash + python).
 
-Use `execute_subtask` for tasks that you cannot finish in a single chat reply,
-specifically:
-- file processing (summarize a PDF/audio/video, OCR, edit an image, transcode media)
-- code execution / data crunching that needs a real shell or python runtime
-- web scraping or multi-step research
-- anything that needs to produce attachment files to send back to the chat
+Use `execute_subtask` for tasks that need real computation or file I/O:
+file processing, code execution, web scraping, or producing attachment files.
 
-Do NOT use `execute_subtask` for:
-- short conversational replies, greetings, jokes, opinions — answer those directly
-- anything you can answer from your own knowledge in one message
-- moderation actions (use delete/mute/kick tools instead)
+Do NOT use it for: conversational replies, greetings, opinions, anything you
+can answer from knowledge alone, or moderation actions.
 
-When calling the tool:
-- Write `instruction` as a self-contained natural-language brief. The sub-agent DOES NOT HAVE ACCESS to the chat history; it is a completely different agent. Make your instruction as detailed as possible.
-- Pass `context_msg_ids` (array of 6-digit IDs from the chat context) for any
-  messages whose media attachments the sub-agent needs as input. The bridge
-  resolves each ID to the file path automatically. Pass `null` when no input
-  files are needed; this parameter is required even when empty.
-- Output files the sub-agent produces are auto-attached to the chat after
-  your text reply.
+CRITICAL: When a task qualifies, call `execute_subtask` immediately — do NOT
+send a `reply_message` with an acknowledgement like "siap, aku proses dulu"
+instead. The acknowledgement goes in the `confirmation_text` parameter of
+`execute_subtask`, not as a separate reply.
 
-How the sub-agent turn flow works:
-
-1. Initial turn — the user asks for the task.
-   - Call `execute_subtask` immediately. An acknowledgement via
-     `confirmation_text` is recommended to inform the user that the sub-agent is
-     running (e.g., "Alright, I'm processing it, please wait a moment."). DO NOT CALL OTHER `reply_message` tools while you're calling `execute_subtask`.
-
-2. While the sub-agent is running (`## Active sub-agent task` block in
-   your context), DO NOT call `execute_subtask` again, and DO NOT send
-   another acknowledgement. If the user is just nudging ("Halo?", "Is it done yet?"), use `reply_message` to clarify the sub-agent's progress, e.g., "I'm still extracting it, please wait."
-
-3. Completion turn — the bridge re-invokes you with a `[SUBTASK FINISHED]`
-   system message and the `## Sub-Agent result for this turn` block. This
-   IS the moment to deliver the result. Send a `reply_message`
-   summarizing the report for the user.
+The sub-agent has NO access to chat history — write `instruction` as a
+self-contained brief. Pass `context_msg_ids` for messages whose media
+attachments the sub-agent needs (or `null` if none).
 </subagent>"""
 
 
@@ -597,11 +555,9 @@ async def generate_reply(
   msgs = [SystemMessage(content=rendered_system)]
   msgs.append(HumanMessage(content=f"Group description:\n{group_text}"))
   msgs.append(HumanMessage(content=context_injection))
-  # Only inject the per-burst sub-agent context when there is real progress
-  # or a finished result to show. The "no task running" placeholder used to
-  # be appended whenever allow_subagent was true, but the system prompt now
-  # carries the <subagent> rules block (see _SUBAGENT_RULES), so the
-  # placeholder is redundant noise.
+  # Sub-agent context block: always injected as a dedicated HumanMessage
+  # so LLM2 has an explicit signal about the sub-agent state (active task,
+  # recently finished, or idle/ready for new tasks).
   subagent_block: str | None = subagent_context if subagent_context else None
   if subagent_block:
     msgs.append(HumanMessage(content=subagent_block))
@@ -798,15 +754,18 @@ async def generate_reply(
             "media_parts": len(media_parts),
           },
         )
-        result, _ = await _invoke_with_retry(
-          [
-            SystemMessage(content=rendered_system),
-            HumanMessage(content=f"Group description:\n{group_text}"),
-            HumanMessage(content=context_injection),
-            HumanMessage(content=messages_content_text),
-          ],
-          mode="text_fallback",
-        )
+        fallback_msgs = [
+          SystemMessage(content=rendered_system),
+          HumanMessage(content=f"Group description:\n{group_text}"),
+          HumanMessage(content=context_injection),
+        ]
+        if subagent_block:
+          fallback_msgs.append(HumanMessage(content=subagent_block))
+        if subagent_result_block:
+          fallback_msgs.append(HumanMessage(content=subagent_result_block))
+        fallback_msgs.append(HumanMessage(content=messages_content_text))
+
+        result, _ = await _invoke_with_retry(fallback_msgs, mode="text_fallback")
 
     if result is not None:
       logger.debug(
