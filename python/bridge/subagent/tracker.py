@@ -202,7 +202,31 @@ class SubTaskTracker:
     lines.append("")
     lines.append(
       "This task has already been delivered to the user. DO NOT call "
-      "`execute_subtask` again to redo it. If the user is referencing it, "
-      "answer from the report above."
+      "`execute_subtask` again for THIS SAME task. If the user asks for "
+      "a DIFFERENT new task, you MUST still use `execute_subtask` as normal. "
+      "If the user is referencing the finished task, answer from the report above."
     )
     return "\n".join(lines)
+
+  def clear_history_for_chat(self, chat_id: str) -> None:
+    """Remove all finished-task history for a chat.
+    Called after sub-agent result delivery and on /reset so that
+    format_recent_finished() no longer injects a stale block.
+    Does NOT touch _active — running tasks are unaffected.
+    """
+    self._history.pop(chat_id, None)
+
+  def clear_all(self) -> None:
+    """Wipe all history (not active tasks). Used by /reset global."""
+    self._history.clear()
+
+  def format_idle(self, chat_id: str) -> str:
+    """Return a context block indicating no sub-agent task is active.
+    Gives LLM2 an explicit signal that it is free to call execute_subtask.
+    """
+    return (
+      "## Sub-agent status\n"
+      "No sub-agent task is currently running or recently finished.\n"
+      "If the user's request qualifies (file processing, code execution, "
+      "web scraping, etc.), call `execute_subtask` immediately."
+    )

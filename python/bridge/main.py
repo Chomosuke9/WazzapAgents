@@ -8,7 +8,7 @@ import random
 import signal
 import time
 import uuid
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Deque, Dict, Set
 from urllib.parse import urlsplit
@@ -315,6 +315,23 @@ def _store_media_path(media_paths_by_chat: dict, payload: dict) -> None:
         })
   if paths:
     media_paths_by_chat.setdefault(chat_id, {})[ctx_id] = paths
+
+
+def _cleanup_stale_media_paths(media_paths_by_chat: dict, max_age_seconds: float = 86400.0) -> int:
+  """Remove media path entries older than max_age_seconds. Returns count removed."""
+  now = time.time()
+  removed = 0
+  for chat_id in list(media_paths_by_chat.keys()):
+    ctx_map = media_paths_by_chat[chat_id]
+    for ctx_id in list(ctx_map.keys()):
+      entries = ctx_map[ctx_id]
+      if isinstance(entries, list) and entries:
+        if all(now - e.get("received_at", now) > max_age_seconds for e in entries):
+          del ctx_map[ctx_id]
+          removed += 1
+    if not ctx_map:
+      del media_paths_by_chat[chat_id]
+  return removed
 
 
 def _resolve_quoted_media_attachments(
@@ -749,12 +766,17 @@ async def _deliver_subagent_result(
       )
       continue
 
+  # Clear finished-task history so format_recent_finished() no longer
+  # injects a "Recently finished" block that discourages the model from
+  # calling execute_subtask for new tasks.
+  subagent_tracker.clear_history_for_chat(chat_id)
+
 
 async def handle_socket(ws):
   per_chat: Dict[str, Deque[WhatsAppMessage]] = defaultdict(deque)
   per_chat_lock: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
   pending_by_chat: Dict[str, PendingChat] = defaultdict(PendingChat)
-  pending_send_request_chat: Dict[str, str] = {}
+  pending_send_request_chat: OrderedDict[str, str] = OrderedDict()
   recent_reply_signatures_by_chat: Dict[str, Deque[tuple[int, str]]] = defaultdict(deque)
   media_paths_by_chat: Dict[str, Dict[str, str]] = defaultdict(dict)
   idle_msg_count: Dict[str, int] = defaultdict(int)
@@ -848,6 +870,8 @@ async def handle_socket(ws):
     if not payloads:
       return
 
+    _cleanup_stale_media_paths(media_paths_by_chat)
+
     non_empty_payloads = [payload for payload in payloads if _payload_has_meaningful_content(payload)]
     if not non_empty_payloads:
       chat_id = payloads[-1].get("chatId") if payloads else "unknown"
@@ -894,11 +918,13 @@ async def handle_socket(ws):
         if is_global_reset:
           per_chat.clear()
           idle_msg_count.clear()
+          subagent_tracker.clear_all()
           db_reset_settings_connection()
           logger.info("Memory and caches cleared for ALL chats via /reset global (inline)")
         else:
           per_chat[p_chat_id].clear()
           idle_msg_count.pop(p_chat_id, None)
+          subagent_tracker.clear_history_for_chat(p_chat_id)
           db_invalidate_chat_caches(p_chat_id)
           logger.info(
             "Memory and per-chat settings caches cleared for chat_id=%s via /reset",
@@ -1400,15 +1426,18 @@ async def handle_socket(ws):
         # to LLM2 as a standalone instruction rather than a regular history
         # line that format_history flattens out.
         #
-        # Prefer the active-task block when one is running. Otherwise, if a
-        # task finished very recently (default 5 min), surface a "recently
-        # finished" reminder so a follow-up burst doesn't make LLM2 re-spawn
-        # the same task or re-acknowledge a result it has already delivered.
+        # Three-tier fallback:
+        #   1. active  — a task is currently running for this chat
+        #   2. recently finished — a task finished within the last 5 min
+        #   3. idle   — no task running or recently finished; explicit signal
+        #               that execute_subtask is available for new tasks
         subagent_context: str | None = None
         if allow_subagent:
           subagent_context = subagent_tracker.format_context(chat_id)
           if subagent_context is None:
             subagent_context = subagent_tracker.format_recent_finished(chat_id)
+          if subagent_context is None:
+            subagent_context = subagent_tracker.format_idle(chat_id)
 
         # NOTE: an "Available files" / file catalogue used to be injected
         # here, but it was unused — LLM2 references attachments by their
@@ -1525,8 +1554,9 @@ async def handle_socket(ws):
             )
             record_stat(chat_id, "responses_sent")
             pending_send_request_chat[request_id] = chat_id
-            if len(pending_send_request_chat) > 4096:
-              pending_send_request_chat.pop(next(iter(pending_send_request_chat)))
+            pending_send_request_chat.move_to_end(request_id)
+            while len(pending_send_request_chat) > 4096:
+              pending_send_request_chat.popitem(last=False)
             _append_history(
               history,
               WhatsAppMessage(
@@ -2030,11 +2060,13 @@ async def handle_socket(ws):
         if clear_chat_id == "global":
           per_chat.clear()
           idle_msg_count.clear()
+          subagent_tracker.clear_all()
           db_reset_settings_connection()
           logger.info("History and caches cleared for ALL chats via clear_history message")
         elif clear_chat_id:
           per_chat[clear_chat_id].clear()
           idle_msg_count.pop(clear_chat_id, None)
+          subagent_tracker.clear_history_for_chat(clear_chat_id)
           db_invalidate_chat_caches(clear_chat_id)
           logger.info("History cleared for chat_id=%s via clear_history message", clear_chat_id)
         continue
