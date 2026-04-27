@@ -37,6 +37,8 @@ from __future__ import annotations
 import mimetypes
 import os
 import shutil
+import subprocess
+import tempfile as _tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -215,6 +217,27 @@ def _read_head(path: str, n: int = 16) -> bytes:
     return b''
 
 
+def _is_animated_webp(path_str: str) -> bool:
+  """Check if a WebP file is animated by inspecting the VP8X chunk."""
+  try:
+    with open(path_str, 'rb') as f:
+      header = f.read(21)
+      if len(header) < 21:
+        return False
+      if header[:4] != b'RIFF' or header[8:12] != b'WEBP':
+        return False
+      if header[12:16] == b'VP8X':
+        return bool(header[20] & 0x02)
+      return False
+  except OSError:
+    return False
+
+
+_WA_SUPPORTED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp"}
+_WA_SUPPORTED_VIDEO_MIMES = {"video/mp4"}
+_WA_SUPPORTED_AUDIO_MIMES = {"audio/mpeg", "audio/mp4", "audio/ogg"}
+
+
 def detect_kind(path: str | os.PathLike[str]) -> tuple[str, str]:
   """Return ``(kind, mime)`` for the given file path.
 
@@ -252,12 +275,50 @@ def detect_kind(path: str | os.PathLike[str]) -> tuple[str, str]:
     mime = 'application/octet-stream'
 
   if mime.startswith("image/"):
-    return "image", mime
+    if mime in _WA_SUPPORTED_IMAGE_MIMES:
+      if mime == "image/webp" and os.path.isfile(path_str) and _is_animated_webp(path_str):
+        return "document", mime
+      return "image", mime
+    return "document", mime
   if mime.startswith("video/"):
-    return "video", mime
+    if mime in _WA_SUPPORTED_VIDEO_MIMES:
+      return "video", mime
+    return "document", mime
   if mime.startswith("audio/"):
-    return "audio", mime
+    if mime in _WA_SUPPORTED_AUDIO_MIMES:
+      return "audio", mime
+    return "document", mime
   return "document", mime
+
+
+def _optimize_mp4(src_path: str) -> str | None:
+  """Re-encode MP4 with H.264+AAC+faststart for WhatsApp compatibility."""
+  try:
+    fd, tmp_path = _tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
+    result = subprocess.run(
+      [
+        "ffmpeg", "-y", "-i", src_path,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        "-pix_fmt", "yuv420p",
+        tmp_path,
+      ],
+      capture_output=True, timeout=120,
+    )
+    if result.returncode != 0:
+      logger.warning("MP4 optimization failed (rc=%d)", result.returncode)
+      os.unlink(tmp_path)
+      return None
+    return tmp_path
+  except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+    logger.warning("MP4 optimization error: %s", exc)
+    try:
+      os.unlink(tmp_path)
+    except OSError:
+      pass
+    return None
 
 
 def _format_size(size_bytes: int) -> str:
@@ -350,6 +411,14 @@ def stage_output_files(
 
     real_dest = str(dest.resolve())
     kind, mime = detect_kind(real_dest)
+    if kind == "video" and mime == "video/mp4":
+      optimized = _optimize_mp4(real_dest)
+      if optimized:
+        try:
+          shutil.move(optimized, real_dest)
+          size = os.path.getsize(real_dest)
+        except OSError:
+          pass
     staged.append(StagedFile(
       path=real_dest,
       name=final_name,
