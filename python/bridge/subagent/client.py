@@ -65,6 +65,8 @@ class SubAgentClient:
     session_id: str,
     instruction: str,
     input_files: list[str],
+    *,
+    high_quality: bool = False,
   ) -> dict:
     """Submit a task to the SubAgent (non-blocking).
 
@@ -84,6 +86,7 @@ class SubAgentClient:
       "input_files": input_files,
       "callback_url": self._webhook_url,
       "progress_webhook": self._webhook_url,
+      "high_quality": high_quality,
     }
     url = f"{self._base_url}/execute"
     attempts = max(1, SUBAGENT_SUBMIT_RETRY_MAX + 1)

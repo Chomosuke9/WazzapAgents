@@ -11,6 +11,7 @@ try:
     EMPTY_TARGET_TOKENS,
     SENDER_REF_RE,
   )
+  from .format import sanitize_whatsapp_text
 except ImportError:
   import sys
   from pathlib import Path
@@ -23,6 +24,7 @@ except ImportError:
     EMPTY_TARGET_TOKENS,
     SENDER_REF_RE,
   )
+  from bridge.messaging.format import sanitize_whatsapp_text  # type: ignore
 
 logger = setup_logging()
 
@@ -221,6 +223,7 @@ def _extract_actions(
       return
     body_text = "\n".join(reply_lines).strip()
     if body_text:
+      body_text = sanitize_whatsapp_text(body_text)
       actions.append(
         {
           "type": "send_message",
@@ -347,6 +350,7 @@ def _extract_actions(
   if orphan_text and not actions:
     # LLM2 gave a plain-text response without calling any tools
     # or using any control lines → send it as a message directly.
+    orphan_text = sanitize_whatsapp_text(orphan_text)
     actions.append({
       "type": "send_message",
       "text": orphan_text,
@@ -388,6 +392,7 @@ def _extract_actions_from_tool_calls(
 
     if name == "reply_message":
       text = str(args.get("text") or "").strip()
+      text = sanitize_whatsapp_text(text)
       if not text:
         continue
       reply_to = _resolve_reply_target(
@@ -486,6 +491,7 @@ def _extract_actions_from_tool_calls(
     elif name == "execute_subtask":
       instruction = str(args.get("instruction") or "").strip()
       confirmation_text = str(args.get("confirmation_text") or "").strip()
+      high_quality = bool(args.get("high_quality", False))
       if not instruction:
         continue
 
@@ -503,6 +509,7 @@ def _extract_actions_from_tool_calls(
       # If confirmation_text is provided, send it immediately.
       # If there are input files, reply to the last file; otherwise use fallback_reply_to.
       if confirmation_text:
+        confirmation_text = sanitize_whatsapp_text(confirmation_text)
         conf_reply_to = valid_ids[-1] if valid_ids else fallback_reply_to
         actions.append({
           "type": "send_message",
@@ -514,6 +521,7 @@ def _extract_actions_from_tool_calls(
         "type": "execute_subtask",
         "instruction": instruction,
         "contextMsgIds": valid_ids,
+        "high_quality": high_quality,
       })
 
     else:

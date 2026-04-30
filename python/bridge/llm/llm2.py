@@ -190,6 +190,10 @@ self-contained brief. Pass `context_msg_ids` for messages whose media
 attachments OR text content the sub-agent needs (or `null` if none).
 For text-only messages (e.g. a user pasting a long story), the bridge
 automatically converts the text into a .txt file for the sub-agent.
+
+Set `high_quality=true` for tasks that require deeper reasoning, complex
+analysis, or code generation. Set `high_quality=false` (default) for
+routine tasks like format conversion, simple lookups, or basic scripting.
 </subagent>"""
 
 

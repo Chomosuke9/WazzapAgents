@@ -8,12 +8,14 @@ import time
 try:
   from ..log import setup_logging
   from .processing import _normalize_context_msg_id
+  from .format import sanitize_whatsapp_text
 except ImportError:
   import sys
   from pathlib import Path
   sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.log import setup_logging  # type: ignore
   from bridge.messaging.processing import _normalize_context_msg_id  # type: ignore
+  from bridge.messaging.format import sanitize_whatsapp_text  # type: ignore
 
 logger = setup_logging()
 
@@ -26,6 +28,10 @@ async def send_message(
   *,
   request_id: str,
 ):
+  # Sanitize WhatsApp formatting before sending: LLMs sometimes produce
+  # **bold** (Markdown) which renders as literal asterisks in WhatsApp
+  # instead of bold text. Convert to *bold* (WhatsApp-compatible).
+  text = sanitize_whatsapp_text(text) if text else text
   logger.debug(
     "outbound",
     extra={

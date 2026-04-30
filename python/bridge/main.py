@@ -1699,6 +1699,7 @@ async def handle_socket(ws):
             session_id = f"{chat_id}_{uuid.uuid4().hex[:8]}_{int(time.time())}"
             instruction = action["instruction"]
             ctx_ids = action.get("contextMsgIds", [])
+            high_quality = action.get("high_quality", False)
 
             # Resolve contextMsgIds -> media file paths AND/OR text content.
             # Media comes from ``media_paths_by_chat``; text comes from the
@@ -1759,16 +1760,18 @@ async def handle_socket(ws):
             subagent_tracker.register(task)
 
             logger.info(
-              "execute_subtask: submitting session=%s instruction=%s files=%d (staged=%d)",
+              "execute_subtask: submitting session=%s instruction=%s files=%d (staged=%d) high_quality=%s",
               session_id,
               instruction[:120],
               len(local_input_files),
               len(input_files),
+              high_quality,
               extra={
                 "chat_id": chat_id,
                 "session_id": session_id,
                 "local_input_files": local_input_files,
                 "input_files": input_files,
+                "high_quality": high_quality,
               },
             )
 
@@ -1781,7 +1784,7 @@ async def handle_socket(ws):
 
             submit_failed = False
             try:
-              await subagent_client.submit(session_id, instruction, input_files)
+              await subagent_client.submit(session_id, instruction, input_files, high_quality=high_quality)
             except SubAgentSubmitError as submit_err:
               logger.error(
                 "execute_subtask: submit failed session=%s status=%s: %s",

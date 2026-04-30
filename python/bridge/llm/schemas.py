@@ -295,7 +295,10 @@ LLM2_SUBAGENT_TOOL = {
       "sent to the chat after your text reply, one file per WhatsApp message — "
       "you do not need to mention file paths or upload them yourself. "
       "Make the instruction precise so the sub-agent only emits files the user "
-      "actually wants delivered."
+      "actually wants delivered. "
+      "Set high_quality=true for tasks requiring deeper reasoning, complex code "
+      "generation, or analysis; set high_quality=false (default) for routine tasks "
+      "like format conversion or simple scripting."
     ),
     "parameters": {
       "type": "object",
@@ -335,11 +338,20 @@ LLM2_SUBAGENT_TOOL = {
             "relevant to the instruction. Pass null when no input files are needed."
           ),
         },
+        "high_quality": {
+          "type": "boolean",
+          "description": (
+            "Set to true to use a higher-capability model for tasks requiring "
+            "deeper reasoning, complex analysis, or code generation. "
+            "Defaults to false for routine tasks like format conversion, "
+            "simple lookups, or basic scripting."
+          ),
+        },
       },
       # Strict mode: every property name must be listed in `required`.
       # See note on `context_msg_ids` above for how optionality is modeled
       # via `["array", "null"]` instead of omitting the key.
-      "required": ["instruction", "confirmation_text", "context_msg_ids"],
+      "required": ["instruction", "confirmation_text", "context_msg_ids", "high_quality"],
       "additionalProperties": False,
     },
     "strict": True,
