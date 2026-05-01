@@ -163,15 +163,21 @@ async function resolveAttachmentMimetype(att, filePath, kind) {
 }
 
 /**
- * Ensure a document filename carries a sensible extension.
+ * Ensure a filename carries a sensible extension.
  *
  * WhatsApp clients open documents using the filename extension, not the
  * mimetype, so a document called ``report`` with mimetype
  * ``application/pdf`` will open as ``report`` and be treated as text.
  * Append a best-guess extension when the basename has none.
+ *
+ * If ``fileName`` is empty or not a string, fall back to ``filePathBasename``
+ * (the basename of the file path) — this ensures we always use the original
+ * filename rather than a generic placeholder like "file".
  */
-function ensureFileNameHasExtension(fileName, mime) {
-  const safe = typeof fileName === 'string' && fileName.trim() ? fileName.trim() : 'file';
+function ensureFileNameHasExtension(fileName, mime, filePathBasename) {
+  const safe = typeof fileName === 'string' && fileName.trim()
+    ? fileName.trim()
+    : (typeof filePathBasename === 'string' && filePathBasename.trim() ? filePathBasename.trim() : 'file');
   const ext = path.extname(safe);
   if (ext) return safe;
   const inferred = inferExtension(mime);
@@ -223,17 +229,31 @@ async function sendOutgoing({ chatId, text, attachments = [], replyTo }) {
     const kind = kindToken.trim().toLowerCase() || 'document';
     const filePath = await resolveAllowedAttachmentPath(att?.path, actionError);
     const resolvedMime = await resolveAttachmentMimetype(att, filePath, kind);
+    // Determine a display filename for ALL media types. WhatsApp uses
+    // ``fileName`` primarily for documents, but including it for images,
+    // videos, and audio ensures the original name is preserved wherever
+    // the client makes it visible (e.g. file details, save-to-disk).
+    const filePathBasename = path.basename(filePath);
+    const fileName = (typeof att?.fileName === 'string' && att.fileName.trim())
+      ? att.fileName.trim()
+      : filePathBasename;
+    const safeFileName = ensureFileNameHasExtension(fileName, resolvedMime, filePathBasename);
     const content = {};
     if (kind === 'image') content.image = { url: filePath };
     else if (kind === 'video') content.video = { url: filePath };
     else if (kind === 'audio') content.audio = { url: filePath, ptt: false };
     else if (kind === 'sticker') content.sticker = { url: filePath };
     else {
-      const fileName = att.fileName || path.basename(filePath);
       content.document = {
         url: filePath,
-        fileName: ensureFileNameHasExtension(fileName, resolvedMime),
+        fileName: safeFileName,
       };
+    }
+    // Pin the filename on ALL media types so WhatsApp preserves the
+    // original name wherever it surfaces it (document header, image
+    // file-details, save-to-disk, etc.).
+    if (kind !== 'sticker' && kind !== 'document') {
+      content.fileName = safeFileName;
     }
     // Always pin the mimetype so Baileys does not fall back to its own
     // guess. For documents in particular, an unrecognized stream is

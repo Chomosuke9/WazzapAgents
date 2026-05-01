@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import time
 
 try:
@@ -96,8 +97,10 @@ async def send_attachment(
     caption = sanitize_whatsapp_text(caption)
   normalized_reply_to = _normalize_context_msg_id(reply_to) if reply_to else None
   attachment: dict = {"kind": kind, "path": attachment_path}
-  if file_name:
-    attachment["fileName"] = file_name
+  # Always include fileName — use the explicit name if provided,
+  # otherwise fall back to the basename of the path so WhatsApp
+  # always shows the original filename instead of a generic "file".
+  attachment["fileName"] = file_name or os.path.basename(attachment_path)
   if caption:
     attachment["caption"] = caption
   if mime:
