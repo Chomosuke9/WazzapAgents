@@ -155,14 +155,13 @@ class SubTaskTracker:
     lines.append("Rules while a sub-agent is in flight:")
     lines.append("- DO NOT call `execute_subtask` again for this chat — one is already running.")
     lines.append(
-      "- DO NOT re-acknowledge with phrases like \"oke aku cek\" / "
-      "\"sebentar ya\" / \"on it\". The user already saw your earlier "
-      "acknowledgement and the typing indicator is on while the sub-agent "
-      "works."
+      "- DO NOT re-acknowledge with phrases like \"i'll check it!\" / "
+      "\"wait a minute.\" / \"on it\". The user already saw your earlier "
+      "acknowledgement."
     )
     lines.append(
       "- If the user asks an unrelated question, answer that briefly. "
-      "If they're just checking on progress, stay silent (no `reply_message`)."
+      "If they're just checking on progress, DO NOT reply with \"It's still working...\", they will think you made things up; instead, tell them the current progress of the sub-agent task."
     )
     lines.append(
       "- The sub-agent's final report will be delivered to you on the next "
@@ -201,10 +200,7 @@ class SubTaskTracker:
       lines.append(f"- Report: {task.report}")
     lines.append("")
     lines.append(
-      "This task has already been delivered to the user. DO NOT call "
-      "`execute_subtask` again for THIS SAME task. If the user asks for "
-      "a DIFFERENT new task, you MUST still use `execute_subtask` as normal. "
-      "If the user is referencing the finished task, answer from the report above."
+      "This task has already been delivered to the user (if there are any files attached to it)."
     )
     return "\n".join(lines)
 

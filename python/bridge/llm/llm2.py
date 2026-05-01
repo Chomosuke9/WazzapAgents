@@ -171,29 +171,19 @@ Only kick with clear justification. Cannot kick admins.
 # does not silently forget the tool exists or use it for trivial replies.
 # Mirrors the structure of _DELETE_RULES / _MUTE_RULES / _KICK_RULES.
 _SUBAGENT_RULES = """<subagent>
-SUB-AGENT is ALLOWED for this chat. You have an `execute_subtask` tool that
-delegates work to a separate background agent (bash + python + javascript).
+SUB-AGENT is ALLOWED for this chat. You have an `execute_subtask` tool that delegates work to a separate background agent (bash + python + javascript).
 
-Use `execute_subtask` for tasks that need real computation or file I/O:
-file processing, code execution, analyzing files, web scraping, or producing attachment files.
+Use `execute_subtask` for tasks that need a real computer environment:
+file processing, code execution, analyzing files, web scraping, producing attachment files, or anything else that isn't possible for you.
+Assume this sub-agent has access to the internet and can execute any command on the system, meaning this sub-agent can do almost anything. DO NOT TELL PEOPLE "Sorry, I can't do that" BEFORE EXECUTING SUB-AGENTS.
 
-Do NOT use it for: conversational replies, greetings, opinions, anything you
-can answer from knowledge alone, or moderation actions.
+Do NOT use it for: conversational replies, greetings, opinions, anything you can answer from knowledge alone, or moderation actions.
 
-CRITICAL: When a task qualifies, call `execute_subtask` immediately — do NOT
-send a `reply_message` with an acknowledgement like "Alright, i'll process that!"
-instead. The acknowledgement goes in the `confirmation_text` parameter of
-`execute_subtask`, not as a separate reply.
+CRITICAL: When a task qualifies, call `execute_subtask` immediately — do NOT send a `reply_message` with an acknowledgement like "Alright, i'll process that!" instead. The acknowledgement goes in the `confirmation_text` parameter of `execute_subtask`, not as a separate reply.
 
-The sub-agent has NO access to chat history — write `instruction` as a
-self-contained brief. Pass `context_msg_ids` for messages whose media
-attachments OR text content the sub-agent needs (or `null` if none).
-For text-only messages (e.g. a user pasting a long story), the bridge
-automatically converts the text into a .txt file for the sub-agent.
+The sub-agent has NO access to chat history — write `instruction` as a self-contained brief. Pass `context_msg_ids` for messages whose media attachments OR text content the sub-agent needs (or `null` if none). For text-only messages (e.g. a user pasting a long story), the bridge automatically converts the text into a .txt file for the sub-agent.
 
-Set `high_quality=true` for tasks that require deeper reasoning, complex
-analysis, or code generation. Set `high_quality=false` (default) for
-routine tasks like format conversion, simple lookups, or basic scripting.
+Set `high_quality=true` for tasks that require deeper reasoning, complex analysis like generating or editing images/code. Set `high_quality=false` (default) for routine tasks like format conversion, simple lookups, basic scripting or downloading something.
 </subagent>"""
 
 
