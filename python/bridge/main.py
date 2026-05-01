@@ -757,6 +757,7 @@ async def _deliver_subagent_result(
         request_id=_make_request_id("subagent_attach"),
         file_name=staged_file.name,
         mime=staged_file.mime,
+        thumbnail_base64=staged_file.thumbnail_base64,
       )
     except Exception as attach_err:  # pylint: disable=broad-except
       logger.exception(

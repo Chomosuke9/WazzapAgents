@@ -70,6 +70,7 @@ async def send_attachment(
   reply_to: str | None = None,
   caption: str | None = None,
   mime: str | None = None,
+  thumbnail_base64: str | None = None,
 ):
   """Send a single attachment to a chat as its own WhatsApp message.
 
@@ -85,9 +86,10 @@ async def send_attachment(
   WhatsApp messages that can't be opened. Pass the value returned by
   :func:`bridge.subagent.output.detect_kind` whenever possible.
 
-  The Node side re-validates ``attachment_path`` against ``MEDIA_DIR`` /
-  ``STICKERS_DIR`` via ``resolveAllowedAttachmentPath``, so a path outside the
-  sandbox will be rejected by the action even though we don't check here.
+  ``thumbnail_base64`` is an optional base64-encoded JPEG thumbnail for
+  document previews. When provided for a ``document`` kind attachment,
+  the Node gateway includes it as ``jpegThumbnail`` so WhatsApp shows a
+  preview instead of a blank white rectangle.
   """
   if not attachment_path or not kind:
     return
@@ -105,6 +107,8 @@ async def send_attachment(
     attachment["caption"] = caption
   if mime:
     attachment["mime"] = mime
+  if thumbnail_base64:
+    attachment["thumbnailBase64"] = thumbnail_base64
   payload: dict = {
     "requestId": request_id,
     "chatId": chat_id,
@@ -122,6 +126,7 @@ async def send_attachment(
       "attachment_path": attachment_path,
       "file_name": file_name,
       "mime": mime,
+      "has_thumbnail": thumbnail_base64 is not None,
       "reply_to": normalized_reply_to,
     },
   )

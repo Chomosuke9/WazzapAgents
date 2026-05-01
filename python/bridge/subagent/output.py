@@ -34,6 +34,7 @@ This module:
 """
 from __future__ import annotations
 
+import base64
 import mimetypes
 import os
 import shutil
@@ -49,6 +50,13 @@ except ImportError:
   from pathlib import Path as _Path
   sys.path.append(str(_Path(__file__).resolve().parent.parent.parent))
   from bridge.log import setup_logging  # type: ignore
+
+try:
+  from ..tools.thumbnail import generate_document_thumbnail
+except ImportError:
+  # Allow the module to be imported even if thumbnail dependencies
+  # (Pillow, pypdfium2) are missing — thumbnails will just be skipped.
+  generate_document_thumbnail = None  # type: ignore[assignment]
 
 logger = setup_logging()
 
@@ -94,6 +102,7 @@ class StagedFile:
   size_bytes: int
   mime: str  # best-effort MIME type, may be ``application/octet-stream``
   kind: str  # one of: image, video, audio, document
+  thumbnail_base64: str | None = None  # JPEG thumbnail for WhatsApp document preview
 
 @dataclass(frozen=True)
 class SkippedFile:
@@ -367,12 +376,30 @@ def stage_output_files(
     # blocking the bot for 10-20s during subagent result delivery. Videos
     # from common sources (yt-dlp, TikTok) are typically already
     # WhatsApp-compatible (H.264+AAC+faststart).
+
+    # Generate a JPEG thumbnail for documents. WhatsApp shows a preview
+    # bubble for documents only when ``jpegThumbnail`` is provided; without
+    # it the preview is solid white.  We skip thumbnail generation for
+    # audio/video because WhatsApp already renders those natively.
+    thumbnail_b64: str | None = None
+    if kind == "document" and generate_document_thumbnail is not None:
+      try:
+        thumb_bytes = generate_document_thumbnail(real_dest, mime)
+        if thumb_bytes:
+          thumbnail_b64 = base64.b64encode(thumb_bytes).decode("ascii")
+      except Exception:
+        logger.debug(
+          "stage_output_files: thumbnail generation failed for %s",
+          real_dest, exc_info=True,
+        )
+
     staged.append(StagedFile(
       path=real_dest,
       name=final_name,
       size_bytes=size,
       mime=mime,
       kind=kind,
+      thumbnail_base64=thumbnail_b64,
     ))
 
   return StagedOutputs(staged=staged, skipped=skipped)
