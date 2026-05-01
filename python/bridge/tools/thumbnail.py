@@ -83,17 +83,20 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
   return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 
-def _generate_placeholder(mime: str, ext: str) -> bytes:
+def _generate_placeholder(mime: str | None, ext: str) -> bytes:
   """Return a JPEG thumbnail buffer for any file type.
 
   The icon is a solid-colour square with the file extension (or a short
   MIME-type label) centred in white text on a coloured background.
   """
+  # Guard against None MIME — detect_kind should always return a string,
+  # but defensive coding prevents crashes if that invariant breaks.
+  safe_mime = mime or ""
   # Find a matching placeholder config key (exact match first, then prefix)
-  config_entry = _PLACEHOLDER_CONFIG.get(mime)
+  config_entry = _PLACEHOLDER_CONFIG.get(safe_mime)
   if config_entry is None:
     for key, val in _PLACEHOLDER_CONFIG.items():
-      if mime.startswith(key):
+      if safe_mime.startswith(key):
         config_entry = val
         break
 
@@ -134,7 +137,7 @@ _FONT_PATHS = [
 ]
 
 
-def _try_load_font(size: int) -> ImageFont.FreeFont | ImageFont.ImageFont:
+def _try_load_font(size: int) -> ImageFont.FreeTypeFont:
   """Attempt to load a TrueType font at the given size; fall back to default."""
   for fp in _FONT_PATHS:
     try:
@@ -166,7 +169,7 @@ def generate_document_thumbnail(
   if not file_path or not os.path.isfile(file_path):
     return None
 
-  ext = os.path.splitext(file_path)[1].lower()
+  ext = os.path.splitext(file_path)[1].lstrip(".").lower()
 
   try:
     return _generate_placeholder(mime, ext)

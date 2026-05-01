@@ -53,9 +53,10 @@ except ImportError:
 
 try:
   from ..tools.thumbnail import generate_document_thumbnail
-except ImportError:
+except Exception:
   # Allow the module to be imported even if thumbnail dependencies
-  # (Pillow, pypdfium2) are missing — thumbnails will just be skipped.
+  # are missing or thumbnail.py itself raises during import —
+  # thumbnails will just be skipped.
   generate_document_thumbnail = None  # type: ignore[assignment]
 
 logger = setup_logging()
