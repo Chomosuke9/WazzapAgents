@@ -1,25 +1,23 @@
 """Document thumbnail generation for WhatsApp previews.
 
-WhatsApp displays a small preview/thumbnail for document attachments (PDF,
-DOCX, etc.) only when a ``jpegThumbnail`` field is provided in the protocol
-message.  PDF thumbnails are generated via *pypdfium2* (which bundles
-PDFium/Chrome's PDF renderer, so no external poppler dependency is needed).
-Image files sent as documents are thumbnailed with Pillow.
+WhatsApp displays a small preview/thumbnail for document attachments only
+when a ``jpegThumbnail`` field is provided in the protocol message.  Without
+it, non-PDF documents show a blank white rectangle.
 
-Office formats (DOCX, XLSX, PPTX, ODT, ODS, ODP) cannot be rendered on the
-host because LibreOffice is only available inside the WazzapSubAgents Docker
-container.  For these, a small placeholder icon is generated per MIME type.
+Since LibreOffice is only available inside the WazzapSubAgents Docker
+container (not on the host), and to keep things simple and dependency-free,
+every document type gets a **placeholder icon** — a coloured square with the
+file extension or a short MIME label centred in white text.  This is fast,
+zero-dependency (only Pillow for drawing the icon), and gives the user a
+clear visual cue about the file type.
 
-All thumbnails are produced as small JPEG buffers (~50–100 KB) suitable for
-inclusion in the Baileys ``DocumentMessage.jpegThumbnail`` field.
+All thumbnails are produced as small JPEG buffers suitable for inclusion in
+the Baileys ``DocumentMessage.jpegThumbnail`` field.
 """
 from __future__ import annotations
 
-import base64
 import io
-import logging
 import os
-from pathlib import Path
 from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
@@ -42,17 +40,9 @@ logger = setup_logging()
 # We produce a slightly larger image and let the client scale it down.
 _THUMB_SIZE = 400
 
-# Maximum thumbnail file size (bytes).  WhatsApp rejects very large thumbnails;
-# 100 KB is generous enough for good quality while staying well under limits.
-_MAX_THUMB_BYTES = 100 * 1024
-
 # JPEG quality for thumbnail output.  75 is a good balance between quality
 # and size for a 400×400 image.
 _THUMB_JPEG_QUALITY = 75
-
-# pypdfium2 render DPI for the first PDF page.  150 DPI gives a decent-quality
-# thumbnail without being too slow or memory-hungry.
-_PDF_RENDER_DPI = 150
 
 # ---------------------------------------------------------------------------
 # MIME-type → placeholder icon colour + label
@@ -60,23 +50,27 @@ _PDF_RENDER_DPI = 150
 
 _PLACEHOLDER_CONFIG: dict[str, tuple[str, str]] = {
   # mime_type_prefix  → (fill_colour_hex, short_label)
+  "application/pdf":                                        ("#E53935", "PDF"),
   "application/vnd.openxmlformats-officedocument.wordprocessingml": ("#2B579A", "DOCX"),
   "application/vnd.openxmlformats-officedocument.spreadsheetml":    ("#217346", "XLSX"),
   "application/vnd.openxmlformats-officedocument.presentationml":    ("#D24726", "PPTX"),
   "application/vnd.oasis.opendocument.text":                        ("#0E7FC2", "ODT"),
   "application/vnd.oasis.opendocument.spreadsheet":                  ("#0E7FC2", "ODS"),
   "application/vnd.oasis.opendocument.presentation":                 ("#0E7FC2", "ODP"),
-  "application/msword":       ("#2B579A", "DOC"),
-  "application/vnd.ms-excel":  ("#217346", "XLS"),
-  "application/vnd.ms-powerpoint": ("#D24726", "PPT"),
-  "application/rtf":          ("#7B5B3A", "RTF"),
-  "text/plain":               ("#6B7280", "TXT"),
-  "text/csv":                  ("#217346", "CSV"),
-  "application/zip":           ("#6B7280", "ZIP"),
-  "application/x-7z-compressed": ("#6B7280", "7Z"),
-  "application/vnd.rar":       ("#6B7280", "RAR"),
-  "application/gzip":          ("#6B7280", "GZ"),
-  "application/x-tar":        ("#6B7280", "TAR"),
+  "application/msword":              ("#2B579A", "DOC"),
+  "application/vnd.ms-excel":         ("#217346", "XLS"),
+  "application/vnd.ms-powerpoint":    ("#D24726", "PPT"),
+  "application/rtf":                 ("#7B5B3A", "RTF"),
+  "text/plain":                      ("#6B7280", "TXT"),
+  "text/csv":                         ("#217346", "CSV"),
+  "text/html":                        ("#E44D26", "HTML"),
+  "application/json":                 ("#6B7280", "JSON"),
+  "application/zip":                   ("#6B7280", "ZIP"),
+  "application/x-7z-compressed":     ("#6B7280", "7Z"),
+  "application/vnd.rar":              ("#6B7280", "RAR"),
+  "application/gzip":                 ("#6B7280", "GZ"),
+  "application/x-tar":                ("#6B7280", "TAR"),
+  "image/":                           ("#9333EA", "IMG"),
 }
 
 # ---------------------------------------------------------------------------
@@ -90,12 +84,12 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
 
 
 def _generate_placeholder(mime: str, ext: str) -> bytes:
-  """Return a JPEG thumbnail buffer for file types we cannot render.
+  """Return a JPEG thumbnail buffer for any file type.
 
   The icon is a solid-colour square with the file extension (or a short
   MIME-type label) centred in white text on a coloured background.
   """
-  # Find a matching placeholder config key
+  # Find a matching placeholder config key (exact match first, then prefix)
   config_entry = _PLACEHOLDER_CONFIG.get(mime)
   if config_entry is None:
     for key, val in _PLACEHOLDER_CONFIG.items():
@@ -160,17 +154,14 @@ def generate_document_thumbnail(
 ) -> Optional[bytes]:
   """Generate a JPEG thumbnail buffer for *file_path*.
 
-  Returns ``None`` if thumbnail generation fails for any reason (missing
-  library, corrupt file, etc.).  The caller should simply send the document
-  without a thumbnail in that case.
+  Always returns a **placeholder icon** — a coloured square with the file
+  type label (PDF, DOCX, XLSX, etc.) centred in white text.  This is fast,
+  has no external dependencies beyond Pillow, and works for every document
+  type without needing LibreOffice or pypdfium2.
 
-  Strategy by file type:
-    - **PDF** – rendered from the first page via *pypdfium2* (bundled
-      PDFium, no poppler required).
-    - **Images** (jpeg, png, webp, gif, bmp, tiff, heic, avif) – resized
-      via Pillow.
-    - **Office / other** – a coloured placeholder icon, because LibreOffice
-      is not available on the host.
+  Returns ``None`` if thumbnail generation fails for any reason (missing
+  Pillow, etc.).  The caller should simply send the document without a
+  thumbnail in that case.
   """
   if not file_path or not os.path.isfile(file_path):
     return None
@@ -178,17 +169,7 @@ def generate_document_thumbnail(
   ext = os.path.splitext(file_path)[1].lower()
 
   try:
-    # --- PDF ---------------------------------------------------------------
-    if mime == "application/pdf" or ext == ".pdf":
-      return _thumbnail_pdf(file_path)
-
-    # --- Image files sent as documents --------------------------------------
-    if mime.startswith("image/"):
-      return _thumbnail_image(file_path)
-
-    # --- Office & other document types: placeholder icon -------------------
     return _generate_placeholder(mime, ext)
-
   except Exception:
     logger.debug(
       "generate_document_thumbnail: failed for %s (mime=%s)",
@@ -196,76 +177,3 @@ def generate_document_thumbnail(
       exc_info=True,
     )
     return None
-
-
-# ---------------------------------------------------------------------------
-# PDF thumbnail via pypdfium2
-# ---------------------------------------------------------------------------
-
-def _thumbnail_pdf(file_path: str) -> Optional[bytes]:
-  """Render the first page of a PDF and return a JPEG thumbnail."""
-  try:
-    import pypdfium2  # type: ignore
-  except ImportError:
-    logger.debug("pypdfium2 not available – skipping PDF thumbnail")
-    return None
-
-  try:
-    pdf = pypdfium2.PdfDocument(file_path)
-    if pdf.page_count < 1:
-      return None
-    page = pdf[0]
-    # render() returns a list of PIL Images (one per page requested)
-    result = page.render(scale=_PDF_RENDER_DPI / 72)
-    pil_image = result.to_pil()
-
-    thumb = _resize_to_thumbnail(pil_image)
-    buf = io.BytesIO()
-    thumb.save(buf, format="JPEG", quality=_THUMB_JPEG_QUALITY)
-    data = buf.getvalue()
-    pdf.close()
-    return data if len(data) <= _MAX_THUMB_BYTES else None
-  except Exception:
-    logger.debug("pypdfium2 render failed for %s", file_path, exc_info=True)
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Image thumbnail via Pillow
-# ---------------------------------------------------------------------------
-
-_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".tif", ".heic", ".heif", ".avif"}
-
-
-def _thumbnail_image(file_path: str) -> Optional[bytes]:
-  """Resize an image file and return a JPEG thumbnail."""
-  try:
-    img = Image.open(file_path)
-    # Convert to RGB (required for JPEG output)
-    if img.mode not in ("RGB", "L"):
-      img = img.convert("RGB")
-
-    thumb = _resize_to_thumbnail(img)
-    buf = io.BytesIO()
-    thumb.save(buf, format="JPEG", quality=_THUMB_JPEG_QUALITY)
-    data = buf.getvalue()
-    return data if len(data) <= _MAX_THUMB_BYTES else None
-  except Exception:
-    logger.debug("Image thumbnail failed for %s", file_path, exc_info=True)
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Shared resize helper
-# ---------------------------------------------------------------------------
-
-def _resize_to_thumbnail(img: Image.Image) -> Image.Image:
-  """Resize *img* so the longest side is ``_THUMB_SIZE`` (maintain AR)."""
-  w, h = img.size
-  if max(w, h) <= _THUMB_SIZE:
-    return img
-  ratio = _THUMB_SIZE / max(w, h)
-  new_w = max(1, int(w * ratio))
-  new_h = max(1, int(h * ratio))
-  # LANCZOS is high-quality and fast enough for thumbnails
-  return img.resize((new_w, new_h), Image.LANCZOS)
