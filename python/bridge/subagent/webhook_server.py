@@ -44,6 +44,10 @@ class SubAgentWebhookServer:
   # back-to-back.
   _QUEUE_DEDUP_WINDOW_S = 5.0
 
+  # How long to wait between restart attempts when the persistent
+  # runner catches an unexpected crash.
+  _RESTART_DELAY_S = 2.0
+
   def __init__(self, tracker: SubTaskTracker, port: int | None = None) -> None:
     self._tracker = tracker
     self._port = port or SUBAGENT_WEBHOOK_PORT
@@ -53,13 +57,20 @@ class SubAgentWebhookServer:
     self._queue_handler: Optional[QueueEventHandler] = None
     # session_id -> (position, queue_size, last_emit_ts)
     self._queue_last_emit: Dict[str, Tuple[int, int, float]] = {}
+    # Persistent-runner bookkeeping. ``_shutdown`` is set by
+    # ``stop_persistent()`` to signal the graceful-shutdown path;
+    # ``_keeper_task`` holds the always-on background task.
+    self._shutdown = False
+    self._keeper_task: asyncio.Task | None = None
 
   async def start(self) -> None:
+    """Start the webhook server once (no auto-restart).
+
+    For production use prefer ``start_persistent()`` which wraps this
+    with automatic restart on crashes so the webhook stays alive for
+    the entire bridge lifetime.
+    """
     if web is None:
-      # Fail loud. Pre-fix this returned silently and the bridge would
-      # then wait the full ``SUBAGENT_WAIT_TIMEOUT_S`` (default 120 s)
-      # on every sub-agent task before falling back to polling, which
-      # presented as "everything is slow" rather than a setup error.
       raise RuntimeError(
         "aiohttp is not installed but is required for the SubAgent webhook "
         "server. Install it via `pip install -r requirements.txt` (or "
@@ -74,14 +85,86 @@ class SubAgentWebhookServer:
     await self._site.start()
     logger.info("SubAgent webhook server started on port %s", self._port)
 
+  async def start_persistent(self) -> None:
+    """Start the webhook server and keep it alive indefinitely.
+
+    Spawns a background ``asyncio.Task`` that calls ``start()`` and
+    automatically restarts the server if it ever crashes. This is the
+    preferred entry point for production — the webhook server should
+    **never** go down during normal operation, so any unexpected
+    exception triggers a restart after a short delay.
+
+    The keeper stops only when ``stop_persistent()`` is called, which
+    signals a graceful shutdown.
+    """
+    self._shutdown = False
+
+    async def _keeper() -> None:
+      """Background loop: start the server, restart on crash."""
+      attempt = 0
+      while not self._shutdown:
+        try:
+          await self.start()
+          # ``start()`` only returns after ``site.start()`` succeeds.
+          # The site keeps running until it is explicitly stopped or
+          # the runner is cleaned up. We await a small sleep so we
+          # can detect ``_shutdown`` in a timely manner, then check
+          # whether the site is still alive.
+          while not self._shutdown:
+            await asyncio.sleep(1)
+            # If the site/runner died (e.g. port conflict resolved
+            # and then port became unavailable), clean up and restart.
+            if self._site is None and self._runner is None:
+              break
+          # If we exited the inner loop due to _shutdown, stop cleanly.
+          if self._shutdown:
+            await self._do_stop()
+            return
+          # Otherwise the site disappeared unexpectedly — restart.
+          logger.warning(
+            "SubAgent webhook server disappeared unexpectedly; restarting"
+          )
+        except Exception as exc:  # pylint: disable=broad-except
+          attempt += 1
+          logger.error(
+            "SubAgent webhook server crashed (attempt %d); restarting in %ds: %s",
+            attempt,
+            self._RESTART_DELAY_S,
+            exc,
+          )
+          await self._do_stop()
+          await asyncio.sleep(self._RESTART_DELAY_S)
+
+    self._keeper_task = asyncio.create_task(_keeper())
+
   async def stop(self) -> None:
+    """Stop the webhook server (one-shot, for ``start()``)."""
+    await self._do_stop()
+
+  async def stop_persistent(self) -> None:
+    """Signal the persistent keeper to stop and wait for it to finish.
+
+    Safe to call even if ``start_persistent()`` was never invoked —
+    the method is a no-op in that case.
+    """
+    self._shutdown = True
+    if self._keeper_task is not None:
+      self._keeper_task.cancel()
+      try:
+        await self._keeper_task
+      except asyncio.CancelledError:
+        pass
+      self._keeper_task = None
+    await self._do_stop()
+
+  async def _do_stop(self) -> None:
+    """Internal cleanup: stop the site and runner if they exist."""
     if self._site is not None:
       await self._site.stop()
       self._site = None
     if self._runner is not None:
       await self._runner.cleanup()
       self._runner = None
-    logger.info("SubAgent webhook server stopped")
 
   def register_completion_event(self, session_id: str, event: asyncio.Event) -> None:
     self._completion_events[session_id] = event

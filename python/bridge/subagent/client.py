@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
-from typing import Optional
 
 try:
   import requests
@@ -13,8 +11,6 @@ try:
   from .config import (
     SUBAGENT_URL,
     SUBAGENT_WEBHOOK_URL,
-    SUBAGENT_POLL_INTERVAL,
-    SUBAGENT_MAX_POLL_ATTEMPTS,
     SUBAGENT_SUBMIT_RETRY_MAX,
     SUBAGENT_SUBMIT_RETRY_BASE_BACKOFF,
     SUBAGENT_SUBMIT_RETRY_MAX_BACKOFF,
@@ -23,12 +19,10 @@ try:
 except ImportError:
   import sys
   from pathlib import Path
-  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
+  sys.path.append(str(Path(__file__).resolve().parent.parent_parent))
   from bridge.subagent.config import (  # type: ignore
     SUBAGENT_URL,
     SUBAGENT_WEBHOOK_URL,
-    SUBAGENT_POLL_INTERVAL,
-    SUBAGENT_MAX_POLL_ATTEMPTS,
     SUBAGENT_SUBMIT_RETRY_MAX,
     SUBAGENT_SUBMIT_RETRY_BASE_BACKOFF,
     SUBAGENT_SUBMIT_RETRY_MAX_BACKOFF,
@@ -142,41 +136,6 @@ class SubAgentClient:
     retry_after = resp.headers.get("Retry-After") if resp.headers else None
     if retry_after:
       body["_retry_after"] = retry_after
-    return body
-
-  async def poll_result(self, session_id: str) -> dict | None:
-    """Poll SubAgent for result. Returns result dict or None on exhaustion.
-
-    Transient HTTP/network errors during a single poll attempt are logged
-    and treated as "not ready yet" so the loop keeps trying — they should
-    not abort polling.
-    """
-    url = f"{self._base_url}/sessions/{session_id}/result"
-    for attempt in range(1, SUBAGENT_MAX_POLL_ATTEMPTS + 1):
-      loop = asyncio.get_running_loop()
-      try:
-        resp = await loop.run_in_executor(None, lambda: self._get_sync(url))
-      except Exception:
-        # Log and continue the polling loop
-        await asyncio.sleep(SUBAGENT_POLL_INTERVAL)
-        continue
-      if resp.get("_status_code") == 200:
-        data = resp.get("result") or resp
-        # If the endpoint returns a completed result, return it
-        if isinstance(data, dict) and data.get("success") is not None:
-          return data
-      await asyncio.sleep(SUBAGENT_POLL_INTERVAL)
-    return None
-
-  def _get_sync(self, url: str) -> dict:
-    if requests is None:
-      raise RuntimeError("requests library is not installed")
-    resp = requests.get(url, timeout=SUBAGENT_HTTP_TIMEOUT)
-    try:
-      body = resp.json()
-    except Exception:
-      body = {"status_code": resp.status_code, "text": resp.text}
-    body["_status_code"] = resp.status_code
     return body
 
 

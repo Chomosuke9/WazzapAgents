@@ -1864,37 +1864,38 @@ async def handle_socket(ws):
               """
               try:
                 try:
-                  # Wait for the sub-agent to finish — the webhook will set
-                  # ``completion_event``. On submit failure the event was
+                  # Wait for the sub-agent to finish — the always-on webhook
+                  # will set ``completion_event`` when the sub-agent posts a
+                  # ``complete`` callback. On submit failure the event was
                   # already set above so this returns immediately.
+                  #
+                  # We use a generous timeout as a safety net only; the webhook
+                  # server is persistent (auto-restarts on crash) so the
+                  # callback should always arrive. A timeout here means the
+                  # sub-agent service itself has gone away or the network is
+                  # partitioned — in that case there is no result to fetch.
                   try:
                     await asyncio.wait_for(
                       completion_event.wait(), timeout=SUBAGENT_WAIT_TIMEOUT_S
                     )
                   except asyncio.TimeoutError:
-                    logger.warning(
-                      "execute_subtask: webhook timeout session=%s, falling back to polling",
+                    logger.error(
+                      "execute_subtask: webhook timeout session=%s — "
+                      "sub-agent did not call back within %ss",
                       session_id,
+                      SUBAGENT_WAIT_TIMEOUT_S,
                       extra={"chat_id": chat_id},
                     )
                     subagent_webhook.unregister_completion_event(session_id)
-                    try:
-                      result = await subagent_client.poll_result(session_id)
-                    except Exception as poll_err:  # pylint: disable=broad-except
-                      logger.exception(
-                        "execute_subtask: poll failed session=%s: %s",
-                        session_id,
-                        poll_err,
-                        extra={"chat_id": chat_id},
-                      )
-                      result = None
-                    if result:
-                      subagent_tracker.finalize(session_id, result)
-                    else:
-                      subagent_tracker.finalize(session_id, {
-                        "success": False,
-                        "report": "Timeout waiting for sub-agent result",
-                      })
+                    subagent_tracker.finalize(session_id, {
+                      "success": False,
+                      "report": (
+                        f"Sub-agent did not return a result within "
+                        f"{int(SUBAGENT_WAIT_TIMEOUT_S)}s. The webhook server "
+                        f"is always-on, so this likely means the sub-agent "
+                        f"service crashed or the network is partitioned."
+                      ),
+                    })
 
                   # Acquire the per-chat lock for history mutation + send.
                   # Other bursts arriving on this chat during the wait above
@@ -2325,8 +2326,12 @@ async def main():
     ping_timeout=20,
   )
 
-  # Start SubAgent webhook server for receiving callback/push from sub-agents
-  await subagent_webhook.start()
+  # Start SubAgent webhook server for receiving callback/push from sub-agents.
+  # Uses ``start_persistent()`` so the webhook stays alive for the entire
+  # bridge lifetime — if the server crashes it is automatically restarted.
+  # The webhook should NEVER be stopped during normal operation because
+  # WazzapSubAgents relies on it being always reachable for callbacks.
+  await subagent_webhook.start_persistent()
 
   # Wait until stop_event is set (via signal) or server closes on its own
   await stop_event.wait()
@@ -2334,9 +2339,6 @@ async def main():
   logger.info("Shutting down WebSocket server...")
   server.close()
   await server.wait_closed()
-
-  # Stop SubAgent webhook server
-  await subagent_webhook.stop()
 
   # Final cleanup
   try:
