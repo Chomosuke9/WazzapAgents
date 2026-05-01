@@ -37,8 +37,7 @@ from __future__ import annotations
 import mimetypes
 import os
 import shutil
-import subprocess
-import tempfile as _tempfile
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -51,19 +50,15 @@ except ImportError:
   sys.path.append(str(_Path(__file__).resolve().parent.parent.parent))
   from bridge.log import setup_logging  # type: ignore
 
-
 logger = setup_logging()
-
 
 # 200 MB per file. Above this we drop the file rather than risk a WhatsApp
 # rejection or a slow upload.
 MAX_FILE_SIZE_BYTES = 200 * 1024 * 1024
 
-
 def _project_root() -> Path:
   # python/bridge/subagent/output.py → up four levels = repo root
   return Path(__file__).resolve().parent.parent.parent.parent
-
 
 def _media_dir() -> Path:
   raw = os.getenv("MEDIA_DIR")
@@ -71,11 +66,9 @@ def _media_dir() -> Path:
     return Path(raw).expanduser().resolve()
   return (_project_root() / "data" / "media").resolve()
 
-
 def staging_root() -> Path:
   """Root directory for staged sub-agent outputs (`<MEDIA_DIR>/subagent_out`)."""
   return _media_dir() / "subagent_out"
-
 
 def input_staging_root() -> Path:
   """Root directory for staged sub-agent **inputs**.
@@ -94,7 +87,6 @@ def input_staging_root() -> Path:
     return Path(raw).expanduser().resolve()
   return (_project_root() / "data" / "subagent_in").resolve()
 
-
 @dataclass(frozen=True)
 class StagedFile:
   path: str  # absolute, real path inside MEDIA_DIR
@@ -103,19 +95,16 @@ class StagedFile:
   mime: str  # best-effort MIME type, may be ``application/octet-stream``
   kind: str  # one of: image, video, audio, document
 
-
 @dataclass(frozen=True)
 class SkippedFile:
   source_path: str
   name: str
   reason: str  # human-readable, embedded in [SUBTASK FINISHED]
 
-
 @dataclass(frozen=True)
 class StagedOutputs:
   staged: list[StagedFile]
   skipped: list[SkippedFile]
-
 
 _EXT_MIME_OVERRIDES = {
   # ``mimetypes`` doesn't ship a webp mapping on every Python build.
@@ -138,7 +127,6 @@ _EXT_MIME_OVERRIDES = {
   ".heif": "image/heif",
   ".avif": "image/avif",
 }
-
 
 def _sniff_mime_from_bytes(head: bytes) -> str | None:
   """Best-effort magic-byte sniffing for files whose extension lies (or is missing).
@@ -208,14 +196,12 @@ def _sniff_mime_from_bytes(head: bytes) -> str | None:
     return 'text/html'
   return None
 
-
 def _read_head(path: str, n: int = 16) -> bytes:
   try:
     with open(path, 'rb') as fh:
       return fh.read(n)
   except OSError:
     return b''
-
 
 def _is_animated_webp(path_str: str) -> bool:
   """Check if a WebP file is animated by inspecting the VP8X chunk."""
@@ -232,11 +218,9 @@ def _is_animated_webp(path_str: str) -> bool:
   except OSError:
     return False
 
-
 _WA_SUPPORTED_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp"}
 _WA_SUPPORTED_VIDEO_MIMES = {"video/mp4"}
 _WA_SUPPORTED_AUDIO_MIMES = {"audio/mpeg", "audio/mp4", "audio/ogg"}
-
 
 def detect_kind(path: str | os.PathLike[str]) -> tuple[str, str]:
   """Return ``(kind, mime)`` for the given file path.
@@ -290,48 +274,12 @@ def detect_kind(path: str | os.PathLike[str]) -> tuple[str, str]:
     return "document", mime
   return "document", mime
 
-
-def _optimize_mp4(src_path: str) -> str | None:
-  """Re-encode MP4 with H.264+AAC+faststart for WhatsApp compatibility."""
-  try:
-    fd, tmp_path = _tempfile.mkstemp(suffix=".mp4")
-    os.close(fd)
-    result = subprocess.run(
-      [
-        "ffmpeg", "-y", "-i", src_path,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-c:a", "aac", "-b:a", "128k",
-        "-movflags", "+faststart",
-        "-pix_fmt", "yuv420p",
-        tmp_path,
-      ],
-      capture_output=True, timeout=120,
-    )
-    if result.returncode != 0:
-      logger.warning(
-        "MP4 optimization failed (rc=%d): %s",
-        result.returncode,
-        result.stderr.decode(errors='replace')[:500] if result.stderr else "",
-      )
-      os.unlink(tmp_path)
-      return None
-    return tmp_path
-  except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
-    logger.warning("MP4 optimization error: %s", exc)
-    try:
-      os.unlink(tmp_path)  # type: ignore[possibly-undefined]
-    except (OSError, NameError):
-      pass
-    return None
-
-
 def _format_size(size_bytes: int) -> str:
   if size_bytes < 1024:
     return f"{size_bytes} B"
   if size_bytes < 1024 * 1024:
     return f"{size_bytes / 1024:.1f} KB"
   return f"{size_bytes / (1024 * 1024):.1f} MB"
-
 
 def stage_output_files(
   session_id: str,
@@ -415,23 +363,10 @@ def stage_output_files(
 
     real_dest = str(dest.resolve())
     kind, mime = detect_kind(real_dest)
-    if kind == "video" and mime == "video/mp4":
-      optimized = _optimize_mp4(real_dest)
-      if optimized:
-        try:
-          shutil.move(optimized, real_dest)
-          size = os.path.getsize(real_dest)
-        except OSError as opt_err:
-          logger.warning("MP4 optimization move failed for %s: %s", real_dest, opt_err)
-          try:
-            os.unlink(optimized)
-          except OSError:
-            pass
-          skipped.append(SkippedFile(
-            source_path=src, name=name,
-            reason=f"MP4 optimization move failed: {opt_err}",
-          ))
-          continue
+    # NOTE: MP4 re-encoding (ffmpeg -preset fast) was removed to avoid
+    # blocking the bot for 10-20s during subagent result delivery. Videos
+    # from common sources (yt-dlp, TikTok) are typically already
+    # WhatsApp-compatible (H.264+AAC+faststart).
     staged.append(StagedFile(
       path=real_dest,
       name=final_name,
@@ -441,7 +376,6 @@ def stage_output_files(
     ))
 
   return StagedOutputs(staged=staged, skipped=skipped)
-
 
 def stage_input_files(
   session_id: str,
@@ -515,7 +449,6 @@ def stage_input_files(
 
   return staged_paths
 
-
 def cleanup_input_staging(session_id: str, *, base_dir: Path | None = None) -> None:
   """Remove ``<base_dir>/<session_id>/`` after the sub-agent finishes.
 
@@ -534,7 +467,6 @@ def cleanup_input_staging(session_id: str, *, base_dir: Path | None = None) -> N
       "cleanup_input_staging: failed to remove %s: %s",
       target_root, err,
     )
-
 
 def format_file_list(staged: list[StagedFile], skipped: list[SkippedFile]) -> str:
   """Render staged + skipped files for embedding into ``[SUBTASK FINISHED]``.
