@@ -90,6 +90,10 @@ async def send_attachment(
   """
   if not attachment_path or not kind:
     return
+  # Sanitize WhatsApp formatting in caption before sending, same as
+  # send_message() does for plain text.
+  if caption:
+    caption = sanitize_whatsapp_text(caption)
   normalized_reply_to = _normalize_context_msg_id(reply_to) if reply_to else None
   attachment: dict = {"kind": kind, "path": attachment_path}
   if file_name:

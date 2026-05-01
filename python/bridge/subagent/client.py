@@ -19,7 +19,7 @@ try:
 except ImportError:
   import sys
   from pathlib import Path
-  sys.path.append(str(Path(__file__).resolve().parent.parent_parent))
+  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
   from bridge.subagent.config import (  # type: ignore
     SUBAGENT_URL,
     SUBAGENT_WEBHOOK_URL,

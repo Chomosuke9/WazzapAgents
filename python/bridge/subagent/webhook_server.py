@@ -6,6 +6,7 @@ from typing import Awaitable, Callable, Dict, Optional, Tuple
 
 try:
   from aiohttp import web
+  import aiohttp
 except ImportError:  # pragma: no cover - import-time guard
   # ``aiohttp`` is a hard requirement for the SubAgent webhook server
   # (declared in requirements.txt). The fallback below keeps the import
@@ -15,6 +16,7 @@ except ImportError:  # pragma: no cover - import-time guard
   # if it's actually missing at runtime, instead of silently degrading
   # into a 120 s polling fallback for every sub-agent task.
   web = None  # type: ignore
+  aiohttp = None  # type: ignore
 
 try:
   from ..log import setup_logging
@@ -47,6 +49,10 @@ class SubAgentWebhookServer:
   # How long to wait between restart attempts when the persistent
   # runner catches an unexpected crash.
   _RESTART_DELAY_S = 2.0
+
+  # How often (in seconds) the persistent keeper probes the /health
+  # endpoint to detect a silently-dead aiohttp server.
+  _HEALTH_CHECK_INTERVAL_S = 5.0
 
   def __init__(self, tracker: SubTaskTracker, port: int | None = None) -> None:
     self._tracker = tracker
@@ -107,23 +113,27 @@ class SubAgentWebhookServer:
           await self.start()
           # ``start()`` only returns after ``site.start()`` succeeds.
           # The site keeps running until it is explicitly stopped or
-          # the runner is cleaned up. We await a small sleep so we
-          # can detect ``_shutdown`` in a timely manner, then check
-          # whether the site is still alive.
+          # the runner is cleaned up. We periodically probe the
+          # /health endpoint so we can detect a silently-dead server
+          # (e.g. port became unavailable after startup).
           while not self._shutdown:
-            await asyncio.sleep(1)
-            # If the site/runner died (e.g. port conflict resolved
-            # and then port became unavailable), clean up and restart.
-            if self._site is None and self._runner is None:
+            await asyncio.sleep(self._HEALTH_CHECK_INTERVAL_S)
+            if self._shutdown:
               break
+            # Probe /health to confirm the server is still alive.
+            # A live check is more reliable than checking object
+            # references which may remain non-None even after the
+            # server has stopped accepting connections.
+            if not await self._check_health():
+              logger.warning(
+                "SubAgent webhook server health check failed; restarting"
+              )
+              await self._do_stop()
+              break  # restart outer loop
           # If we exited the inner loop due to _shutdown, stop cleanly.
           if self._shutdown:
             await self._do_stop()
             return
-          # Otherwise the site disappeared unexpectedly — restart.
-          logger.warning(
-            "SubAgent webhook server disappeared unexpectedly; restarting"
-          )
         except Exception as exc:  # pylint: disable=broad-except
           attempt += 1
           logger.error(
@@ -156,6 +166,22 @@ class SubAgentWebhookServer:
         pass
       self._keeper_task = None
     await self._do_stop()
+
+  async def _check_health(self) -> bool:
+    """Probe the webhook's own /health endpoint.
+
+    Returns True if the server responds with 200, False otherwise.
+    Used by the persistent keeper to detect a silently-dead server.
+    """
+    if aiohttp is None:
+      return True  # can't check without aiohttp; assume ok
+    url = f"http://127.0.0.1:{self._port}/health"
+    try:
+      async with aiohttp.ClientSession() as session:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=3)) as resp:
+          return resp.status == 200
+    except Exception:
+      return False
 
   async def _do_stop(self) -> None:
     """Internal cleanup: stop the site and runner if they exist."""

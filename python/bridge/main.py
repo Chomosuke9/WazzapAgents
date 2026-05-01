@@ -2340,6 +2340,13 @@ async def main():
   server.close()
   await server.wait_closed()
 
+  # Stop the persistent webhook server. This cancels the keeper task
+  # and cleanly shuts down the aiohttp site/runner.
+  try:
+    await subagent_webhook.stop_persistent()
+  except Exception as exc:
+    logger.error("Error stopping webhook server: %s", exc)
+
   # Final cleanup
   try:
     # Explicitly call checkpoint and close

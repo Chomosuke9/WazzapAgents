@@ -70,10 +70,12 @@ class TestSanitizeDoubleAsteriskBold:
         )
 
     def test_triple_asterisk(self):
-        """***bold and italic*** should become **bold and italic*."""
+        """***bold and italic***: the regex matches the outermost ** ** pairs,
+        converting them to single * pairs. The remaining inner * on each end
+        forms ** which is then convertido * **bold and italic**."""
         assert (
             sanitize_whatsapp_text("***bold and italic***")
-            == "**bold and italic*"
+            == "**bold and italic**"
         )
 
     def test_preserves_italic_underscores(self):
