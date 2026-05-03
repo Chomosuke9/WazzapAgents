@@ -246,8 +246,8 @@ async def call_llm1(
   group_description: str | None = None,
   prompt_override: str | None = None,
 ) -> LLM1Decision:
-  primary_endpoint = _clean_env(os.getenv("LLM1_ENDPOINT"))
-  fallback_endpoint = _clean_env(os.getenv("LLM1_FALLBACK_ENDPOINT"))
+  primary_endpoint = _endpoint_base_url(os.getenv("LLM1_ENDPOINT"))
+  fallback_endpoint = _endpoint_base_url(os.getenv("LLM1_FALLBACK_ENDPOINT"))
   # If LLM1 is not configured, allow responding by default.
   if not primary_endpoint and not fallback_endpoint:
     logger.debug("LLM1 disabled (no LLM1_ENDPOINT set); defaulting to respond")

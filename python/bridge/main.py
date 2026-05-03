@@ -312,6 +312,8 @@ def _store_media_path(media_paths_by_chat: dict, payload: dict) -> None:
           "kind": str(att.get("kind", "")).lower(),
           "mime": att.get("mime", ""),
           "fileName": att.get("fileName", ""),
+          "originalFileName": att.get("originalFileName") or None,
+          "jpegThumbnail": att.get("jpegThumbnail") or None,
           "path": p,
           "received_at": time.time(),
         })
@@ -351,7 +353,10 @@ def _resolve_quoted_media_attachments(
   atts = list(payload.get("attachments") or [])
   visual_kinds = {"image", "sticker"}
   has_visual = any(
-    isinstance(att, dict) and str(att.get("kind", "")).lower() in visual_kinds
+    isinstance(att, dict) and (
+      str(att.get("kind", "")).lower() in visual_kinds
+      or (str(att.get("kind", "")).lower() == "document" and att.get("jpegThumbnail"))
+    )
     for att in atts
   )
   if has_visual:
@@ -390,6 +395,8 @@ def _resolve_quoted_media_attachments(
           "kind": entry.get("kind", "image"),
           "mime": entry.get("mime") or _guess_mime_from_path(entry["path"]),
           "fileName": entry.get("fileName") or os.path.basename(entry["path"]),
+          "originalFileName": entry.get("originalFileName") or None,
+          "jpegThumbnail": entry.get("jpegThumbnail") or None,
           "path": entry["path"],
         })
   elif isinstance(stored, str) and os.path.isfile(stored):

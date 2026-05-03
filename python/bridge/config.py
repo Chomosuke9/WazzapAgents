@@ -52,6 +52,36 @@ def _parse_non_negative_float(raw: str | None, default: float) -> float:
   return parsed if parsed >= 0 else default
 
 
+def _clean_env(raw: str | None) -> str | None:
+  """Strip whitespace from an env value, returning ``None`` for empty strings."""
+  if raw is None:
+    return None
+  cleaned = raw.strip()
+  return cleaned or None
+
+
+def _endpoint_base_url(raw_endpoint: str | None) -> str | None:
+  """Normalise an LLM endpoint URL for use as ``ChatOpenAI(base_url=…)``.
+
+  LangChain's ``ChatOpenAI`` automatically appends ``/chat/completions`` to
+  ``base_url``.  Users often paste the full URL (e.g.
+  ``https://openrouter.ai/api/v1/chat/completions``), so this helper strips
+  that suffix when present to prevent double-appending.
+
+  The function also:
+  - strips surrounding whitespace,
+  - removes trailing slashes,
+  - returns ``None`` for empty / missing values.
+  """
+  endpoint = _clean_env(raw_endpoint)
+  if not endpoint:
+    return None
+  trimmed = endpoint.rstrip("/")
+  if trimmed.endswith("/chat/completions"):
+    return trimmed[: -len("/chat/completions")]
+  return trimmed
+
+
 # ---------------------------------------------------------------------------
 # Bridge-level configuration constants (previously in main.py)
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ try:
   from ..media import build_visual_parts, redact_multimodal_content
   from ..db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute, get_llm2_model as db_get_llm2_model, get_default_llm2_model, get_model_vision_support
   from .schemas import build_llm2_tools
-  from ..config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int
+  from ..config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _clean_env, _endpoint_base_url
   from .prompt import _truncate_message
   from .error_utils import _is_timeout_error, _error_chain
 except ImportError:  # allow running as script
@@ -28,7 +28,7 @@ except ImportError:  # allow running as script
   from bridge.media import build_visual_parts, redact_multimodal_content  # type: ignore
   from bridge.db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute, get_model_vision_support  # type: ignore
   from bridge.llm.schemas import build_llm2_tools  # type: ignore
-  from bridge.config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int  # type: ignore
+  from bridge.config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _clean_env, _endpoint_base_url  # type: ignore
   from bridge.llm.prompt import _truncate_message  # type: ignore
   from bridge.llm.error_utils import _is_timeout_error, _error_chain  # type: ignore
 
@@ -93,16 +93,9 @@ def get_llm2_model_for_chat(chat_id: str) -> str:
   return default_model_id
 
 
-def _clean_env(raw: str | None) -> str | None:
-  if raw is None:
-    return None
-  cleaned = raw.strip()
-  return cleaned or None
-
-
 def _llm2_targets() -> list[LLM2Target]:
   primary_model = _clean_env(os.getenv("LLM2_MODEL")) or "gpt-4.1"
-  primary_endpoint = _clean_env(os.getenv("LLM2_ENDPOINT"))
+  primary_endpoint = _endpoint_base_url(os.getenv("LLM2_ENDPOINT"))
   primary_api_key = _clean_env(os.getenv("LLM2_API_KEY")) or ""
 
   targets = [
@@ -121,10 +114,11 @@ def _llm2_targets() -> list[LLM2Target]:
   if not fallback_enabled:
     return targets
 
+  fallback_endpoint = _endpoint_base_url(fallback_endpoint_raw) if fallback_endpoint_raw is not None else primary_endpoint
   fallback_target = LLM2Target(
     name="fallback",
     model=fallback_model_raw or primary_model,
-    base_url=fallback_endpoint_raw if fallback_endpoint_raw is not None else primary_endpoint,
+    base_url=fallback_endpoint,
     api_key=fallback_api_key_raw if fallback_api_key_raw is not None else primary_api_key,
   )
 
@@ -426,7 +420,7 @@ def get_llm2(
   temperature = float(os.getenv("LLM2_TEMPERATURE", "0.5"))
   timeout = _llm2_timeout()
   max_retries = _llm2_sdk_max_retries()
-  resolved_base_url = base_url if base_url is not None else _clean_env(os.getenv("LLM2_ENDPOINT"))
+  resolved_base_url = base_url if base_url is not None else _endpoint_base_url(os.getenv("LLM2_ENDPOINT"))
   resolved_api_key = api_key if api_key is not None else (_clean_env(os.getenv("LLM2_API_KEY")) or "")
   kwargs = {
     "model": resolved_model,

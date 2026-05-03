@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from langchain_openai import ChatOpenAI
 
 try:
-  from ..config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _parse_non_negative_float
+  from ..config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _parse_non_negative_float, _clean_env, _endpoint_base_url
 except ImportError:  # allow running as script
   import sys
   from pathlib import Path
   sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
-  from bridge.config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _parse_non_negative_float  # type: ignore
+  from bridge.config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _parse_non_negative_float, _clean_env, _endpoint_base_url  # type: ignore
 
 
 @dataclass(frozen=True)
@@ -59,23 +59,6 @@ def _llm1_max_tokens() -> int | None:
   except (TypeError, ValueError):
     return None
   return parsed if parsed > 0 else None
-
-
-def _clean_env(raw: str | None) -> str | None:
-  if raw is None:
-    return None
-  cleaned = raw.strip()
-  return cleaned or None
-
-
-def _endpoint_base_url(raw_endpoint: str | None) -> str | None:
-  endpoint = _clean_env(raw_endpoint)
-  if not endpoint:
-    return None
-  trimmed = endpoint.rstrip("/")
-  if trimmed.endswith("/chat/completions"):
-    return trimmed[: -len("/chat/completions")]
-  return trimmed
 
 
 def _chat_base_url() -> str | None:

@@ -191,6 +191,24 @@ async function saveMedia(contentType, content, messageId, withTimeout) {
   let filepath = path.join(config.mediaDir, filename);
   let usedImageFallback = false;
 
+  // Preserve the original filename from WhatsApp (e.g. documentMessage.fileName).
+  // Falls back to null for media types that don't carry a fileName.
+  const originalFileName = content?.fileName || null;
+
+  // Preserve the JPEG thumbnail for document previews.  Baileys decodes
+  // the proto ``bytes`` field as a Buffer or Uint8Array; convert to
+  // base64 for JSON-safe transport to the Python bridge.
+  const rawThumbnail = content?.jpegThumbnail;
+  let jpegThumbnail = null;
+  if (rawThumbnail) {
+    if (typeof rawThumbnail === 'string' && rawThumbnail.length > 0) {
+      // Already base64 (unlikely from Baileys, but defensive).
+      jpegThumbnail = rawThumbnail;
+    } else if ((Buffer.isBuffer(rawThumbnail) || ArrayBuffer.isView(rawThumbnail)) && rawThumbnail.length > 0) {
+      jpegThumbnail = Buffer.from(rawThumbnail).toString('base64');
+    }
+  }
+
   let size;
   try {
     size = await downloadMediaToFile(content, kind, filepath, withTimeout);
@@ -220,6 +238,8 @@ async function saveMedia(contentType, content, messageId, withTimeout) {
     kind,
     mime,
     fileName: filename,
+    originalFileName,
+    jpegThumbnail,
     size,
     path: filepath,
     isAnimated: Boolean(content?.isAnimated),

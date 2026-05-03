@@ -244,12 +244,14 @@ Each uses `WAL` mode for concurrent reads.
 
 ### How to add a new LLM provider
 
-1. **LLM1**: Set `LLM1_ENDPOINT` to the provider's OpenAI-compatible chat
-   completions URL (e.g., `https://openrouter.ai/api/v1/chat/completions`).
-   Set `LLM1_MODEL` and `LLM1_API_KEY`. For fallback, set
+1. **LLM1**: Set `LLM1_ENDPOINT` to the provider's OpenAI-compatible base URL
+   (e.g., `https://openrouter.ai/api/v1`). Both base URL and full URL formats
+   (with `/chat/completions`) are accepted — the suffix is stripped automatically
+   if present. Set `LLM1_MODEL` and `LLM1_API_KEY`. For fallback, set
    `LLM1_FALLBACK_ENDPOINT/MODEL/API_KEY`.
-2. **LLM2**: Same pattern with `LLM2_*` env vars. The bridge uses
-   `ChatOpenAI` from LangChain, so any OpenAI-compatible API works.
+2. **LLM2**: Same pattern with `LLM2_*` env vars. Both base URL and full URL
+   formats are accepted. The bridge uses `ChatOpenAI` from LangChain, so any
+   OpenAI-compatible API works.
 3. **Custom providers**: If the provider doesn't follow OpenAI's tool call
    schema, add extraction logic in `python/bridge/llm/tool_utils.py`.
 

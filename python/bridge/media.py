@@ -56,6 +56,9 @@ def _is_visual_attachment(att: dict) -> bool:
   mime = str(att.get("mime") or "").lower()
   if kind in {"image", "sticker"}:
     return True
+  # Documents with a jpegThumbnail can be shown to the LLM as a preview.
+  if kind == "document" and att.get("jpegThumbnail"):
+    return True
   return mime.startswith("image/")
 
 
@@ -76,7 +79,11 @@ def _guess_mime(att: dict, file_path: Path) -> str:
 
 def _attachment_label(att: dict) -> str:
   kind = str(att.get("kind") or "").strip().lower()
-  return "sticker" if kind == "sticker" else "image"
+  if kind == "sticker":
+    return "sticker"
+  if kind == "document":
+    return "document"
+  return "image"
 
 
 def _placeholder_for_large_media(label: str, file_name: str) -> str:
@@ -116,7 +123,32 @@ def build_visual_parts(
 
     path_obj = _resolve_local_path(att.get("path"))
     label = _attachment_label(att)
-    file_name = str(att.get("fileName") or (path_obj.name if path_obj else "unknown"))
+    # Prefer the original filename (e.g. "Report.pdf") over the generated
+    # one (e.g. "ABC123_document.pdf") so the LLM sees a human-readable name.
+    file_name = str(
+      att.get("originalFileName")
+      or att.get("fileName")
+      or (path_obj.name if path_obj else "unknown")
+    )
+    kind = str(att.get("kind") or "").strip().lower()
+
+    # --- Document thumbnail path ---
+    # Documents are not image files, but WhatsApp sends a jpegThumbnail
+    # (base64-encoded JPEG) that gives a visual preview (e.g. first page
+    # of a PDF).  Use that thumbnail directly instead of reading the
+    # (binary) document file.  The thumbnail is embedded in the payload
+    # so no local file access is needed.
+    if kind == "document" and att.get("jpegThumbnail"):
+      thumb_b64 = att["jpegThumbnail"]
+      if isinstance(thumb_b64, str) and thumb_b64:
+        mime = "image/jpeg"
+        data_url = f"data:{mime};base64,{thumb_b64}"
+        parts.append({"type": "image_url", "image_url": {"url": data_url}})
+        notes.append(f"{label} thumbnail attached: {file_name}")
+        continue
+
+    # --- Regular image / sticker path ---
+    # For images and stickers we need the local file on disk.
     if path_obj is None or not path_obj.exists() or not path_obj.is_file():
       notes.append(f"{label} skipped (missing file: {file_name})")
       skipped_count += 1
