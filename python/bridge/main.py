@@ -404,6 +404,8 @@ def _resolve_quoted_media_attachments(
       "kind": "sticker" if stored.lower().endswith(".webp") else "image",
       "mime": _guess_mime_from_path(stored),
       "fileName": os.path.basename(stored),
+      "originalFileName": None,
+      "jpegThumbnail": None,
       "path": stored,
     })
 
