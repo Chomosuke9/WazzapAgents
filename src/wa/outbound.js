@@ -120,7 +120,7 @@ async function renderOutboundMentions(chatId, rawText, groupContext = null) {
   const mentionsArray = Array.from(mentionSet);
   for (const jid of mentionsArray) {
     if (!isContactJid(jid)) {
-      logger.warn({ chatId, jid }, 'outbound mention contains non-phone JID — may not render as clickable');
+      logger.warn({ chatId, jid }, 'outbound mention contains non-contact JID — may not render as clickable');
     }
   }
   return {
