@@ -12,10 +12,11 @@ All commands start with `/` (forward slash). In groups, most commands can only b
 |---------|----------|-------------|
 | `/prompt` | View active prompt | Admin (group), Anyone (private) |
 | `/prompt <text>` | Set new prompt | Admin (group), Anyone (private) |
-| `/prompt -` | Delete prompt | Admin (group), Anyone (private) |
 | `/reset` | Reset bot memory | Admin (group), Anyone (private) |
 | `/permission` | Check moderation permission level | Group admin |
-| `/permission 0-3` | Set moderation permission level | Group admin |
+| `/mode` | Check/change response mode (auto/prefix) | Bot owner only |
+| `/trigger` | Check/change prefix-mode triggers | Bot owner only |
+| `/dashboard` | Show usage statistics | Everyone |
 | `/info` | User & chat/group info | Everyone |
 | `/broadcast <message>` | Send to all groups | Bot owner only |
 
@@ -77,6 +78,98 @@ Shows:
 - **Chat info** (if in private chat): chat type, chat ID
 
 **Can be used by everyone**, no admin required.
+
+---
+
+## `/permission`
+
+Configures **moderation permission levels** for delete/kick actions.
+
+### View current permission
+
+```txt
+/permission
+```
+
+### Set permission level
+
+```txt
+/permission 0    # Delete and kick disabled
+/permission 1    # Delete enabled, kick disabled
+/permission 2    # Kick enabled, delete disabled
+/permission 3    # Delete and kick enabled
+```
+
+- **Level 0** — Bot only chats, moderation disabled
+- **Level 1** — Bot can delete spam or violating messages
+- **Level 2** — Bot can kick troublesome members
+- **Level 3** — Bot has full moderation authority
+
+:::info
+Permission can only be changed by **group admins**. Settings apply per chat.
+:::
+
+---
+
+## `/mode`
+
+Configures how the bot responds in groups: **auto** or **prefix**.
+
+### View current mode
+
+```txt
+/mode
+```
+
+### Set mode
+
+```txt
+/mode auto        # LLM1 decides when to respond
+/mode prefix      # Bot only responds when explicitly triggered
+```
+
+In private chats, the bot always responds regardless of mode.
+
+---
+
+## `/trigger`
+
+Configures which triggers are active while the bot is in `prefix` mode.
+
+### View current triggers
+
+```txt
+/trigger
+```
+
+### Set triggers
+
+```txt
+/trigger all              # Enable all triggers
+/trigger tag,reply        # Only respond to mentions and replies
+/trigger tag,reply,name   # Also respond when the bot name is mentioned
+```
+
+Available triggers:
+
+- `tag` — bot is mentioned directly
+- `reply` — user replies to a bot message
+- `name` — bot name is mentioned in text
+- `new_member` — a member joins the group
+
+Only the bot owner can change triggers.
+
+---
+
+## `/dashboard`
+
+Shows usage statistics such as message counts, token usage, and model calls.
+
+```txt
+/dashboard
+```
+
+Can be used by everyone.
 
 ---
 

@@ -1,15 +1,35 @@
 {
+  "tutorialSidebar.doc.category.Instalasi": {
+    "message": "Installation",
+    "description": "The label for category Instalasi in sidebar tutorialSidebar"
+  },
+  "tutorialSidebar.doc.category.Pengaturan & Penggunaan": {
+    "message": "Configuration & Usage",
+    "description": "The label for category Pengaturan & Penggunaan in sidebar tutorialSidebar"
+  },
   "tutorialSidebar.doc.Pengantar": {
     "message": "Introduction",
     "description": "The label for doc Pengantar in sidebar tutorialSidebar"
+  },
+  "tutorialSidebar.doc.Panduan Instalasi": {
+    "message": "Installation Guide",
+    "description": "The label for doc Panduan Instalasi in sidebar tutorialSidebar"
   },
   "tutorialSidebar.doc.Cara Memulai": {
     "message": "Getting Started",
     "description": "The label for doc Cara Memulai in sidebar tutorialSidebar"
   },
-  "tutorialSidebar.category.Perintah Bot": {
-    "message": "Bot Commands",
-    "description": "The label for category Perintah Bot in sidebar tutorialSidebar"
+  "tutorialSidebar.doc.Cara mendapatkan LID": {
+    "message": "How to Get Your LID",
+    "description": "The label for doc Cara mendapatkan LID in sidebar tutorialSidebar"
+  },
+  "tutorialSidebar.doc.Daftar Perintah": {
+    "message": "Command List",
+    "description": "The label for doc Daftar Perintah in sidebar tutorialSidebar"
+  },
+  "tutorialSidebar.doc.Sistem Permission (Izin Moderasi)": {
+    "message": "Permission System",
+    "description": "The label for doc Sistem Permission (Izin Moderasi) in sidebar tutorialSidebar"
   },
   "tutorialSidebar.doc.Mengatur Prompt": {
     "message": "Setting Up Prompts",

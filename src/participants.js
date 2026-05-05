@@ -25,7 +25,7 @@ function choosePreferredParticipantJid(jids) {
   if (!Array.isArray(jids) || jids.length === 0) return null;
   const unique = Array.from(new Set(jids.filter((jid) => typeof jid === 'string' && jid.trim())));
   if (unique.length === 0) return null;
-  const pn = unique.find((jid) => jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us'));
+  const pn = unique.find((jid) => jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us') || jid.endsWith('@lid'));
   return pn || unique[0];
 }
 

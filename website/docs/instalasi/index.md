@@ -144,9 +144,106 @@ kemudian pencet bagian `Change model`, jika kamu melakukan [langkah tadi](/insta
 ## Sub-Agent
 **_Sub-Agent_** adalah agent pembantu dari WazzapAgents, ini adalah kekuatan asli dari asisten Ai yang sesungguhnya. Dengan ini, asisten Ai-mu bisa benar benar menjadi `asisten` yang benar benar bekerja dan berguna.
 
-[Cara menyalakan Sub-Agent](www.example.com)
+### Kapan Sub-Agent Dipakai?
 
-TODO: Make a Sub-Agent sections.
+Aktifkan Sub-Agent jika kamu ingin bot mengerjakan tugas yang lebih berat dari sekadar membalas chat, misalnya:
+
+- membaca dan memproses file yang dikirim pengguna;
+- mengekstrak tabel atau ringkasan dari dokumen;
+- menjalankan script kecil atau command-line tool;
+- melakukan riset lalu mengembalikan laporan terstruktur;
+- membuat file hasil kerja dan mengirimkannya kembali ke WhatsApp.
+
+Jika bot hanya dipakai untuk ngobrol biasa atau moderasi grup, Sub-Agent boleh tetap dimatikan.
+
+### 1. Jalankan WazzapSubAgents
+
+Clone service Sub-Agent dan siapkan environment-nya:
+
+```bash
+git clone https://github.com/Chomosuke9/WazzapSubAgents.git && cd WazzapSubAgents
+cp .env.example .env
+```
+
+Edit `.env`, lalu isi minimal:
+
+```bash
+LLM_API_KEY=<api key kamu>
+AGENT_MODEL=<model untuk sub-agent>
+```
+
+Jalankan dengan Docker Compose:
+
+```bash
+docker-compose up -d
+```
+
+Service ini akan membuka:
+
+- API utama: `http://localhost:5000`
+- executor sidecar: `http://localhost:5001`
+
+### 2. Hubungkan WazzapAgents ke Sub-Agent
+
+Di `.env` WazzapAgents, tambahkan:
+
+```bash
+SUBAGENT_URL=http://localhost:5000
+SUBAGENT_WEBHOOK_PORT=8081
+SUBAGENT_WEBHOOK_URL=http://localhost:8081/subagent/callback
+```
+
+Jika WazzapSubAgents berjalan di Docker dan harus memanggil balik WazzapAgents di host, gunakan:
+
+```bash
+SUBAGENT_WEBHOOK_URL=http://host.docker.internal:8081/subagent/callback
+```
+
+:::tip
+`docker-compose.yml` di WazzapSubAgents sudah menambahkan `host.docker.internal` untuk Linux dengan `host-gateway`.
+:::
+
+### 3. Pastikan Folder File Dibagi Bersama
+
+Untuk tugas yang memakai file, WazzapAgents dan WazzapSubAgents harus bisa membaca folder host yang sama. Default WazzapSubAgents adalah `/storage`.
+
+```bash
+SUBAGENT_STORAGE_DIR=/storage
+WORKDIR_BASE=/storage/subagent_work
+```
+
+Pastikan WazzapAgents bisa membaca file yang dikembalikan Sub-Agent. Jika tidak, hasil file tidak bisa dikirim balik sebagai media WhatsApp.
+
+### 4. Aktifkan dari WhatsApp
+
+Hanya owner bot yang bisa menyalakan Sub-Agent:
+
+```txt
+/subagent on
+/subagent off
+/subagent global on
+/subagent global off
+```
+
+Cek status untuk chat saat ini:
+
+```txt
+/subagent
+```
+
+### 5. Uji Alurnya
+
+Setelah kedua service berjalan:
+
+1. Kirim `/subagent on` di chat.
+2. Minta tugas yang membutuhkan tool, misalnya: "Baca dokumen ini dan ekstrak tabelnya."
+3. Main agent akan memberi acknowledgement.
+4. Sub-Agent mengirim progress lewat webhook.
+5. Setelah selesai, WazzapAgents merangkum hasil dan mengirim file output jika ada.
+
+:::warning
+Sub-Agent bisa menjalankan tool dan operasi file. Jalankan hanya di server yang kamu kontrol, jaga API key tetap privat, dan aktifkan hanya untuk chat yang kamu percaya.
+:::
 
 ## Variabel Environment
 
