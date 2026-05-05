@@ -1,60 +1,43 @@
-import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
+import type { SidebarsConfig } from "@docusaurus/plugin-content-docs";
 
 const sidebars: SidebarsConfig = {
   tutorialSidebar: [
     {
-      type: 'doc',
-      id: 'index',
-      label: 'Pengantar',
+      type: "doc",
+      id: "index",
+      label: "Pengantar",
     },
     {
-      type: 'doc',
-      id: 'memulai',
-      label: 'Cara Memulai',
+      type: "category",
+      label: "Instalasi",
+      link: {
+        type: "doc",
+        id: "instalasi/index",
+      },
+      items: ["instalasi/index", "instalasi/memulai"],
     },
     {
-      type: 'category',
-      label: 'Perintah Bot',
+      type: "category",
+      label: "Pengaturan & Penggunaan",
       items: [
-        'perintah',
-        'permission',
+        "penggunaan/perintah",
+        "penggunaan/permission",
+        "penggunaan/prompt",
+        "penggunaan/contoh-prompt",
+        "penggunaan/fitur",
+        "penggunaan/tips",
+        "penggunaan/faq",
       ],
     },
     {
-      type: 'doc',
-      id: 'prompt',
-      label: 'Mengatur Prompt',
-    },
-    {
-      type: 'doc',
-      id: 'contoh-prompt',
-      label: 'Contoh Prompt Siap Pakai',
-    },
-    {
-      type: 'doc',
-      id: 'fitur',
-      label: 'Fitur-Fitur Bot',
-    },
-    {
-      type: 'doc',
-      id: 'tips',
-      label: 'Tips & Praktik Terbaik',
-    },
-    {
-      type: 'doc',
-      id: 'faq',
-      label: 'FAQ',
-    },
-    {
-      type: 'category',
-      label: 'Dokumentasi Developer',
+      type: "category",
+      label: "Dokumentasi Developer",
       items: [
-        'dev/arsitektur',
-        'dev/setup',
-        'dev/gateway',
-        'dev/bridge',
-        'dev/protokol',
-        'dev/kontribusi',
+        "dev/arsitektur",
+        "dev/gateway",
+        "dev/bridge",
+        "dev/protokol",
+        "dev/kontribusi",
       ],
     },
   ],

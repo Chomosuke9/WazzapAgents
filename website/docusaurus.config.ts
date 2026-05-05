@@ -1,103 +1,115 @@
-import {themes as prismThemes} from 'prism-react-renderer';
-import type {Config} from '@docusaurus/types';
-import type * as Preset from '@docusaurus/preset-classic';
+import { themes as prismThemes } from "prism-react-renderer";
+import type { Config } from "@docusaurus/types";
+import type * as Preset from "@docusaurus/preset-classic";
 
 const config: Config = {
-  title: 'WazzapAgents',
-  tagline: 'Bot WhatsApp berbasis AI yang bisa diajak ngobrol, moderasi grup, dan disesuaikan sesukamu.',
-  favicon: 'img/favicon.ico',
+  title: "WazzapAgents",
+  tagline:
+    "Bot WhatsApp berbasis AI yang bisa diajak ngobrol, moderasi grup, dan disesuaikan sesukamu.",
+  favicon: "img/favicon.ico",
 
-  url: 'https://chomosuke9.github.io',
-  baseUrl: '/WazzapAgents/',
+  url: "https://chomosuke9.github.io",
+  baseUrl: "/WazzapAgents/",
 
-  organizationName: 'Chomosuke9',
-  projectName: 'WazzapAgents',
+  organizationName: "Chomosuke9",
+  projectName: "WazzapAgents",
   trailingSlash: false,
 
-  onBrokenLinks: 'throw',
-  onBrokenMarkdownLinks: 'warn',
+  onBrokenLinks: "throw",
+  markdown: {
+    format: "detect",
+    mermaid: true,
+    mdx1Compat: {
+      comments: true,
+      admonitions: true,
+      headingIds: true,
+    },
+    anchors: {
+      maintainCase: true,
+    },
+  },
 
   i18n: {
-    defaultLocale: 'id',
-    locales: ['id', 'en'],
+    defaultLocale: "id",
+    locales: ["id", "en"],
     localeConfigs: {
-      id: { label: 'Bahasa Indonesia' },
-      en: { label: 'English' },
+      id: { label: "Bahasa Indonesia" },
+      en: { label: "English" },
     },
   },
 
   presets: [
     [
-      'classic',
+      "classic",
       {
         docs: {
-          sidebarPath: './sidebars.ts',
-          routeBasePath: '/',
+          sidebarPath: "./sidebars.ts",
+          routeBasePath: "/",
         },
         blog: false,
         theme: {
-          customCss: './src/css/custom.css',
+          customCss: "./src/css/custom.css",
         },
       } satisfies Preset.Options,
     ],
   ],
 
   themeConfig: {
-    image: 'img/social-card.png',
+    image: "img/social-card.png",
     colorMode: {
-      defaultMode: 'light',
+      defaultMode: "light",
       disableSwitch: false,
       respectPrefersColorScheme: true,
     },
     navbar: {
-      title: 'WazzapAgents',
+      title: "WazzapAgents",
       logo: {
-        alt: 'WazzapAgents Logo',
-        src: 'img/logo.svg',
+        alt: "WazzapAgents Logo",
+        src: "img/logo.svg",
       },
       items: [
         {
-          type: 'docSidebar',
-          sidebarId: 'tutorialSidebar',
-          position: 'left',
-          label: 'Panduan',
+          type: "docSidebar",
+          sidebarId: "tutorialSidebar",
+          position: "left",
+          label: "Panduan",
         },
         {
-          type: 'localeDropdown',
-          position: 'right',
+          type: "localeDropdown",
+          position: "right",
         },
         {
-          href: 'https://github.com/Chomosuke9/WazzapAgents',
-          label: 'GitHub',
-          position: 'right',
+          href: "https://github.com/Chomosuke9/WazzapAgents",
+          label: "GitHub",
+          position: "right",
         },
       ],
     },
     footer: {
-      style: 'dark',
+      style: "dark",
       links: [
         {
-          title: 'Panduan',
+          title: "Panduan",
           items: [
-            { label: 'Mulai di Sini', to: '/pengantar' },
-            { label: 'Semua Perintah', to: '/perintah' },
-            { label: 'Contoh Prompt', to: '/contoh-prompt' },
+            { label: "Mulai di Sini", to: "/pengantar" },
+            { label: "Semua Perintah", to: "/penggunaan/perintah" },
+            { label: "Contoh Prompt", to: "/penggunaan/contoh-prompt" },
           ],
         },
         {
-          title: 'Developer',
+          title: "Developer",
           items: [
-            { label: 'Arsitektur', to: '/dev/arsitektur' },
-            { label: 'Setup Development', to: '/dev/setup' },
-            { label: 'Protokol WebSocket', to: '/dev/protokol' },
+            { label: "Arsitektur", to: "/dev/arsitektur" },
+            { label: "Instalasi", to: "/instalasi" },
+            { label: "Protokol WebSocket", to: "/dev/protokol" },
           ],
         },
         {
-          title: 'Lainnya',
+          title: "Lainnya",
           items: [
             {
-              label: 'GitHub',
-              href: 'https://github.com/Chomosuke9/WazzapAgents',
+              label: "GitHub",
+              href: "https://github.com/Chomosuke9/WazzapAgents",
             },
           ],
         },

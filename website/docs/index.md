@@ -20,7 +20,8 @@ Bot ini menggunakan model AI besar (LLM) di baliknya, sehingga mampu menjawab pe
 
 ## Mulai dari Mana?
 
-- **Baru pertama kali?** → Baca [Cara Memulai](/memulai)
-- **Mau lihat semua perintah?** → Lihat [Daftar Perintah](/perintah)
-- **Mau atur kepribadian bot?** → Baca [Mengatur Prompt](/prompt)
-- **Butuh contoh prompt siap pakai?** → Lihat [Contoh Prompt](/contoh-prompt)
+- **Baru pertama kali?** → Baca [Cara Memulai](/instalasi/memulai)
+- **Ingin menjalankan bot sendiri?** → Baca [Panduan Instalasi](/instalasi)
+- **Mau lihat semua perintah?** → Lihat [Daftar Perintah](/penggunaan/perintah)
+- **Mau atur kepribadian bot?** → Baca [Mengatur Prompt](/penggunaan/prompt)
+- **Butuh contoh prompt siap pakai?** → Lihat [Contoh Prompt](/penggunaan/contoh-prompt)
