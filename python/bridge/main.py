@@ -264,35 +264,6 @@ subagent_webhook = SubAgentWebhookServer(subagent_tracker)
 
 
 # ---------------------------------------------------------------------------
-# Owner check helper
-# ---------------------------------------------------------------------------
-
-def _is_owner(sender_jid: str | None) -> bool:
-  """Check if sender JID is in BOT_OWNER_JIDS."""
-  if not sender_jid:
-    return False
-  raw = os.getenv("BOT_OWNER_JIDS", "")
-  if not raw.strip():
-    return False
-  owner_jids: set[str] = set()
-  for owner in raw.split(","):
-    owner = owner.strip().lower()
-    if not owner:
-      continue
-    owner_jids.add(owner)
-    if "@" not in owner:
-      owner_jids.add(f"{owner}@s.whatsapp.net")
-      owner_jids.add(f"{owner}@lid")
-  sender = sender_jid.strip().lower()
-  sender_local = sender.split("@", 1)[0]
-  candidates = {sender, sender_local}
-  if sender_local:
-    candidates.add(f"{sender_local}@s.whatsapp.net")
-    candidates.add(f"{sender_local}@lid")
-  return bool(candidates & owner_jids)
-
-
-# ---------------------------------------------------------------------------
 # Sticker command helpers
 # ---------------------------------------------------------------------------
 
