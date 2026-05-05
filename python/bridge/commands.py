@@ -64,9 +64,6 @@ def _is_owner(sender_jid: str | None) -> bool:
   sender = sender_jid.strip().lower()
   sender_local = sender.split("@", 1)[0]
   candidates = {sender, sender_local}
-  if sender_local:
-    candidates.add(f"{sender_local}@s.whatsapp.net")
-    candidates.add(f"{sender_local}@lid")
   return bool(candidates & owner_jids)
 
 
