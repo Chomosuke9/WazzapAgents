@@ -93,7 +93,7 @@ function makeSenderRef(chatId, senderId, attempt = 0) {
   return numeric.toString(36).padStart(6, '0').slice(0, 6);
 }
 
-function isPhoneJid(jid) {
+function isContactJid(jid) {
   return typeof jid === 'string'
     && (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us') || jid.endsWith('@lid'));
 }
@@ -121,7 +121,7 @@ function rememberSenderRef(chatId, senderId, participantJid = null) {
   const existingRef = registry.senderToRef.get(canonicalSenderId);
   if (existingRef) {
     const existingParticipant = registry.senderToParticipant.get(canonicalSenderId);
-    if (!isPhoneJid(existingParticipant) || isPhoneJid(canonicalParticipant)) {
+    if (!isContactJid(existingParticipant) || isContactJid(canonicalParticipant)) {
       registry.senderToParticipant.set(canonicalSenderId, canonicalParticipant);
     }
     return existingRef;
@@ -316,7 +316,7 @@ export {
   nextContextMsgId,
   ensureSenderRefRegistry,
   makeSenderRef,
-  isPhoneJid,
+  isContactJid,
   rememberSenderRef,
   resolveSenderByRef,
   resolveParticipantBySenderId,
