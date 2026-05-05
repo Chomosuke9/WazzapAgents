@@ -19,6 +19,9 @@ const config: Config = {
   markdown: {
     format: "detect",
     mermaid: true,
+    hooks: {
+      onBrokenMarkdownLinks: "throw",
+    },
     mdx1Compat: {
       comments: true,
       admonitions: true,
@@ -117,8 +120,9 @@ const config: Config = {
       copyright: `Copyright © ${new Date().getFullYear()} WazzapAgents.`,
     },
     prism: {
-      theme: prismThemes.github,
-      darkTheme: prismThemes.dracula,
+      theme: prismThemes.oneLight,
+      darkTheme: prismThemes.nightOwl,
+      additionalLanguages: ["bash", "diff", "json", "python", "typescript"],
     },
   } satisfies Preset.ThemeConfig,
 };

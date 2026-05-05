@@ -36,16 +36,16 @@ function nonNegativeInt(value, fallback) {
 
 function normalizeOwnerJid(raw) {
   const trimmed = raw.trim().toLowerCase();
-  if (!trimmed) return null;
-  if (trimmed.includes('@')) return trimmed;
-  return `${trimmed}@s.whatsapp.net`;
+  if (!trimmed) return [];
+  if (trimmed.includes('@')) return [trimmed];
+  return [`${trimmed}@s.whatsapp.net`, `${trimmed}@lid`];
 }
 
 function parseJidList(raw) {
   if (!raw || typeof raw !== 'string') return [];
   return raw
     .split(',')
-    .map(normalizeOwnerJid)
+    .flatMap(normalizeOwnerJid)
     .filter(Boolean);
 }
 

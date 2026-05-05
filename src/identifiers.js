@@ -95,7 +95,7 @@ function makeSenderRef(chatId, senderId, attempt = 0) {
 
 function isPhoneJid(jid) {
   return typeof jid === 'string'
-    && (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us'));
+    && (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@c.us') || jid.endsWith('@lid'));
 }
 
 /**
@@ -105,7 +105,7 @@ function isPhoneJid(jid) {
  * If a collision occurs (different sender, same ref), it increments the attempt.
  *
  * Also tracks the mapping from senderId → participantJid (for mention resolution).
- * Phone JIDs (@s.whatsapp.net) are preferred over non-phone JIDs.
+ * WhatsApp contact JIDs (@s.whatsapp.net, @c.us, @lid) are preferred over other JIDs.
  *
  * @param {string} chatId   - Group or DM JID
  * @param {string} senderId - Normalized sender JID

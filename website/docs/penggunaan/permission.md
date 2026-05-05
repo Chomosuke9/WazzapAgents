@@ -39,7 +39,7 @@ Hanya bisa digunakan di **grup**. Hanya **admin grup** yang bisa mengubah permis
 ## Alur yang Disarankan
 
 1. **Jadikan bot admin** terlebih dahulu
-2. **Set prompt moderator** (lihat [Contoh Prompt](/contoh-prompt))
+2. **Set prompt moderator** (lihat [Contoh Prompt](/penggunaan/contoh-prompt))
 3. **Coba di grup testing** mulai dari level 1
 4. Naikkan level setelah yakin bot berperilaku dengan benar
 

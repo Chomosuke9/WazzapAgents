@@ -27,7 +27,7 @@ function HomepageHeader() {
           </Link>
           <Link
             className="button button--outline button--lg"
-            to="/perintah"
+            to="/penggunaan/perintah"
             style={{ color: "#fff", borderColor: "#fff" }}
           >
             <Translate id="homepage.cta.viewCommands">Lihat Perintah</Translate>

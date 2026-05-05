@@ -27,7 +27,7 @@ Setelah bot masuk grup, lakukan ini secara berurutan:
 1. **Cek info bot** dengan mengetik `/info` di chat — pastikan bot terdeteksi sebagai admin jika sudah dijadikan admin.
 2. **Atur kepribadian bot** dengan `/prompt <instruksimu>` — ini menentukan bagaimana bot berperilaku di grup ini.
 3. **Uji coba** dengan menyapa bot: `@Vivy halo!`
-4. Jika ingin moderasi, baca dulu bagian [Sistem Permission](/permission) sebelum mengaktifkannya.
+4. Jika ingin moderasi, baca dulu bagian [Sistem Permission](/penggunaan/permission) sebelum mengaktifkannya.
 
 ## Cara Bot Merespons di Grup
 

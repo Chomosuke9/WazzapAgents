@@ -20,7 +20,8 @@ The bot uses a large language model (LLM) under the hood, enabling it to answer 
 
 ## Where to Start?
 
-- **First time here?** → Read [Getting Started](/memulai)
-- **Want to see all commands?** → See [Command List](/perintah)
-- **Want to set the bot's personality?** → Read [Setting Up Prompts](/prompt)
-- **Need ready-to-use prompt examples?** → See [Prompt Examples](/contoh-prompt)
+- **First time here?** → Read [Getting Started](/instalasi/memulai)
+- **Want to run the bot yourself?** → Read the [Installation Guide](/instalasi)
+- **Want to see all commands?** → See [Command List](/penggunaan/perintah)
+- **Want to set the bot's personality?** → Read [Setting Up Prompts](/penggunaan/prompt)
+- **Need ready-to-use prompt examples?** → See [Prompt Examples](/penggunaan/contoh-prompt)
