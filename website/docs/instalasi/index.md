@@ -142,19 +142,34 @@ kemudian pencet bagian `Change model`, jika kamu melakukan [langkah tadi](/insta
 
 
 ## Sub-Agent
-**_Sub-Agent_** adalah agent pembantu dari WazzapAgents, ini adalah kekuatan asli dari asisten Ai yang sesungguhnya. Dengan ini, asisten Ai-mu bisa benar benar menjadi `asisten` yang benar benar bekerja dan berguna.
+
+**Sub-Agent** adalah service executor terpisah yang menjalankan agent otonom di dalam container Docker terisolasi. Sub-Agent menerima instruksi dari WazzapAgents, menjalankan _tool_ (bash, Python, JavaScript) di dalam sandbox, lalu mengembalikan hasil dan file output ke WhatsApp.
+
+Tidak seperti bot utama yang hanya membalas chat, Sub-Agent bisa memproses tugas berat yang membutuhkan eksekusi kode asli.
 
 ### Kapan Sub-Agent Dipakai?
 
 Aktifkan Sub-Agent jika kamu ingin bot mengerjakan tugas yang lebih berat dari sekadar membalas chat, misalnya:
 
-- membaca dan memproses file yang dikirim pengguna;
+- membaca dan memproses file yang dikirim pengguna (PDF, DOCX, XLSX, PPTX, dan lain-lain);
 - mengekstrak tabel atau ringkasan dari dokumen;
-- menjalankan script kecil atau command-line tool;
-- melakukan riset lalu mengembalikan laporan terstruktur;
-- membuat file hasil kerja dan mengirimkannya kembali ke WhatsApp.
+- menjalankan script kecil (bash, Python, JavaScript) di sandbox terisolasi;
+- membuat file hasil kerja (laporan, gambar, dokumen) dan mengirimkannya kembali ke WhatsApp.
 
 Jika bot hanya dipakai untuk ngobrol biasa atau moderasi grup, Sub-Agent boleh tetap dimatikan.
+
+:::info
+Sub-Agent **tidak** bisa mengakses internet secara langsung. Sub-Agent hanya bisa memproses file dan menjalankan kode di dalam sandbox-nya sendiri.
+:::
+
+### Arsitektur Singkat
+
+Sub-Agent berjalan sebagai service terpisah ([WazzapSubAgents](https://github.com/Chomosuke9/WazzapSubAgents)) yang terdiri dari dua container:
+
+1. **executor-service** (Flask, port 5000) — menerima permintaan dari WazzapAgents, menjalankan agent loop (LLM ReAct), dan mengirim callback webhook.
+2. **executor-executor** (sidecar, port 5001) — menjalankan kode bash/Python/JavaScript yang dihasilkan oleh agent di dalam sandbox.
+
+WazzapAgents mengirim tugas ke `/execute`, Sub-Agent memprosesnya secara asinkron, lalu mengirim hasilnya balik lewat webhook ke WazzapAgents. Jika ada antrian, pengguna akan diberitahu posisi antrian mereka.
 
 ### 1. Jalankan WazzapSubAgents
 
@@ -169,19 +184,39 @@ Edit `.env`, lalu isi minimal:
 
 ```bash
 LLM_API_KEY=<api key kamu>
-AGENT_MODEL=<model untuk sub-agent>
+AGENT_MODEL_LOW=<model untuk sub-agent>
 ```
 
-Jalankan dengan Docker Compose:
+:::note
+`AGENT_MODEL` (tanpa `_LOW`) tetap didukung untuk backward compatibility dan akan otomatis digunakan sebagai `AGENT_MODEL_LOW` jika `AGENT_MODEL_LOW` tidak diatur.
+:::
+
+Opsional — atur model berkualitas tinggi untuk tugas yang lebih kompleks:
+
+```bash
+AGENT_MODEL_HIGH=<model lebih powerful untuk tugas kompleks>
+# Jika tidak diatur, akan menggunakan AGENT_MODEL_LOW
+AGENT_TEMPERATURE_LOW=0.7
+AGENT_TEMPERATURE_HIGH=0.3
+```
+
+Jalankan dengan Docker Compose (direkomendasikan):
 
 ```bash
 docker-compose up -d
 ```
 
+Atau jalankan secara native (tanpa Docker untuk service utama, hanya sidecar yang pakai Docker):
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
 Service ini akan membuka:
 
 - API utama: `http://localhost:5000`
-- executor sidecar: `http://localhost:5001`
+- Executor sidecar: `http://localhost:5001`
 
 ### 2. Hubungkan WazzapAgents ke Sub-Agent
 
@@ -205,12 +240,15 @@ SUBAGENT_WEBHOOK_URL=http://host.docker.internal:8081/subagent/callback
 
 ### 3. Pastikan Folder File Dibagi Bersama
 
-Untuk tugas yang memakai file, WazzapAgents dan WazzapSubAgents harus bisa membaca folder host yang sama. Default WazzapSubAgents adalah `/storage`.
+Untuk tugas yang memakai file, WazzapAgents dan WazzapSubAgents harus bisa membaca folder host yang sama. Jika menggunakan Docker Compose, gunakan `/storage` sebagai direktori bersama:
 
 ```bash
+# Di .env WazzapSubAgents:
 SUBAGENT_STORAGE_DIR=/storage
 WORKDIR_BASE=/storage/subagent_work
 ```
+
+Jika menjalankan secara native (tanpa Docker Compose), biarkan `SUBAGENT_INPUT_STAGING_DIR` kosong dan WazzapAgents akan menggunakan `<project_root>/data/subagent_in` secara otomatis.
 
 Pastikan WazzapAgents bisa membaca file yang dikembalikan Sub-Agent. Jika tidak, hasil file tidak bisa dikirim balik sebagai media WhatsApp.
 
@@ -238,11 +276,12 @@ Setelah kedua service berjalan:
 1. Kirim `/subagent on` di chat.
 2. Minta tugas yang membutuhkan tool, misalnya: "Baca dokumen ini dan ekstrak tabelnya."
 3. Main agent akan memberi acknowledgement.
-4. Sub-Agent mengirim progress lewat webhook.
-5. Setelah selesai, WazzapAgents merangkum hasil dan mengirim file output jika ada.
+4. Sub-Agent memproses tugas secara asinkron. Jika ada antrian, kamu akan diberitahu posisi antrianmu.
+5. Sub-Agent mengirim progress lewat webhook.
+6. Setelah selesai, WazzapAgents merangkum hasil dan mengirim file output jika ada.
 
 :::warning
-Sub-Agent bisa menjalankan tool dan operasi file. Jalankan hanya di server yang kamu kontrol, jaga API key tetap privat, dan aktifkan hanya untuk chat yang kamu percaya.
+Sub-Agent menjalankan kode di dalam sandbox Docker. Meskipun terisolasi, jalankan hanya di server yang kamu kontrol, jaga API key tetap privat, dan aktifkan hanya untuk chat yang kamu percaya.
 :::
 
 ## Variabel Environment
@@ -271,13 +310,18 @@ Sub-Agent bisa menjalankan tool dan operasi file. Jalankan hanya di server yang 
 | `HISTORY_LIMIT` | `20` | Jumlah pesan history per chat |
 | `INCOMING_DEBOUNCE_SECONDS` | `5` | Debounce window untuk batching |
 | `INCOMING_BURST_MAX_SECONDS` | `20` | Maksimum durasi burst window |
-| `HISTORY_LIMIT` | `20` | Jumlah pesan history per chat |
-| `INCOMING_DEBOUNCE_SECONDS` | `5` | Debounce window untuk batching |
-| `INCOMING_BURST_MAX_SECONDS` | `20` | Maksimum durasi burst window |
 | `ASSISTANT_NAME` | `LLM` | Nama tampilan bot di konteks |
 | `CONTEXT_TIME_UTC_OFFSET_HOURS` | *(auto)* | UTC offset untuk timestamp |
-| `ASSISTANT_NAME` | `LLM` | Nama tampilan bot di konteks |
-| `CONTEXT_TIME_UTC_OFFSET_HOURS` | *(auto)* | UTC offset untuk timestamp |
+
+### Sub-Agent (Bridge ke WazzapSubAgents)
+
+| Variabel | Default | Deskripsi |
+|----------|---------|-----------|
+| `SUBAGENT_URL` | `http://localhost:5000` | URL service WazzapSubAgents |
+| `SUBAGENT_WEBHOOK_PORT` | `8081` | Port webhook server di bridge |
+| `SUBAGENT_WEBHOOK_URL` | `http://localhost:8081/subagent/callback` | Callback URL yang dikirim ke Sub-Agent |
+| `SUBAGENT_ENABLED_DEFAULT` | `false` | Aktifkan Sub-Agent secara default untuk chat baru |
+| `SUBAGENT_WAIT_TIMEOUT_S` | `300` | Timeout tunggu callback Sub-Agent (detik) |
 
 ### LLM1 (Gating)
 
@@ -293,21 +337,27 @@ Sub-Agent bisa menjalankan tool dan operasi file. Jalankan hanya di server yang 
 | `LLM1_ENABLE_MEDIA_INPUT` | `0` | Aktifkan input multimodal LLM1 |
 | `LLM1_FALLBACK_ENDPOINT` | *(reuse LLM1)* | Endpoint fallback |
 | `LLM1_FALLBACK_MODEL` | *(kosong)* | Model fallback |
+| `LLM1_FALLBACK_API_KEY` | *(reuse LLM1)* | API key fallback — isi jika endpoint fallback memakai key berbeda |
 
 ### LLM2 (Responder)
 
 | Variabel | Default | Deskripsi |
 |----------|---------|-----------|
 | `LLM2_ENDPOINT` | *(OpenAI default)* | Endpoint API LLM2 |
-| `LLM2_MODEL` | `gpt-5.3` | Model untuk responder |
+| `LLM2_MODEL` | `gpt-5.3` | Model default — di-override oleh database jika sudah ada model yang ditambahkan via `/modelcfg add` |
 | `LLM2_API_KEY` | *(kosong)* | API key LLM2 |
 | `LLM2_TEMPERATURE` | `0.5` | Temperature untuk LLM2 |
 | `LLM2_TIMEOUT` | `20` | Timeout dalam detik |
 | `LLM2_RETRY_MAX` | `0` | Maks retry saat timeout |
 | `LLM2_RETRY_BACKOFF_SECONDS` | `0.8` | Backoff antar retry |
 | `LLM2_ENABLE_MEDIA_INPUT` | `1` | Aktifkan input multimodal LLM2 |
-| `LLM2_FALLBACK_ENDPOINT` | *(reuse LLM2)* | Endpoint fallback |
-| `LLM2_FALLBACK_MODEL` | *(kosong)* | Model fallback |
+| `LLM2_FALLBACK_ENDPOINT` | *(reuse LLM2)* | Endpoint fallback — jika primary gagal, request dicoba ke endpoint ini |
+| `LLM2_FALLBACK_API_KEY` | *(reuse LLM2)* | API key fallback — isi jika endpoint fallback memakai key berbeda |
+| `LLM2_FALLBACK_MODEL` | *(kosong)* | Model fallback — **diabaikan** jika sudah ada model di database, karena model selalu diambil dari DB untuk semua target |
+
+:::info
+**Cara kerja fallback LLM2:** Saat runtime, model selalu diambil dari database (diatur via `/modelcfg add` dan `/model`). Env var `LLM2_MODEL` dan `LLM2_FALLBACK_MODEL` hanya dipakai sebagai fallback kalau database belum punya model sama sekali. Endpoint dan API key (`LLM2_ENDPOINT`, `LLM2_API_KEY`, `LLM2_FALLBACK_ENDPOINT`, `LLM2_FALLBACK_API_KEY`) tetap penting karena mereka menentukan **provider mana** yang menerima request. Jadi jika primary endpoint timeout/error, sistem otomatis mencoba fallback endpoint dengan model yang sama (dari database).
+:::
 
 ### Logging Bridge
 

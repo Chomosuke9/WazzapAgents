@@ -124,6 +124,12 @@ const config: Config = {
       darkTheme: prismThemes.nightOwl,
       additionalLanguages: ["bash", "diff", "json", "python", "typescript"],
     },
+    docs: {
+      sidebar: {
+        hideable: true,
+        autoCollapseCategories: true,
+      },
+    },
   } satisfies Preset.ThemeConfig,
 };
 

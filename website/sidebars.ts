@@ -14,7 +14,7 @@ const sidebars: SidebarsConfig = {
         type: "doc",
         id: "instalasi/index",
       },
-      items: ["instalasi/index", "instalasi/memulai"],
+      items: ["instalasi/index", "instalasi/memulai", "instalasi/cara-mendapatkan-lid"],
     },
     {
       type: "category",

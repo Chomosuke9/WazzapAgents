@@ -151,18 +151,33 @@ Tap `Change model`. If the previous step was correct, you should see:
 
 ## Sub-Agent
 
-**Sub-Agent** is a separate helper service for WazzapAgents. It can run longer, tool-heavy tasks such as file processing, data extraction, web scraping, and code execution without blocking the main WhatsApp conversation.
+**Sub-Agent** is a separate containerised executor service that runs autonomous agents inside an isolated Docker sandbox. It receives instructions from WazzapAgents, executes tools (bash, Python, JavaScript) inside a sandboxed sidecar, and returns results and output files back to WhatsApp via webhooks.
+
+Unlike the main bot which only replies to chats, Sub-Agent can process heavy tasks that require real code execution.
 
 ### When to Enable It
 
 Use Sub-Agent when you want the assistant to handle tasks such as:
 
-- Reading or transforming uploaded files
+- Reading and processing uploaded files (PDF, DOCX, XLSX, PPTX, and more)
 - Extracting tables or summaries from documents
-- Running small scripts or command-line tools
-- Researching and returning a structured report
+- Running small scripts (bash, Python, JavaScript) in an isolated sandbox
+- Creating output files (reports, images, documents) and sending them back to WhatsApp
 
 Keep it disabled if you only need normal chat replies or moderation.
+
+:::info
+Sub-Agent **cannot** access the internet directly. It can only process files and run code inside its own sandbox.
+:::
+
+### Architecture Overview
+
+Sub-Agent runs as a separate service ([WazzapSubAgents](https://github.com/Chomosuke9/WazzapSubAgents)) consisting of two containers:
+
+1. **executor-service** (Flask, port 5000) — receives requests from WazzapAgents, runs the agent loop (LLM ReAct), and sends callback webhooks.
+2. **executor-executor** (sidecar, port 5001) — executes bash/Python/JavaScript code produced by the agent inside a sandbox.
+
+WazzapAgents sends tasks to `/execute`, Sub-Agent processes them asynchronously, then sends results back via webhook to WazzapAgents. If there is a queue, users are notified of their queue position.
 
 ### 1. Run WazzapSubAgents
 
@@ -177,13 +192,33 @@ Edit `.env` and set at least:
 
 ```bash
 LLM_API_KEY=<your API key>
-AGENT_MODEL=<model for the sub-agent>
+AGENT_MODEL_LOW=<model for the sub-agent>
 ```
 
-Run it with Docker Compose:
+:::note
+`AGENT_MODEL` (without `_LOW`) is still supported for backward compatibility and will be used as `AGENT_MODEL_LOW` if `AGENT_MODEL_LOW` is not set.
+:::
+
+Optionally, configure a higher-quality model for complex tasks:
+
+```bash
+AGENT_MODEL_HIGH=<more powerful model for complex tasks>
+# If unset, falls back to AGENT_MODEL_LOW
+AGENT_TEMPERATURE_LOW=0.7
+AGENT_TEMPERATURE_HIGH=0.3
+```
+
+Run with Docker Compose (recommended):
 
 ```bash
 docker-compose up -d
+```
+
+Or run natively (without Docker for the main service, only the sidecar uses Docker):
+
+```bash
+pip install -r requirements.txt
+python main.py
 ```
 
 The service exposes:
@@ -213,12 +248,15 @@ The Docker Compose file in WazzapSubAgents already maps `host.docker.internal` o
 
 ### 3. Share Files Between Services
 
-For file tasks, both services must read and write the same host directory. WazzapSubAgents defaults to `/storage`.
+For file tasks, both services must read and write the same host directory. When using Docker Compose, use `/storage` as the shared directory:
 
 ```bash
+# In WazzapSubAgents .env:
 SUBAGENT_STORAGE_DIR=/storage
 WORKDIR_BASE=/storage/subagent_work
 ```
+
+When running natively (without Docker Compose), leave `SUBAGENT_INPUT_STAGING_DIR` unset and WazzapAgents will use `<project_root>/data/subagent_in` automatically.
 
 Make sure WazzapAgents can read the files returned by the Sub-Agent, otherwise output attachments cannot be sent back to WhatsApp.
 
@@ -246,11 +284,12 @@ After both services are running:
 1. Send `/subagent on` in a chat.
 2. Ask for a task that needs tooling, for example: "Read this document and extract the tables."
 3. The main agent should acknowledge the task.
-4. The Sub-Agent sends progress callbacks to the webhook.
-5. When done, WazzapAgents summarizes the report and sends any output files.
+4. Sub-Agent processes the task asynchronously. If there is a queue, you will be notified of your position.
+5. Sub-Agent sends progress callbacks via the webhook.
+6. When done, WazzapAgents summarizes the report and sends any output files.
 
 :::warning
-Sub-Agent runs tool and file operations. Use a locked-down server, keep API keys private, and only enable it for trusted chats.
+Sub-Agent runs code inside a Docker sandbox. Although isolated, only run it on a server you control, keep API keys private, and only enable it for trusted chats.
 :::
 
 ## Environment Variables
@@ -281,6 +320,11 @@ Sub-Agent runs tool and file operations. Use a locked-down server, keep API keys
 | `INCOMING_BURST_MAX_SECONDS` | `20` | Maximum burst window duration |
 | `ASSISTANT_NAME` | `LLM` | Bot display name in context |
 | `CONTEXT_TIME_UTC_OFFSET_HOURS` | *(auto)* | UTC offset for timestamps |
+
+### Sub-Agent (Bridge to WazzapSubAgents)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `SUBAGENT_URL` | `http://localhost:5000` | WazzapSubAgents API URL |
 | `SUBAGENT_WEBHOOK_PORT` | `8081` | Local callback webhook port |
 | `SUBAGENT_WEBHOOK_URL` | `http://localhost:8081/subagent/callback` | Callback URL sent to WazzapSubAgents |
@@ -298,14 +342,27 @@ Sub-Agent runs tool and file operations. Use a locked-down server, keep API keys
 | `LLM1_TIMEOUT` | `8` | Timeout in seconds |
 | `LLM1_HISTORY_LIMIT` | `20` | History limit for LLM1 context |
 | `LLM1_MESSAGE_MAX_CHARS` | `500` | Max chars per message for LLM1 |
+| `LLM1_ENABLE_MEDIA_INPUT` | `0` | Enable LLM1 multimodal input |
+| `LLM1_FALLBACK_ENDPOINT` | *(reuse LLM1)* | Fallback endpoint |
+| `LLM1_FALLBACK_MODEL` | *(empty)* | Fallback model |
+| `LLM1_FALLBACK_API_KEY` | *(reuse LLM1)* | Fallback API key — set this if the fallback endpoint uses a different key |
 
 ### LLM2 (Response)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM2_ENDPOINT` | *(required)* | LLM2 API endpoint |
-| `LLM2_MODEL` | *(required)* | Model for responses |
-| `LLM2_API_KEY` | *(required)* | LLM2 API key |
-| `LLM2_TEMPERATURE` | `0.7` | LLM2 temperature |
-| `LLM2_TIMEOUT` | `60` | Timeout in seconds |
-| `LLM2_RETRY_MAX` | `1` | Retry count |
+| `LLM2_ENDPOINT` | *(OpenAI default)* | LLM2 API endpoint |
+| `LLM2_MODEL` | `gpt-5.3` | Default model — overridden by the database if a model has been added via `/modelcfg add` |
+| `LLM2_API_KEY` | *(empty)* | LLM2 API key |
+| `LLM2_TEMPERATURE` | `0.5` | LLM2 temperature |
+| `LLM2_TIMEOUT` | `20` | Timeout in seconds |
+| `LLM2_RETRY_MAX` | `0` | Max retries on timeout |
+| `LLM2_RETRY_BACKOFF_SECONDS` | `0.8` | Backoff between retries |
+| `LLM2_ENABLE_MEDIA_INPUT` | `1` | Enable LLM2 multimodal input |
+| `LLM2_FALLBACK_ENDPOINT` | *(reuse LLM2)* | Fallback endpoint — if the primary fails, requests are retried against this endpoint |
+| `LLM2_FALLBACK_API_KEY` | *(reuse LLM2)* | Fallback API key — set this if the fallback endpoint uses a different key |
+| `LLM2_FALLBACK_MODEL` | *(empty)* | Fallback model — **ignored** if a model exists in the database, because the model is always taken from the DB for all targets |
+
+:::info
+**How LLM2 fallback works:** At runtime, the model is always taken from the database (configured via `/modelcfg add` and `/model`). The `LLM2_MODEL` and `LLM2_FALLBACK_MODEL` env vars are only used as a fallback when the database has no models at all. The endpoint and API key (`LLM2_ENDPOINT`, `LLM2_API_KEY`, `LLM2_FALLBACK_ENDPOINT`, `LLM2_FALLBACK_API_KEY`) remain important because they determine **which provider** receives the request. So if the primary endpoint times out or errors, the system automatically retries against the fallback endpoint using the same model (from the database).
+:::
