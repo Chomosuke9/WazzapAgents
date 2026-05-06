@@ -60,6 +60,7 @@ try:
     _build_burst_current,
     _clean_text,
     _collect_context_ids,
+    _extract_all_send_ack_entries,
     _extract_send_ack_context_msg_id,
     _hydrate_provisional_context_id_from_ack,
     _infer_media,
@@ -489,6 +490,7 @@ async def _deliver_subagent_result(
   fallback_reply_to: str | None,
   allowed_context_ids: set,
   record_stat_fn,
+  pending_subagent_attachments: dict | None = None,
 ) -> None:
   """Stage sub-agent outputs, re-invoke LLM2, and dispatch the resulting
   actions for a finalised sub-agent task.
@@ -737,17 +739,27 @@ async def _deliver_subagent_result(
         auto_reply_anchor=bool(reinvoke_action.get("autoReplyAnchor", False)),
       )
 
-  # Auto-send sub-agent output files as separate WhatsApp messages, one
   # bubble per file with no caption. Sent after the LLM2 text reply so
   # the conversation reads: text first, then files.
+  #
+  # For each attachment we:
+  #   1. Build the request_id BEFORE sending so we can register the
+  #      pending sub-agent attachment mapping.
+  #   2. Send the attachment.
+  #   3. Create a provisional history entry (message_id=local-send-<rid>)
+  #      so that the action_ack handler can hydrate its context_msg_id.
+  #   4. Register the staged file info in ``pending_subagent_attachments``
+  #      so that the action_ack handler can store the path in
+  #      ``media_paths_by_chat`` once the real contextMsgId arrives.
   for staged_file in staged_outputs.staged:
+    attach_rid = _make_request_id("subagent_attach")
     try:
       await send_attachment(
         ws,
         chat_id,
         staged_file.path,
         staged_file.kind,
-        request_id=_make_request_id("subagent_attach"),
+        request_id=attach_rid,
         file_name=staged_file.name,
         mime=staged_file.mime,
         thumbnail_base64=staged_file.thumbnail_base64,
@@ -761,6 +773,39 @@ async def _deliver_subagent_result(
         extra={"chat_id": chat_id},
       )
       continue
+    # Provisional history entry for the file attachment. The real
+    # context_msg_id is filled in by ``_hydrate_provisional_context_id_from_ack``
+    # when the gateway acknowledges the send.
+    attach_media_label = staged_file.kind or "document"
+    attach_media_text = staged_file.name if staged_file.name else None
+    _append_history(
+      history,
+      WhatsAppMessage(
+        timestamp_ms=int(time.time() * 1000),
+        sender=assistant_name(),
+        context_msg_id="pending",
+        sender_ref=assistant_sender_ref(),
+        sender_is_admin=False,
+        text=attach_media_text,
+        media=attach_media_label,
+        quoted_message_id=None,
+        quoted_sender=None,
+        quoted_text=None,
+        quoted_media=None,
+        message_id=f"local-send-{attach_rid}",
+        role="assistant",
+      ),
+    )
+    # Register in pending_subagent_attachments so the action_ack handler
+    # can store the file path in media_paths_by_chat under the real
+    # contextMsgId once it arrives.
+    if pending_subagent_attachments is not None:
+      pending_subagent_attachments[attach_rid] = (chat_id, [{
+        "kind": staged_file.kind,
+        "mime": staged_file.mime,
+        "fileName": staged_file.name,
+        "path": staged_file.path,
+      }])
 
   # Clear finished-task history so format_recent_finished() no longer
   # injects a "Recently finished" block that discourages the model from
@@ -775,6 +820,12 @@ async def handle_socket(ws):
   pending_send_request_chat: OrderedDict[str, str] = OrderedDict()
   recent_reply_signatures_by_chat: Dict[str, Deque[tuple[int, str]]] = defaultdict(deque)
   media_paths_by_chat: Dict[str, Dict[str, str]] = defaultdict(dict)
+  # Staged sub-agent output files awaiting acknowledgement from the gateway.
+  # Keyed by ``request_id`` (e.g. ``subagent_attach-1715097600000-000042``).
+  # Value is ``(chat_id, file_info_list)`` so the action_ack handler can
+  # store file paths into ``media_paths_by_chat`` under their real contextMsgId
+  # once the gateway acknowledges the send.
+  pending_subagent_attachments: Dict[str, tuple[str, list[dict]]] = {}
   idle_msg_count: Dict[str, int] = defaultdict(int)
   tasks: Set[asyncio.Task] = set()
   logger.info("Gateway connected")
@@ -1912,6 +1963,7 @@ async def handle_socket(ws):
                       fallback_reply_to=fallback_reply_to,
                       allowed_context_ids=allowed_context_ids,
                       record_stat_fn=record_stat,
+                      pending_subagent_attachments=pending_subagent_attachments,
                     )
                 finally:
                   # Always best-effort clean up the per-session input
@@ -2048,6 +2100,8 @@ async def handle_socket(ws):
           request_id = _clean_text(payload.get("requestId"))
           chat_id_for_request = pending_send_request_chat.pop(request_id, None)
           if request_id and chat_id_for_request:
+            # Extract the primary context msg id (prefers text entries)
+            # to hydrate the provisional history entry.
             context_msg_id = _extract_send_ack_context_msg_id(payload)
             if context_msg_id:
               history = per_chat[chat_id_for_request]
@@ -2076,6 +2130,42 @@ async def handle_socket(ws):
                     "context_msg_id": context_msg_id,
                   },
                 )
+            # For sub-agent attachment sends, store the file paths in
+            # media_paths_by_chat under their real contextMsgId so that
+            # subsequent execute_subtask calls can resolve them.
+            # ``pending_subagent_attachments`` stores (chat_id, file_info_list)
+            # keyed by request_id, so we can store paths even when the
+            # request wasn't tracked in ``pending_send_request_chat``.
+            pending_attach_entry = pending_subagent_attachments.pop(request_id, None)
+            if pending_attach_entry is not None:
+              attach_chat_id, attach_files = pending_attach_entry
+              all_entries = _extract_all_send_ack_entries(payload)
+              # Match entries 1:1 with the staged file infos we registered.
+              # The ack ``result.sent`` array preserves send order, which
+              # matches the order of our pending list.
+              for idx, entry in enumerate(all_entries):
+                entry_ctx_id = _normalize_context_msg_id(entry.get("contextMsgId"))
+                if not entry_ctx_id:
+                  continue
+                if idx < len(attach_files):
+                  file_info = attach_files[idx]
+                else:
+                  # More ack entries than pending files — shouldn't
+                  # happen, but handle gracefully.
+                  break
+                media_paths_by_chat.setdefault(attach_chat_id, {})[entry_ctx_id] = [{
+                  **file_info,
+                  "received_at": time.time(),
+                }]
+              logger.debug(
+                "stored subagent attachment paths in media_paths_by_chat",
+                extra={
+                  "chat_id": attach_chat_id,
+                  "request_id": request_id,
+                  "entries": len(all_entries),
+                  "files": len(attach_files),
+                },
+              )
         logger.debug("Gateway ack: %s", event.get("payload"))
         continue
 

@@ -177,6 +177,8 @@ CRITICAL: When a task qualifies, call `execute_subtask` immediately — do NOT s
 
 The sub-agent has NO access to chat history — write `instruction` as a self-contained brief. Pass `context_msg_ids` for messages whose media attachments OR text content the sub-agent needs (or `null` if none). For text-only messages (e.g. a user pasting a long story), the bridge automatically converts the text into a .txt file for the sub-agent.
 
+**Revising sub-agent output files:** When you send a file via the sub-agent, the file appears in the chat as an assistant message with a [media] tag and its own 6-digit contextMsgId (e.g. `[#000456]`). To revise or further process that file, include its contextMsgId in `context_msg_ids` of your next `execute_subtask` call — the bridge will resolve it to the file path automatically. You do NOT need to know or mention the file path.
+
 Set `high_quality=true` for tasks that require deeper reasoning, complex analysis like generating or editing images/code. Set `high_quality=false` (default) for routine tasks like format conversion, simple lookups, basic scripting or downloading something.
 </subagent>"""
 

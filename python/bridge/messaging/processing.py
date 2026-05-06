@@ -548,6 +548,27 @@ def _extract_send_ack_context_msg_id(payload: dict) -> str | None:
   return _normalize_context_msg_id(picked.get("contextMsgId"))
 
 
+def _extract_all_send_ack_entries(payload: dict) -> list[dict]:
+  """Return all entries from the ``result.sent`` array of a ``send_ack`` / ``action_ack``.
+
+  Each entry is a dict with at least ``kind`` and ``contextMsgId`` keys.
+  Returns an empty list if the payload structure is unexpected.
+  """
+  if not isinstance(payload, dict):
+    return []
+  result = payload.get("result")
+  if not isinstance(result, dict):
+    return []
+  sent = result.get("sent")
+  if not isinstance(sent, list):
+    return []
+  entries: list[dict] = []
+  for row in sent:
+    if isinstance(row, dict) and row.get("contextMsgId"):
+      entries.append(row)
+  return entries
+
+
 def _hydrate_provisional_context_id_from_ack(
   history: Deque[WhatsAppMessage],
   *,

@@ -28,7 +28,9 @@ Chat context format:
   [#NNNNNN] HH:MM
   (Optional) REPLYING TO [#NNNNNN] QuotedName: [media] "QuotedText"
   Name (senderRef) (Role): [media] Message
-- [#system]/[#pending] = non-actionable context markers.
+- [#system] = non-actionable context marker.
+- [#pending] = assistant text messages (not referenceable in context_msg_ids).
+- 6-digit IDs on messages with [media] tags (image, video, document, audio, sticker) ARE referenceable in context_msg_ids — even when the message is from the assistant. Use them to pass file attachments to sub-agents for revision or further processing.
 - Roles: (admin), (superadmin), or (assistant). Normal members have no role label.
 - Inline mentions: @Name (senderRef), @all (all) for everyone, bot mention: @{{assistant_name}} (bot).
 - Two sections: `Older messages:` (background) and `Current messages (burst):` (trigger window, may include attachments).

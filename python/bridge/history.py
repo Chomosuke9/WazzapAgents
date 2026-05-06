@@ -106,11 +106,18 @@ def _compact(value: Optional[str]) -> str:
   return " ".join(value.split())
 
 
-def _normalize_context_msg_id(value: Optional[str], *, role: str = "user") -> str:
+def _normalize_context_msg_id(value: Optional[str], *, role: str = "user", media: Optional[str] = None) -> str:
   compact = _compact(value).lower()
   if compact in {"system", "pending"}:
     return compact
   if compact.isdigit() and len(compact) == 6:
+    # Assistant messages that carry media (image, video, document, audio,
+    # sticker, etc.) keep their real 6-digit contextMsgId so that LLM2
+    # can reference them in context_msg_ids for sub-agent tasks.
+    # Text-only assistant messages are masked as "pending" since they
+    # are not actionable (you can't "attach" a text reply).
+    if role == "assistant" and not media:
+      return "pending"
     return compact
   if role == "assistant":
     return "pending"
@@ -136,7 +143,7 @@ def _format_role(is_admin: bool, is_super_admin: bool = False) -> str:
 def format_history(messages: Iterable[WhatsAppMessage]) -> str:
   lines: list[str] = []
   for msg in messages:
-    context_msg_id = _normalize_context_msg_id(msg.context_msg_id, role=msg.role)
+    context_msg_id = _normalize_context_msg_id(msg.context_msg_id, role=msg.role, media=msg.media)
     time = format_context_time(msg.timestamp_ms)
 
     # System-role messages are bridge-injected events (e.g. [SUBTASK FINISHED],
