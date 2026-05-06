@@ -6,7 +6,7 @@
 - `src/index.js` — Bootstrap app + action dispatcher from Python.
 - `src/wsClient.js` — WS client to Python (`send`, `sendReliable`, flush queue).
 - `src/config.js` — Env parsing + runtime paths (data/auth/media).
-- `src/db.js` — SQLite via sql.js (settings/models/stats reads).
+- `src/db.js` — SQLite via better-sqlite3 (settings/models/stats reads).
 - `src/logger.js` — Structured pino logger.
 - `src/identifiers.js` — contextMsgId management, senderRef registry, message index.
 - `src/caches.js` — In-memory LRU caches (messages, groups, participants).

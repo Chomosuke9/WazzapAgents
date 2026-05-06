@@ -1,4 +1,4 @@
-import initSqlJs from "sql.js";
+import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import logger from "./logger.js";
@@ -10,12 +10,116 @@ const VALID_TRIGGERS = new Set(["tag", "reply", "join", "name"]);
 const DEFAULT_TRIGGERS = "tag,reply,name";
 const GLOBAL_CHAT_ID = "__global__";
 
-let _sql = null;
+const _settingsState = { db: null, dbPath: null };
+const _statsState = { db: null, dbPath: null };
+const _moderationState = { db: null, dbPath: null };
+const _subagentState = { db: null, dbPath: null };
 
-const _settingsState = { db: null, dbPath: null, lastLoadedMtimeMs: 0 };
-const _statsState = { db: null, dbPath: null, lastLoadedMtimeMs: 0 };
-const _moderationState = { db: null, dbPath: null, lastLoadedMtimeMs: 0 };
-const _subagentState = { db: null, dbPath: null, lastLoadedMtimeMs: 0 };
+const DB_CORRUPTION_TOKENS = [
+  "malformed",
+  "disk image is malformed",
+  "not a database",
+  "file is not a database",
+  "file is encrypted",
+  "database corruption",
+];
+
+function noop() {}
+
+function normalizeParams(params) {
+  if (params === undefined || params === null) return [];
+  return Array.isArray(params) ? params : [params];
+}
+
+class SqliteStatement {
+  constructor(stmt) {
+    this.stmt = stmt;
+    this.params = [];
+    this.rows = null;
+    this.index = 0;
+  }
+
+  bind(params) {
+    this.params = normalizeParams(params);
+    this.rows = null;
+    this.index = 0;
+  }
+
+  step() {
+    if (this.rows === null) this.rows = this.stmt.all(...this.params);
+    return this.index < this.rows.length;
+  }
+
+  getAsObject() {
+    if (this.rows === null) this.rows = this.stmt.all(...this.params);
+    const row = this.rows[this.index];
+    this.index += 1;
+    return row;
+  }
+
+  free() {
+    this.rows = null;
+  }
+}
+
+class SqliteDb {
+  constructor(dbPath, options = {}) {
+    this.dbPath = dbPath;
+    this.native = new Database(dbPath, options);
+  }
+
+  run(sql, params) {
+    const values = normalizeParams(params);
+    if (values.length === 0) {
+      this.native.exec(sql);
+      return;
+    }
+    this.native.prepare(sql).run(...values);
+  }
+
+  prepare(sql) {
+    return new SqliteStatement(this.native.prepare(sql));
+  }
+
+  pragma(sql) {
+    return this.native.pragma(sql);
+  }
+
+  close() {
+    this.native.close();
+  }
+}
+
+function closeAllDbs() {
+  const states = [_settingsState, _statsState, _moderationState, _subagentState];
+  for (const state of states) {
+    if (!state.db) continue;
+    try {
+      state.db.pragma("wal_checkpoint(TRUNCATE)");
+    } catch (err) {
+      logger.warn({ err, dbPath: state.dbPath }, "DB checkpoint failed");
+    }
+    closeDb(state.db);
+    state.db = null;
+  }
+  logger.info("All SQLite databases closed");
+}
+
+function runTransaction(db, fn) {
+  db.run("BEGIN TRANSACTION");
+  try {
+    const result = fn();
+    db.run("COMMIT");
+    return result;
+  } catch (err) {
+    try {
+      db.run("ROLLBACK");
+    } catch (rollbackErr) {
+      noop(rollbackErr);
+    }
+    throw err;
+  }
+}
 
 function ensureParentDir(filePath) {
   const dir = path.dirname(filePath);
@@ -50,50 +154,137 @@ function getSubagentDbPath() {
   return _subagentState.dbPath;
 }
 
-function getFileMtimeMs(filePath) {
+function configureDb(db) {
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
+  db.pragma("busy_timeout = 5000");
+  db.pragma("temp_store = MEMORY");
+  db.pragma("foreign_keys = ON");
+  db.pragma("cache_size = -2000");
+}
+
+function closeDb(db) {
+  if (!db) return;
   try {
-    return fs.statSync(filePath).mtimeMs || 0;
-  } catch {
-    return 0;
+    db.close();
+  } catch (err) {
+    noop(err);
   }
 }
 
-function loadDbDataFromDisk(dbPath) {
+function isDbCorruptionError(err) {
+  const msg = String(err?.message || err || "").toLowerCase();
+  return DB_CORRUPTION_TOKENS.some((token) => msg.includes(token));
+}
+
+function backupCorruptFile(dbPath) {
   if (!fs.existsSync(dbPath)) return null;
-  const fileBuffer = fs.readFileSync(dbPath);
-  return new Uint8Array(fileBuffer);
-}
-
-function replaceDb(state, data, initTablesFn) {
-  state.db = new _sql.Database(data);
-  initTablesFn(state.db);
-}
-
-function refreshDbFromDiskIfChanged(state, initTablesFn) {
-  if (!_sql || !state.db || !state.dbPath) return;
-  const diskMtimeMs = getFileMtimeMs(state.dbPath);
-  if (!diskMtimeMs || diskMtimeMs <= state.lastLoadedMtimeMs) return;
+  let backupPath = `${dbPath}.corrupted.bak`;
+  if (fs.existsSync(backupPath)) {
+    let i = 1;
+    while (fs.existsSync(`${dbPath}.corrupted.${i}.bak`)) i += 1;
+    backupPath = `${dbPath}.corrupted.${i}.bak`;
+  }
   try {
-    const data = loadDbDataFromDisk(state.dbPath);
-    replaceDb(state, data, initTablesFn);
-    state.lastLoadedMtimeMs = diskMtimeMs;
-    logger.debug({ dbPath: state.dbPath }, "DB refreshed from disk");
+    fs.renameSync(dbPath, backupPath);
+    logger.warn({ dbPath, backupPath }, "DB recovery: corrupt DB backed up");
+    return backupPath;
   } catch (err) {
-    logger.warn({ err, dbPath: state.dbPath }, "DB refresh from disk failed");
+    logger.error({ err, dbPath }, "DB recovery: corrupt DB backup failed");
+    try {
+      fs.unlinkSync(dbPath);
+      logger.warn({ dbPath }, "DB recovery: corrupt DB deleted");
+    } catch (deleteErr) {
+      noop(deleteErr);
+    }
+    return null;
   }
 }
 
-function saveDb(state) {
-  if (!state.db || !state.dbPath) return;
+function probeDb(dbPath) {
+  if (!fs.existsSync(dbPath)) return true;
+  let db = null;
   try {
-    const data = state.db.export();
-    const buffer = Buffer.from(data);
-    const tempPath = `${state.dbPath}.tmp`;
-    fs.writeFileSync(tempPath, buffer);
-    fs.renameSync(tempPath, state.dbPath);
-    state.lastLoadedMtimeMs = getFileMtimeMs(state.dbPath) || Date.now();
+    db = new SqliteDb(dbPath, { readonly: true, fileMustExist: true });
+    const rows = db.pragma("integrity_check");
+    return rows.length > 0 && rows.every((row) => row.integrity_check === "ok");
   } catch (err) {
-    logger.error({ err, dbPath: state.dbPath }, "DB save failed");
+    return false;
+  } finally {
+    closeDb(db);
+  }
+}
+
+function recoverCorruptDb(dbPath) {
+  for (const ext of ["-wal", "-shm", "-journal"]) {
+    const p = `${dbPath}${ext}`;
+    if (!fs.existsSync(p)) continue;
+    try {
+      fs.unlinkSync(p);
+      logger.warn({ dbPath, file: p }, "DB recovery: removed stale journal file");
+    } catch (err) {
+      logger.warn({ err, dbPath, file: p }, "DB recovery: journal cleanup failed");
+    }
+  }
+
+  if (probeDb(dbPath)) {
+    logger.info({ dbPath }, "DB recovery: database usable after journal cleanup");
+    return;
+  }
+
+  backupCorruptFile(dbPath);
+}
+
+function openDbWithRecovery(dbPath, initTablesFn) {
+  let db = null;
+  try {
+    db = new SqliteDb(dbPath);
+    configureDb(db);
+    const rows = db.pragma("quick_check");
+    if (!rows.every((row) => row.quick_check === "ok")) {
+      throw new Error("database disk image is malformed");
+    }
+    initTablesFn(db);
+    return db;
+  } catch (err) {
+    closeDb(db);
+    if (!isDbCorruptionError(err)) throw err;
+    logger.warn({ err, dbPath }, "DB appears corrupt on open; recovering");
+    recoverCorruptDb(dbPath);
+    db = new SqliteDb(dbPath);
+    configureDb(db);
+    const rows = db.pragma("quick_check");
+    if (!rows.every((row) => row.quick_check === "ok")) {
+      throw new Error("database disk image is malformed");
+    }
+    initTablesFn(db);
+    return db;
+  }
+}
+
+function replaceDb(state, initTablesFn) {
+  closeDb(state.db);
+  state.db = openDbWithRecovery(state.dbPath, initTablesFn);
+}
+
+function recoverStateAfterCorruption(state, initTablesFn, err) {
+  closeDb(state.db);
+  state.db = null;
+  logger.warn(
+    { err, dbPath: state.dbPath },
+    "DB corruption detected during query; recovering",
+  );
+  recoverCorruptDb(state.dbPath);
+  replaceDb(state, initTablesFn);
+}
+
+function withDbRecovery(state, initTablesFn, fn) {
+  try {
+    return fn();
+  } catch (err) {
+    if (!isDbCorruptionError(err)) throw err;
+    recoverStateAfterCorruption(state, initTablesFn, err);
+    return fn();
   }
 }
 
@@ -275,7 +466,7 @@ function migrateFromLegacyIfNeeded() {
 
   let legacy = null;
   try {
-    legacy = new _sql.Database(loadDbDataFromDisk(legacyDbPath));
+    legacy = openDbWithRecovery(legacyDbPath, () => {});
   } catch (err) {
     logger.warn(
       { err, legacyDbPath },
@@ -306,8 +497,7 @@ function migrateFromLegacyIfNeeded() {
         FROM chat_settings
       `,
       );
-      _settingsState.db.run("BEGIN TRANSACTION");
-      try {
+      runTransaction(_settingsState.db, () => {
         for (const row of chatSettingsRows) {
           _settingsState.db.run(
             `
@@ -332,12 +522,7 @@ function migrateFromLegacyIfNeeded() {
             ],
           );
         }
-        _settingsState.db.run("COMMIT");
-      } catch (err) {
-        _settingsState.db.run("ROLLBACK");
-        throw err;
-      }
-      if (chatSettingsRows.length > 0) saveDb(_settingsState);
+      });
       logger.info(
         { rows: chatSettingsRows.length },
         "Migrated legacy chat_settings to settings.db",
@@ -358,8 +543,7 @@ function migrateFromLegacyIfNeeded() {
         FROM llm_models
       `,
       );
-      _settingsState.db.run("BEGIN TRANSACTION");
-      try {
+      runTransaction(_settingsState.db, () => {
         for (const row of llmRows) {
           _settingsState.db.run(
             `
@@ -376,12 +560,7 @@ function migrateFromLegacyIfNeeded() {
             ],
           );
         }
-        _settingsState.db.run("COMMIT");
-      } catch (err) {
-        _settingsState.db.run("ROLLBACK");
-        throw err;
-      }
-      if (llmRows.length > 0) saveDb(_settingsState);
+      });
       logger.info(
         { rows: llmRows.length },
         "Migrated legacy llm_models to settings.db",
@@ -400,8 +579,7 @@ function migrateFromLegacyIfNeeded() {
         FROM chat_stats
       `,
       );
-      _statsState.db.run("BEGIN TRANSACTION");
-      try {
+      runTransaction(_statsState.db, () => {
         for (const row of statRows) {
           _statsState.db.run(
             `
@@ -417,12 +595,7 @@ function migrateFromLegacyIfNeeded() {
             ],
           );
         }
-        _statsState.db.run("COMMIT");
-      } catch (err) {
-        _statsState.db.run("ROLLBACK");
-        throw err;
-      }
-      if (statRows.length > 0) saveDb(_statsState);
+      });
       logger.info(
         { rows: statRows.length },
         "Migrated legacy chat_stats to stats.db",
@@ -441,8 +614,7 @@ function migrateFromLegacyIfNeeded() {
         FROM chat_user_stats
       `,
       );
-      _statsState.db.run("BEGIN TRANSACTION");
-      try {
+      runTransaction(_statsState.db, () => {
         for (const row of userRows) {
           _statsState.db.run(
             `
@@ -459,12 +631,7 @@ function migrateFromLegacyIfNeeded() {
             ],
           );
         }
-        _statsState.db.run("COMMIT");
-      } catch (err) {
-        _statsState.db.run("ROLLBACK");
-        throw err;
-      }
-      if (userRows.length > 0) saveDb(_statsState);
+      });
       logger.info(
         { rows: userRows.length },
         "Migrated legacy chat_user_stats to stats.db",
@@ -483,8 +650,7 @@ function migrateFromLegacyIfNeeded() {
         FROM chat_mutes
       `,
       );
-      _moderationState.db.run("BEGIN TRANSACTION");
-      try {
+      runTransaction(_moderationState.db, () => {
         for (const row of muteRows) {
           _moderationState.db.run(
             `
@@ -494,12 +660,7 @@ function migrateFromLegacyIfNeeded() {
             [row.chat_id, row.sender_ref, row.muted_at, row.duration_m],
           );
         }
-        _moderationState.db.run("COMMIT");
-      } catch (err) {
-        _moderationState.db.run("ROLLBACK");
-        throw err;
-      }
-      if (muteRows.length > 0) saveDb(_moderationState);
+      });
       logger.info(
         { rows: muteRows.length },
         "Migrated legacy chat_mutes to moderation.db",
@@ -507,6 +668,8 @@ function migrateFromLegacyIfNeeded() {
     }
   } catch (err) {
     logger.warn({ err }, "Legacy DB migration skipped due to error");
+  } finally {
+    closeDb(legacy);
   }
 }
 
@@ -519,59 +682,15 @@ async function init() {
   )
     return;
 
-  _sql = await initSqlJs();
-
   const settingsPath = getSettingsDbPath();
   const statsPath = getStatsDbPath();
   const moderationPath = getModerationDbPath();
   const subagentPath = getSubagentDbPath();
 
-  let settingsData = null;
-  let statsData = null;
-  let moderationData = null;
-  let subagentData = null;
-  try {
-    settingsData = loadDbDataFromDisk(settingsPath);
-  } catch (err) {
-    logger.warn(
-      { err, dbPath: settingsPath },
-      "Could not read settings DB, creating new",
-    );
-  }
-  try {
-    statsData = loadDbDataFromDisk(statsPath);
-  } catch (err) {
-    logger.warn(
-      { err, dbPath: statsPath },
-      "Could not read stats DB, creating new",
-    );
-  }
-  try {
-    moderationData = loadDbDataFromDisk(moderationPath);
-  } catch (err) {
-    logger.warn(
-      { err, dbPath: moderationPath },
-      "Could not read moderation DB, creating new",
-    );
-  }
-  try {
-    subagentData = loadDbDataFromDisk(subagentPath);
-  } catch (err) {
-    logger.warn(
-      { err, dbPath: subagentPath },
-      "Could not read subagent DB, creating new",
-    );
-  }
-
-  replaceDb(_settingsState, settingsData, initSettingsTables);
-  replaceDb(_statsState, statsData, initStatsTables);
-  replaceDb(_moderationState, moderationData, initModerationTables);
-  replaceDb(_subagentState, subagentData, initSubagentTables);
-  _settingsState.lastLoadedMtimeMs = getFileMtimeMs(settingsPath) || Date.now();
-  _statsState.lastLoadedMtimeMs = getFileMtimeMs(statsPath) || Date.now();
-  _moderationState.lastLoadedMtimeMs =
-    getFileMtimeMs(moderationPath) || Date.now();
-  _subagentState.lastLoadedMtimeMs = getFileMtimeMs(subagentPath) || Date.now();
+  replaceDb(_settingsState, initSettingsTables);
+  replaceDb(_statsState, initStatsTables);
+  replaceDb(_moderationState, initModerationTables);
+  replaceDb(_subagentState, initSubagentTables);
 
   migrateFromLegacyIfNeeded();
   migrateSubagentDbIntoSettings();
@@ -602,28 +721,26 @@ function migrateSubagentDbIntoSettings() {
   }
   if (!rows || rows.length === 0) return;
   let migrated = 0;
-  _settingsState.db.run("BEGIN TRANSACTION");
   try {
-    for (const row of rows) {
-      if (row.enabled !== 1) continue;
-      _settingsState.db.run(
-        `INSERT INTO chat_settings (chat_id, subagent_enabled, updated_at)
-         VALUES (?, 1, datetime('now'))
-         ON CONFLICT(chat_id) DO UPDATE SET
-           subagent_enabled = MAX(chat_settings.subagent_enabled, excluded.subagent_enabled),
-           updated_at = excluded.updated_at`,
-        [row.chat_id],
-      );
-      migrated += 1;
-    }
-    _settingsState.db.run("COMMIT");
+    runTransaction(_settingsState.db, () => {
+      for (const row of rows) {
+        if (row.enabled !== 1) continue;
+        _settingsState.db.run(
+          `INSERT INTO chat_settings (chat_id, subagent_enabled, updated_at)
+           VALUES (?, 1, datetime('now'))
+           ON CONFLICT(chat_id) DO UPDATE SET
+             subagent_enabled = MAX(chat_settings.subagent_enabled, excluded.subagent_enabled),
+             updated_at = excluded.updated_at`,
+          [row.chat_id],
+        );
+        migrated += 1;
+      }
+    });
   } catch (err) {
-    _settingsState.db.run("ROLLBACK");
     logger.warn({ err }, "subagent.db migration: rollback");
     return;
   }
   if (migrated > 0) {
-    saveDb(_settingsState);
     logger.info(
       { rows: migrated },
       "Migrated subagent.db rows into chat_settings.subagent_enabled",
@@ -632,43 +749,36 @@ function migrateSubagentDbIntoSettings() {
 }
 
 function runSettingsQuery(sql, ...params) {
-  refreshDbFromDiskIfChanged(_settingsState, initSettingsTables);
-  _settingsState.db.run(sql, params);
-}
-
-function runStatsQuery(sql, ...params) {
-  refreshDbFromDiskIfChanged(_statsState, initStatsTables);
-  _statsState.db.run(sql, params);
-}
-
-function runSubagentQuery(sql, ...params) {
-  refreshDbFromDiskIfChanged(_subagentState, initSubagentTables);
-  _subagentState.db.run(sql, params);
+  return withDbRecovery(_settingsState, initSettingsTables, () =>
+    _settingsState.db.run(sql, params),
+  );
 }
 
 function getOneFromState(state, initTablesFn, sql, ...params) {
-  refreshDbFromDiskIfChanged(state, initTablesFn);
-  const stmt = state.db.prepare(sql);
-  stmt.bind(params);
-  if (stmt.step()) {
-    const row = stmt.getAsObject();
+  return withDbRecovery(state, initTablesFn, () => {
+    const stmt = state.db.prepare(sql);
+    stmt.bind(params);
+    if (stmt.step()) {
+      const row = stmt.getAsObject();
+      stmt.free();
+      return row;
+    }
     stmt.free();
-    return row;
-  }
-  stmt.free();
-  return null;
+    return null;
+  });
 }
 
 function getAllFromState(state, initTablesFn, sql, ...params) {
-  refreshDbFromDiskIfChanged(state, initTablesFn);
-  const stmt = state.db.prepare(sql);
-  stmt.bind(params);
-  const results = [];
-  while (stmt.step()) {
-    results.push(stmt.getAsObject());
-  }
-  stmt.free();
-  return results;
+  return withDbRecovery(state, initTablesFn, () => {
+    const stmt = state.db.prepare(sql);
+    stmt.bind(params);
+    const results = [];
+    while (stmt.step()) {
+      results.push(stmt.getAsObject());
+    }
+    stmt.free();
+    return results;
+  });
 }
 
 function ensureChatRow(chatId) {
@@ -723,7 +833,6 @@ function setPrompt(chatId, prompt) {
     prompt,
     chatId,
   );
-  saveDb(_settingsState);
   logger.info({ chatId, promptLen: prompt?.length || 0 }, "DB set_prompt");
 }
 
@@ -740,7 +849,6 @@ function setPermission(chatId, level) {
     clamped,
     chatId,
   );
-  saveDb(_settingsState);
   logger.info({ chatId, level: clamped }, "DB set_permission");
 }
 
@@ -759,7 +867,6 @@ function setMode(chatId, mode) {
     mode,
     chatId,
   );
-  saveDb(_settingsState);
   logger.info({ chatId, mode }, "DB set_mode");
 }
 
@@ -783,13 +890,11 @@ function setTriggers(chatId, triggers) {
     raw,
     chatId,
   );
-  saveDb(_settingsState);
   logger.info({ chatId, triggers: raw }, "DB set_triggers");
 }
 
 function clearSettings(chatId) {
   runSettingsQuery("DELETE FROM chat_settings WHERE chat_id = ?", chatId);
-  saveDb(_settingsState);
   logger.info({ chatId }, "DB clear_settings");
 }
 
@@ -854,7 +959,6 @@ function setLlm2Model(chatId, modelId) {
     modelId,
     chatId,
   );
-  saveDb(_settingsState);
   logger.info({ chatId, modelId }, "DB set_llm2_model");
 }
 
@@ -913,7 +1017,6 @@ function addModel(
       sortOrder,
       visionSupport ? 1 : 0,
     );
-    saveDb(_settingsState);
     logger.info({ modelId, displayName, visionSupport }, "DB add_model");
     return true;
   } catch (err) {
@@ -965,7 +1068,6 @@ function updateModel(
     `UPDATE llm_models SET ${updates.join(", ")} WHERE model_id = ?`,
     ...values,
   );
-  saveDb(_settingsState);
   logger.info({ modelId }, "DB update_model");
   return true;
 }
@@ -990,7 +1092,6 @@ function deleteModel(modelId) {
     "UPDATE chat_settings SET llm2_model = NULL WHERE llm2_model = ?",
     modelId,
   );
-  saveDb(_settingsState);
   logger.info({ modelId, affectedChatIds }, "DB delete_model");
   return { success: true, affectedChatIds };
 }
@@ -1018,7 +1119,6 @@ function setOwnerContact(phoneNumber, displayName) {
     phoneNumber,
     displayName,
   );
-  saveDb(_settingsState);
   logger.info({ phoneNumber, displayName }, "DB set_owner_contact");
 }
 
@@ -1035,7 +1135,6 @@ function setSubagentEnabled(chatId, enabled) {
     value,
     chatId,
   );
-  saveDb(_settingsState);
   logger.info({ chatId, enabled: value }, "DB set_subagent_enabled");
 }
 
@@ -1044,7 +1143,6 @@ function setGlobalPrompt(prompt) {
     "UPDATE chat_settings SET prompt = ?, updated_at = datetime('now')",
     prompt,
   );
-  saveDb(_settingsState);
   logger.info({ promptLen: prompt?.length || 0 }, "DB set_global_prompt");
 }
 
@@ -1054,7 +1152,6 @@ function setGlobalPermission(level) {
     "UPDATE chat_settings SET permission = ?, updated_at = datetime('now')",
     clamped,
   );
-  saveDb(_settingsState);
   logger.info({ level: clamped }, "DB set_global_permission");
 }
 
@@ -1064,7 +1161,6 @@ function setGlobalMode(mode) {
     "UPDATE chat_settings SET mode = ?, updated_at = datetime('now')",
     mode,
   );
-  saveDb(_settingsState);
   logger.info({ mode }, "DB set_global_mode");
 }
 
@@ -1075,7 +1171,6 @@ function setGlobalTriggers(triggers) {
     "UPDATE chat_settings SET triggers = ?, updated_at = datetime('now')",
     raw,
   );
-  saveDb(_settingsState);
   logger.info({ triggers: raw }, "DB set_global_triggers");
 }
 
@@ -1084,7 +1179,6 @@ function setGlobalLlm2Model(modelId) {
     "UPDATE chat_settings SET llm2_model = ?, updated_at = datetime('now')",
     modelId,
   );
-  saveDb(_settingsState);
   logger.info({ modelId }, "DB set_global_llm2_model");
 }
 
@@ -1094,7 +1188,6 @@ function setGlobalSubagentEnabled(enabled) {
     "UPDATE chat_settings SET subagent_enabled = ?, updated_at = datetime('now')",
     value,
   );
-  saveDb(_settingsState);
   logger.info({ enabled: value }, "DB set_global_subagent_enabled");
 }
 
@@ -1114,7 +1207,6 @@ function setIdleTrigger(chatId, min, max) {
     max,
     chatId,
   );
-  saveDb(_settingsState);
   logger.info({ chatId, min, max }, "DB set_idle_trigger");
 }
 
@@ -1124,7 +1216,6 @@ function setGlobalIdleTrigger(min, max) {
     min,
     max,
   );
-  saveDb(_settingsState);
   logger.info({ min, max }, "DB set_global_idle_trigger");
 }
 
@@ -1171,6 +1262,7 @@ export {
   getIdleTrigger,
   setIdleTrigger,
   setGlobalIdleTrigger,
+  closeAllDbs,
   VALID_MODES,
   DEFAULT_MODE,
   VALID_TRIGGERS,
