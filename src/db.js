@@ -9,6 +9,19 @@ const DEFAULT_MODE = "prefix";
 const VALID_TRIGGERS = new Set(["tag", "reply", "join", "name"]);
 const DEFAULT_TRIGGERS = "tag,reply,name";
 const GLOBAL_CHAT_ID = "__global__";
+const SQLITE_BUSY_TIMEOUT_MS = parsePositiveIntEnv("DB_BUSY_TIMEOUT_MS", 30000);
+const SQLITE_OPERATION_RETRY_MAX = parsePositiveIntEnv(
+  "DB_OPERATION_RETRY_MAX",
+  8,
+);
+const SQLITE_OPERATION_RETRY_BASE_MS = parsePositiveIntEnv(
+  "DB_OPERATION_RETRY_BASE_MS",
+  50,
+);
+const SQLITE_RECOVERY_LOCK_STALE_MS = parsePositiveIntEnv(
+  "DB_RECOVERY_LOCK_STALE_MS",
+  120000,
+);
 
 const _settingsState = { db: null, dbPath: null };
 const _statsState = { db: null, dbPath: null };
@@ -24,7 +37,25 @@ const DB_CORRUPTION_TOKENS = [
   "database corruption",
 ];
 
+const DB_BUSY_TOKENS = [
+  "database is locked",
+  "database table is locked",
+  "database is busy",
+  "SQLITE_BUSY",
+  "SQLITE_LOCKED",
+];
+
 function noop() {}
+
+function parsePositiveIntEnv(name, fallback) {
+  const parsed = Number(process.env[name]);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.floor(parsed));
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
 
 function normalizeParams(params) {
   if (params === undefined || params === null) return [];
@@ -32,8 +63,9 @@ function normalizeParams(params) {
 }
 
 class SqliteStatement {
-  constructor(stmt) {
+  constructor(stmt, retryFn) {
     this.stmt = stmt;
+    this.retryFn = retryFn;
     this.params = [];
     this.rows = null;
     this.index = 0;
@@ -46,12 +78,16 @@ class SqliteStatement {
   }
 
   step() {
-    if (this.rows === null) this.rows = this.stmt.all(...this.params);
+    if (this.rows === null) {
+      this.rows = this.retryFn(() => this.stmt.all(...this.params));
+    }
     return this.index < this.rows.length;
   }
 
   getAsObject() {
-    if (this.rows === null) this.rows = this.stmt.all(...this.params);
+    if (this.rows === null) {
+      this.rows = this.retryFn(() => this.stmt.all(...this.params));
+    }
     const row = this.rows[this.index];
     this.index += 1;
     return row;
@@ -65,24 +101,32 @@ class SqliteStatement {
 class SqliteDb {
   constructor(dbPath, options = {}) {
     this.dbPath = dbPath;
-    this.native = new Database(dbPath, options);
+    this.native = new Database(dbPath, {
+      timeout: SQLITE_BUSY_TIMEOUT_MS,
+      ...options,
+    });
   }
 
   run(sql, params) {
-    const values = normalizeParams(params);
-    if (values.length === 0) {
-      this.native.exec(sql);
-      return;
-    }
-    this.native.prepare(sql).run(...values);
+    return retrySqliteOperation(() => {
+      const values = normalizeParams(params);
+      if (values.length === 0) {
+        this.native.exec(sql);
+        return;
+      }
+      this.native.prepare(sql).run(...values);
+    });
   }
 
   prepare(sql) {
-    return new SqliteStatement(this.native.prepare(sql));
+    return new SqliteStatement(
+      retrySqliteOperation(() => this.native.prepare(sql)),
+      retrySqliteOperation,
+    );
   }
 
   pragma(sql) {
-    return this.native.pragma(sql);
+    return retrySqliteOperation(() => this.native.pragma(sql));
   }
 
   close() {
@@ -106,7 +150,7 @@ function closeAllDbs() {
 }
 
 function runTransaction(db, fn) {
-  db.run("BEGIN TRANSACTION");
+  db.run("BEGIN IMMEDIATE");
   try {
     const result = fn();
     db.run("COMMIT");
@@ -156,11 +200,13 @@ function getSubagentDbPath() {
 
 function configureDb(db) {
   db.pragma("journal_mode = WAL");
-  db.pragma("synchronous = NORMAL");
-  db.pragma("busy_timeout = 5000");
+  db.pragma("synchronous = FULL");
+  db.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+  db.pragma("wal_autocheckpoint = 1000");
+  db.pragma("journal_size_limit = 67108864");
   db.pragma("temp_store = MEMORY");
   db.pragma("foreign_keys = ON");
-  db.pragma("cache_size = -2000");
+  db.pragma("cache_size = -4000");
 }
 
 function closeDb(db) {
@@ -175,6 +221,26 @@ function closeDb(db) {
 function isDbCorruptionError(err) {
   const msg = String(err?.message || err || "").toLowerCase();
   return DB_CORRUPTION_TOKENS.some((token) => msg.includes(token));
+}
+
+function isDbBusyError(err) {
+  const msg = String(err?.message || err?.code || err || "").toLowerCase();
+  return DB_BUSY_TOKENS.some((token) => msg.includes(token.toLowerCase()));
+}
+
+function retrySqliteOperation(fn) {
+  let attempt = 0;
+  while (true) {
+    try {
+      return fn();
+    } catch (err) {
+      if (!isDbBusyError(err) || attempt >= SQLITE_OPERATION_RETRY_MAX) {
+        throw err;
+      }
+      sleepSync(SQLITE_OPERATION_RETRY_BASE_MS * 2 ** attempt);
+      attempt += 1;
+    }
+  }
 }
 
 function backupCorruptFile(dbPath) {
@@ -215,24 +281,65 @@ function probeDb(dbPath) {
   }
 }
 
-function recoverCorruptDb(dbPath) {
-  for (const ext of ["-wal", "-shm", "-journal"]) {
-    const p = `${dbPath}${ext}`;
-    if (!fs.existsSync(p)) continue;
+function withRecoveryLock(dbPath, fn) {
+  const lockPath = `${dbPath}.recover.lock`;
+  const deadline = Date.now() + SQLITE_RECOVERY_LOCK_STALE_MS;
+  let fd = null;
+  while (fd === null) {
     try {
-      fs.unlinkSync(p);
-      logger.warn({ dbPath, file: p }, "DB recovery: removed stale journal file");
+      fd = fs.openSync(lockPath, "wx");
+      fs.writeFileSync(fd, `${process.pid}\n${new Date().toISOString()}\n`);
     } catch (err) {
-      logger.warn({ err, dbPath, file: p }, "DB recovery: journal cleanup failed");
+      if (err.code !== "EEXIST") throw err;
+      try {
+        const stat = fs.statSync(lockPath);
+        if (Date.now() - stat.mtimeMs > SQLITE_RECOVERY_LOCK_STALE_MS) {
+          fs.unlinkSync(lockPath);
+          continue;
+        }
+      } catch (statErr) {
+        if (statErr.code === "ENOENT") continue;
+        throw statErr;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`timed out waiting for DB recovery lock: ${lockPath}`);
+      }
+      sleepSync(50);
     }
   }
 
-  if (probeDb(dbPath)) {
-    logger.info({ dbPath }, "DB recovery: database usable after journal cleanup");
-    return;
+  try {
+    return fn();
+  } finally {
+    try {
+      if (fd !== null) fs.closeSync(fd);
+    } catch (err) {
+      noop(err);
+    }
+    try {
+      fs.unlinkSync(lockPath);
+    } catch (err) {
+      noop(err);
+    }
   }
+}
 
-  backupCorruptFile(dbPath);
+function recoverCorruptDb(dbPath) {
+  return withRecoveryLock(dbPath, () => {
+    if (probeDb(dbPath)) return;
+
+    for (const ext of ["-wal", "-shm", "-journal"]) {
+      const p = `${dbPath}${ext}`;
+      if (fs.existsSync(p)) backupCorruptFile(p);
+    }
+
+    if (probeDb(dbPath)) {
+      logger.info({ dbPath }, "DB recovery: database usable after sidecar quarantine");
+      return;
+    }
+
+    backupCorruptFile(dbPath);
+  });
 }
 
 function openDbWithRecovery(dbPath, initTablesFn) {
