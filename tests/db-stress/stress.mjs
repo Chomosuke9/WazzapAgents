@@ -9,8 +9,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '../..');
 const workerDir = path.join(rootDir, 'tests/db-stress');
-const nodeWorkerPath = path.join(workerDir, 'node-worker.mjs');
-const pythonWorkerPath = path.join(workerDir, 'python_worker.py');
+
+const workerPaths = {
+  node: path.join(workerDir, 'node-worker.mjs'),
+  python: path.join(workerDir, 'python_worker.py'),
+  clearSettings: path.join(workerDir, 'clear-settings-worker.mjs'),
+  concurrentInit: path.join(workerDir, 'concurrent-init-worker.mjs'),
+  xprocNode: path.join(workerDir, 'xproc-verify-worker.mjs'),
+  xprocPython: path.join(workerDir, 'xproc-verify-python.py'),
+};
 
 const pythonBin = process.env.PYTHON || process.env.PYTHON_BIN || 'python3';
 const nodeWorkers = Number(process.env.STRESS_NODE_WORKERS || '4');
@@ -85,7 +92,7 @@ async function runConcurrentWorkers(dataDir) {
     jobs.push(
       runChild(
         process.execPath,
-        [nodeWorkerPath],
+        [workerPaths.node],
         stressEnv(dataDir, { WORKER_ID: String(i) }),
         `node-${i}`,
       ),
@@ -95,7 +102,7 @@ async function runConcurrentWorkers(dataDir) {
     jobs.push(
       runChild(
         pythonBin,
-        [pythonWorkerPath],
+        [workerPaths.python],
         stressEnv(dataDir, { WORKER_ID: String(i + nodeWorkers) }),
         `python-${i}`,
       ),
@@ -130,6 +137,11 @@ function verifyStressData(dataDir) {
   assertIntegrity(paths.moderation, ['chat_mutes']);
 }
 
+function verifySettingsOnly(dataDir) {
+  const paths = dbPaths(dataDir);
+  assertIntegrity(paths.settings, ['chat_settings', 'llm_models']);
+}
+
 async function runCorruptionRecoveryCheck() {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazzap-db-corrupt-'));
   const paths = dbPaths(dataDir);
@@ -137,8 +149,8 @@ async function runCorruptionRecoveryCheck() {
   await Promise.all(Object.values(paths).map((dbPath) => fs.writeFile(dbPath, 'not a sqlite database')));
 
   await Promise.all([
-    runChild(process.execPath, [nodeWorkerPath], stressEnv(dataDir, { WORKER_ID: '1000', STRESS_ITERATIONS: '16' }), 'recovery-node'),
-    runChild(pythonBin, [pythonWorkerPath], stressEnv(dataDir, { WORKER_ID: '2000', STRESS_ITERATIONS: '16' }), 'recovery-python'),
+    runChild(process.execPath, [workerPaths.node], stressEnv(dataDir, { WORKER_ID: '1000', STRESS_ITERATIONS: '16' }), 'recovery-node'),
+    runChild(pythonBin, [workerPaths.python], stressEnv(dataDir, { WORKER_ID: '2000', STRESS_ITERATIONS: '16' }), 'recovery-python'),
   ]);
 
   verifyStressData(dataDir);
@@ -153,13 +165,187 @@ async function runCorruptionRecoveryCheck() {
   if (!backups.every(Boolean)) throw new Error('corrupt database backups were not preserved for every DB');
 }
 
+// ---------------------------------------------------------------------------
+// New test: concurrent clearSettings — interleaved writes and clears on the
+// same chat IDs from multiple Node workers.
+// ---------------------------------------------------------------------------
+async function runClearSettingsStress() {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazzap-db-clear-'));
+  const clearWorkers = Math.min(nodeWorkers, 4);
+  const clearIters = Math.min(iterations, 60);
+  const clearChats = Math.min(chatCount, 12);
+
+  await initSchema(dataDir);
+
+  const jobs = [];
+  for (let i = 0; i < clearWorkers; i += 1) {
+    jobs.push(
+      runChild(
+        process.execPath,
+        [workerPaths.clearSettings],
+        stressEnv(dataDir, {
+          WORKER_ID: String(i),
+          STRESS_ITERATIONS: String(clearIters),
+          STRESS_CHAT_COUNT: String(clearChats),
+        }),
+        `clear-${i}`,
+      ),
+    );
+  }
+  await Promise.all(jobs);
+  verifySettingsOnly(dataDir);
+  console.log('  clear-settings stress test passed');
+}
+
+// ---------------------------------------------------------------------------
+// New test: concurrent init() — multiple processes initialising the same DBs
+// at the same time. Exercises the INSERT OR IGNORE fix in ensureChatRow.
+// ---------------------------------------------------------------------------
+async function runConcurrentInitStress() {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazzap-db-init-'));
+  // Do NOT call initSchema() here — we want all workers to race on init().
+  const initWorkers = Math.min(nodeWorkers, 4);
+  const initIters = Math.min(iterations, 30);
+
+  const jobs = [];
+  for (let i = 0; i < initWorkers; i += 1) {
+    jobs.push(
+      runChild(
+        process.execPath,
+        [workerPaths.concurrentInit],
+        stressEnv(dataDir, {
+          WORKER_ID: String(i),
+          STRESS_ITERATIONS: String(initIters),
+        }),
+        `init-${i}`,
+      ),
+    );
+  }
+  await Promise.all(jobs);
+  verifySettingsOnly(dataDir);
+  console.log('  concurrent-init stress test passed');
+}
+
+// ---------------------------------------------------------------------------
+// New test: cross-process read-after-write verification — Node and Python
+// workers write to shared chat IDs and immediately read back to verify
+// WAL-mode consistency.
+// ---------------------------------------------------------------------------
+async function runCrossProcessVerifyStress() {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazzap-db-xproc-'));
+  const xprocIters = Math.min(iterations, 30);
+  const xprocChats = Math.min(chatCount, 12);
+
+  await initSchema(dataDir);
+
+  const xprocNodeW = Math.min(nodeWorkers, 2);
+  const xprocPythonW = Math.min(pythonWorkers, 2);
+
+  const jobs = [];
+  for (let i = 0; i < xprocNodeW; i += 1) {
+    jobs.push(
+      runChild(
+        process.execPath,
+        [workerPaths.xprocNode],
+        stressEnv(dataDir, {
+          WORKER_ID: String(i),
+          STRESS_ITERATIONS: String(xprocIters),
+          STRESS_CHAT_COUNT: String(xprocChats),
+        }),
+        `xproc-node-${i}`,
+      ),
+    );
+  }
+  for (let i = 0; i < xprocPythonW; i += 1) {
+    jobs.push(
+      runChild(
+        pythonBin,
+        [workerPaths.xprocPython],
+        stressEnv(dataDir, {
+          WORKER_ID: String(i + xprocNodeW),
+          STRESS_ITERATIONS: String(xprocIters),
+          STRESS_CHAT_COUNT: String(xprocChats),
+        }),
+        `xproc-python-${i}`,
+      ),
+    );
+  }
+  await Promise.all(jobs);
+  verifySettingsOnly(dataDir);
+  console.log('  cross-process verify stress test passed');
+}
+
+// ---------------------------------------------------------------------------
+// New test: WAL sidecar cleanup — verify that no stale -wal/-shm files
+// remain after clean shutdowns.
+// ---------------------------------------------------------------------------
+async function runWalCleanShutdownCheck() {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'wazzap-db-wal-'));
+  await initSchema(dataDir);
+
+  // Run a single worker to write data, then verify no sidecar files after close
+  await runChild(
+    process.execPath,
+    [workerPaths.node],
+    stressEnv(dataDir, { WORKER_ID: '0', STRESS_ITERATIONS: '20' }),
+    'wal-worker',
+  );
+
+  const paths = dbPaths(dataDir);
+  for (const dbPath of Object.values(paths)) {
+    const walPath = `${dbPath}-wal`;
+    const shmPath = `${dbPath}-shm`;
+    // After clean shutdown the WAL should be checkpointed, but a 0-byte wal
+    // file might still exist (SQLite keeps it around in WAL mode). It should
+    // NOT contain any large uncheckpointed data.
+    try {
+      const walStat = await fs.stat(walPath);
+      // A WAL file larger than 1MB after clean shutdown is suspicious
+      if (walStat.size > 1024 * 1024) {
+        throw new Error(`${walPath} is ${walStat.size} bytes after clean shutdown — WAL not checkpointed`);
+      }
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+      // No WAL file is fine
+    }
+    try {
+      const shmStat = await fs.stat(shmPath);
+      if (shmStat.size > 1024 * 1024) {
+        throw new Error(`${shmPath} is ${shmStat.size} bytes after clean shutdown — SHM too large`);
+      }
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+  }
+  console.log('  WAL clean shutdown check passed');
+}
+
+// ===========================================================================
+// Main test runner
+// ===========================================================================
 const dataDir = process.env.DB_STRESS_DATA_DIR || await fs.mkdtemp(path.join(os.tmpdir(), 'wazzap-db-stress-'));
 await fs.mkdir(dataDir, { recursive: true });
 console.log(`database stress data dir: ${dataDir}`);
 console.log(`workers: node=${nodeWorkers} python=${pythonWorkers} iterations=${iterations} chats=${chatCount}`);
 
+console.log('\n[1/6] basic concurrent read/write stress test');
 await initSchema(dataDir);
 await runConcurrentWorkers(dataDir);
 verifyStressData(dataDir);
+
+console.log('\n[2/6] corruption recovery stress test');
 await runCorruptionRecoveryCheck();
-console.log('database stress test passed');
+
+console.log('\n[3/6] concurrent clearSettings stress test');
+await runClearSettingsStress();
+
+console.log('\n[4/6] concurrent init() stress test');
+await runConcurrentInitStress();
+
+console.log('\n[5/6] cross-process read-after-write stress test');
+await runCrossProcessVerifyStress();
+
+console.log('\n[6/6] WAL clean shutdown check');
+await runWalCleanShutdownCheck();
+
+console.log('\n✅ all database stress tests passed');

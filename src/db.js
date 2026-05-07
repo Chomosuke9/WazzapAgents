@@ -914,24 +914,18 @@ function getAllFromState(state, initTablesFn, sql, ...params) {
 
 function ensureChatRow(chatId) {
   if (chatId === GLOBAL_CHAT_ID) return;
-  const existing = getOneFromState(
-    _settingsState,
-    initSettingsTables,
-    "SELECT 1 FROM chat_settings WHERE chat_id = ?",
+  // Use INSERT OR IGNORE to avoid UNIQUE constraint violations when concurrent
+  // workers (Node + Python) both observe the row is missing and try to insert.
+  runSettingsQuery(
+    `INSERT OR IGNORE INTO chat_settings
+      (chat_id, prompt, permission, mode, triggers, llm2_model,
+       subagent_enabled, idle_trigger_min, idle_trigger_max, updated_at)
+    SELECT ?, prompt, permission, mode, triggers, llm2_model,
+           subagent_enabled, idle_trigger_min, idle_trigger_max, datetime('now')
+    FROM chat_settings WHERE chat_id = ?`,
     chatId,
+    GLOBAL_CHAT_ID,
   );
-  if (!existing) {
-    runSettingsQuery(
-      `INSERT INTO chat_settings
-        (chat_id, prompt, permission, mode, triggers, llm2_model,
-         subagent_enabled, idle_trigger_min, idle_trigger_max, updated_at)
-      SELECT ?, prompt, permission, mode, triggers, llm2_model,
-             subagent_enabled, idle_trigger_min, idle_trigger_max, datetime('now')
-      FROM chat_settings WHERE chat_id = ?`,
-      chatId,
-      GLOBAL_CHAT_ID,
-    );
-  }
 }
 
 function getSettingRow(chatId) {

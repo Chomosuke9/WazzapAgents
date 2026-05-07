@@ -178,7 +178,7 @@ def _probe_db(db_path: Path) -> bool:
   if not db_path.exists():
     return True
   try:
-    test_conn = sqlite3.connect(str(db_path), timeout=DB_BUSY_TIMEOUT_SECONDS)
+    test_conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True, timeout=DB_BUSY_TIMEOUT_SECONDS)
     try:
       rows = test_conn.execute('PRAGMA integrity_check').fetchall()
     finally:
@@ -417,11 +417,15 @@ def _db_resilient(db_kind: str) -> Callable[[_F], _F]:
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):  # type: ignore[no-untyped-def]
       attempt = 0
+      corruption_retries = 0
       while True:
         try:
           return fn(*args, **kwargs)
         except sqlite3.DatabaseError as exc:
           if _is_db_corruption_error(exc):
+            if corruption_retries >= 1:
+              raise
+            corruption_retries += 1
             logger.warning(
               'DB %s: corruption detected in %s (%s); dropping connection and recovering',
               db_kind, fn.__name__, exc,
@@ -433,9 +437,9 @@ def _db_resilient(db_kind: str) -> Callable[[_F], _F]:
               logger.error('DB %s: recovery failed: %s', db_kind, recover_err)
               raise exc from recover_err
             _clear_caches_for(db_kind)
-            # Fall through into the retry loop instead of returning, so a
-            # transient busy/locked error on the post-recovery call is itself
-            # retried with backoff rather than bubbling up immediately.
+            # Reset the busy-retry counter after a fresh recovery so the
+            # post-recovery call gets a full backoff budget.
+            attempt = 0
             continue
           if not _is_db_busy_error(exc) or attempt >= DB_OPERATION_RETRY_MAX:
             raise
@@ -600,25 +604,23 @@ def _ensure_chat_row(chat_id: str) -> None:
 
   This prevents INSERT...ON CONFLICT from creating rows with SQL column defaults
   that shadow the __global__ fallback row with wrong values.
+  Uses INSERT OR IGNORE to avoid UNIQUE constraint violations when concurrent
+  workers (Node + Python) both observe the row is missing and try to insert.
   """
   if chat_id == GLOBAL_CHAT_ID:
     return
   conn = _get_settings_conn()
-  existing = conn.execute(
-    'SELECT 1 FROM chat_settings WHERE chat_id = ?', (chat_id,)
-  ).fetchone()
-  if existing is None:
-    conn.execute(
-      """
-      INSERT INTO chat_settings
-        (chat_id, prompt, permission, mode, triggers, llm2_model,
-         subagent_enabled, idle_trigger_min, idle_trigger_max, updated_at)
-      SELECT ?, prompt, permission, mode, triggers, llm2_model,
-             subagent_enabled, idle_trigger_min, idle_trigger_max, datetime('now')
-      FROM chat_settings WHERE chat_id = ?
-      """,
-      (chat_id, GLOBAL_CHAT_ID),
-    )
+  conn.execute(
+    """
+    INSERT OR IGNORE INTO chat_settings
+      (chat_id, prompt, permission, mode, triggers, llm2_model,
+       subagent_enabled, idle_trigger_min, idle_trigger_max, updated_at)
+    SELECT ?, prompt, permission, mode, triggers, llm2_model,
+           subagent_enabled, idle_trigger_min, idle_trigger_max, datetime('now')
+    FROM chat_settings WHERE chat_id = ?
+    """,
+    (chat_id, GLOBAL_CHAT_ID),
+  )
 
 
 def _get_setting_row(chat_id: str) -> Optional[sqlite3.Row]:
