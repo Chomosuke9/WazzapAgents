@@ -201,7 +201,22 @@ class _RecoveryLock:
     while self.fd is None:
       try:
         self.fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(self.fd, f'{os.getpid()}\n{time.time()}\n'.encode())
+        try:
+          os.write(self.fd, f'{os.getpid()}\n{time.time()}\n'.encode())
+        except OSError:
+          # Don't leak the fd or the lock file if the write itself fails
+          # (e.g. ENOSPC). __exit__ is not called when __enter__ raises, so
+          # clean up explicitly.
+          try:
+            os.close(self.fd)
+          except OSError:
+            pass
+          self.fd = None
+          try:
+            self.lock_path.unlink()
+          except FileNotFoundError:
+            pass
+          raise
       except FileExistsError:
         try:
           age = time.time() - self.lock_path.stat().st_mtime
@@ -266,7 +281,7 @@ def _new_conn(db_path: Path) -> sqlite3.Connection:
     conn.execute('PRAGMA cache_size=-4000')
     row = conn.execute('PRAGMA quick_check').fetchone()
     if row is None or row[0] != 'ok':
-      raise sqlite3.DatabaseError(f'database quick_check failed: {row[0] if row else "empty"}')
+      raise sqlite3.DatabaseError(f'database disk image is malformed (quick_check: {row[0] if row else "empty"})')
 
   conn: sqlite3.Connection | None = None
   try:

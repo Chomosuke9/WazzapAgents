@@ -295,7 +295,25 @@ function withRecoveryLock(dbPath, fn) {
   while (fd === null) {
     try {
       fd = fs.openSync(lockPath, "wx");
-      fs.writeFileSync(fd, `${process.pid}\n${new Date().toISOString()}\n`);
+      try {
+        fs.writeFileSync(fd, `${process.pid}\n${new Date().toISOString()}\n`);
+      } catch (writeErr) {
+        // Don't leak the fd or the lock file if the write itself fails
+        // (e.g. ENOSPC). Close + unlink so peers aren't blocked until the
+        // staleness window elapses.
+        try {
+          fs.closeSync(fd);
+        } catch (closeErr) {
+          noop(closeErr);
+        }
+        fd = null;
+        try {
+          fs.unlinkSync(lockPath);
+        } catch (unlinkErr) {
+          noop(unlinkErr);
+        }
+        throw writeErr;
+      }
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
       try {
