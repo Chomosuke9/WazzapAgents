@@ -1,6 +1,6 @@
 import logger from './logger.js';
 import wsClient from './wsClient.js';
-import { init as dbInit } from './db.js';
+import { init as dbInit, closeAllDbs } from './db.js';
 import {
   startWhatsApp,
   sendOutgoing,
@@ -224,8 +224,23 @@ async function bootstrap() {
   wsClient.connect();
 }
 
+let shuttingDown = false;
+
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info({ signal }, 'shutting down');
+  closeAllDbs();
+  process.exit(0);
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => shutdown(signal));
+}
+
 bootstrap().catch((err) => {
   logger.error({ err }, 'bootstrap failed');
+  closeAllDbs();
   process.exit(1);
 });
 

@@ -103,7 +103,7 @@ src/
 ├── participants.js       ← Mapping role partisipan, cache nama
 ├── groupContext.js       ← Cache metadata grup
 ├── caches.js             ← In-memory caches (message, metadata, nama)
-├── db.js                 ← SQLite via sql.js (settings, models, stats)
+├── db.js                 ← SQLite via better-sqlite3 (settings, models, stats)
 └── wa/
     ├── connection.js     ← Koneksi WhatsApp, lifecycle, button handler
     ├── inbound.js        ← Normalisasi pesan masuk → payload

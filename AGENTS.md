@@ -52,7 +52,7 @@ src/                          Node.js gateway runtime
   config.js                   Env parsing, runtime paths (data/auth, data/media, etc.)
   logger.js                   Structured pino logger
   utils.js                    Text normalization, ID helpers
-  db.js                       SQLite via sql.js: read settings, models, stats
+  db.js                       SQLite via better-sqlite3: settings, models, stats
   caches.js                   In-memory LRU caches: groups, messages, participants
   mediaHandler.js             Media download from Baileys, validation, path resolution
   messageParser.js            Baileys message unwrapping (viewOnce, interactive, buttons)
