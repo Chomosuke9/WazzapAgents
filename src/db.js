@@ -22,6 +22,13 @@ const SQLITE_RECOVERY_LOCK_STALE_MS = parsePositiveIntEnv(
   "DB_RECOVERY_LOCK_STALE_MS",
   120000,
 );
+// Deadline waiting *for* the lock is independent of the staleness window so a
+// legitimately slow recovery isn't both still-running and considered stale at
+// the same moment.
+const SQLITE_RECOVERY_LOCK_WAIT_MS = parsePositiveIntEnv(
+  "DB_RECOVERY_LOCK_WAIT_MS",
+  SQLITE_RECOVERY_LOCK_STALE_MS * 2,
+);
 
 const _settingsState = { db: null, dbPath: null };
 const _statsState = { db: null, dbPath: null };
@@ -283,7 +290,7 @@ function probeDb(dbPath) {
 
 function withRecoveryLock(dbPath, fn) {
   const lockPath = `${dbPath}.recover.lock`;
-  const deadline = Date.now() + SQLITE_RECOVERY_LOCK_STALE_MS;
+  const deadline = Date.now() + SQLITE_RECOVERY_LOCK_WAIT_MS;
   let fd = null;
   while (fd === null) {
     try {
@@ -308,9 +315,26 @@ function withRecoveryLock(dbPath, fn) {
     }
   }
 
+  // Refresh the lock's mtime periodically while we hold it so peers don't
+  // mistake an in-progress recovery for a stale lock and steal it.
+  const heartbeatMs = Math.max(
+    1000,
+    Math.floor(SQLITE_RECOVERY_LOCK_STALE_MS / 4),
+  );
+  const heartbeat = setInterval(() => {
+    try {
+      const now = new Date();
+      fs.utimesSync(lockPath, now, now);
+    } catch (err) {
+      noop(err);
+    }
+  }, heartbeatMs);
+  if (typeof heartbeat.unref === "function") heartbeat.unref();
+
   try {
     return fn();
   } finally {
+    clearInterval(heartbeat);
     try {
       if (fd !== null) fs.closeSync(fd);
     } catch (err) {

@@ -57,16 +57,36 @@ VALID_TRIGGERS = {'tag', 'reply', 'join', 'name'}
 DEFAULT_TRIGGERS = 'tag,reply,name'
 DEFAULT_SUBAGENT_ENABLED = False
 GLOBAL_CHAT_ID = '__global__'
-DB_BUSY_TIMEOUT_SECONDS = max(1.0, float(os.getenv('DB_BUSY_TIMEOUT_SECONDS', '30')))
+def _env_float(name: str, default: float, minimum: float) -> float:
+  raw = os.getenv(name)
+  if raw is None or not raw.strip():
+    return max(minimum, default)
+  try:
+    return max(minimum, float(raw))
+  except (TypeError, ValueError):
+    return max(minimum, default)
+
+
+def _env_int(name: str, default: int, minimum: int) -> int:
+  raw = os.getenv(name)
+  if raw is None or not raw.strip():
+    return max(minimum, default)
+  try:
+    return max(minimum, int(float(raw)))
+  except (TypeError, ValueError):
+    return max(minimum, default)
+
+
+DB_BUSY_TIMEOUT_SECONDS = _env_float('DB_BUSY_TIMEOUT_SECONDS', 30.0, 1.0)
 DB_BUSY_TIMEOUT_MS = int(DB_BUSY_TIMEOUT_SECONDS * 1000)
-DB_OPERATION_RETRY_MAX = max(1, int(os.getenv('DB_OPERATION_RETRY_MAX', '8')))
-DB_OPERATION_RETRY_BASE_SECONDS = max(
-  0.001,
-  float(os.getenv('DB_OPERATION_RETRY_BASE_SECONDS', '0.05')),
-)
-DB_RECOVERY_LOCK_STALE_SECONDS = max(
-  1.0,
-  float(os.getenv('DB_RECOVERY_LOCK_STALE_SECONDS', '120')),
+DB_OPERATION_RETRY_MAX = _env_int('DB_OPERATION_RETRY_MAX', 8, 1)
+DB_OPERATION_RETRY_BASE_SECONDS = _env_float('DB_OPERATION_RETRY_BASE_SECONDS', 0.05, 0.001)
+DB_RECOVERY_LOCK_STALE_SECONDS = _env_float('DB_RECOVERY_LOCK_STALE_SECONDS', 120.0, 1.0)
+# Deadline waiting *for* the lock is independent of the staleness window, so a
+# legitimately slow recovery isn't both still-running and considered stale at
+# the same moment.
+DB_RECOVERY_LOCK_WAIT_SECONDS = _env_float(
+  'DB_RECOVERY_LOCK_WAIT_SECONDS', DB_RECOVERY_LOCK_STALE_SECONDS * 2, 1.0,
 )
 
 # Sentinel to distinguish "we looked it up and it was NULL/missing" from
@@ -177,7 +197,7 @@ class _RecoveryLock:
     self.fd: int | None = None
 
   def __enter__(self):  # type: ignore[no-untyped-def]
-    deadline = time.monotonic() + DB_RECOVERY_LOCK_STALE_SECONDS
+    deadline = time.monotonic() + DB_RECOVERY_LOCK_WAIT_SECONDS
     while self.fd is None:
       try:
         self.fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
@@ -195,6 +215,13 @@ class _RecoveryLock:
         time.sleep(0.05)
     return self
 
+  def heartbeat(self) -> None:
+    """Refresh the lock's mtime so peers don't consider it stale."""
+    try:
+      os.utime(self.lock_path, None)
+    except FileNotFoundError:
+      pass
+
   def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
     if self.fd is not None:
       os.close(self.fd)
@@ -207,14 +234,16 @@ class _RecoveryLock:
 
 def _recover_corrupt_db(db_path: Path) -> None:
   """Attempt to recover a corrupt SQLite database without deleting evidence."""
-  with _RecoveryLock(db_path):
+  with _RecoveryLock(db_path) as lock:
     if _probe_db(db_path):
       return
+    lock.heartbeat()
 
     for ext in ('-wal', '-shm', '-journal'):
       p = db_path.with_name(db_path.name + ext)
       if p.exists():
         _backup_corrupt_file(p)
+    lock.heartbeat()
 
     if _probe_db(db_path):
       logger.info('DB recovery: %s recovered after sidecar quarantine', db_path.name)
@@ -320,14 +349,15 @@ def _cached_connection(db_kind: str) -> sqlite3.Connection | None:
 
 
 def _clear_cached_connection(db_kind: str) -> None:
-  if db_kind == 'settings':
-    _LOCAL.settings_conn = None
-  elif db_kind == 'stats':
-    _LOCAL.stats_conn = None
-  elif db_kind == 'moderation':
-    _LOCAL.moderation_conn = None
-  else:
+  attr = {
+    'settings': 'settings_conn',
+    'stats': 'stats_conn',
+    'moderation': 'moderation_conn',
+  }.get(db_kind)
+  if attr is None:
     raise ValueError(f'unknown db_kind: {db_kind}')
+  if hasattr(_LOCAL, attr):
+    setattr(_LOCAL, attr, None)
 
 
 def _resolve_path_for(db_kind: str) -> Path:
@@ -401,9 +431,12 @@ def _db_resilient(db_kind: str) -> Callable[[_F], _F]:
               _recover_corrupt_db(_resolve_path_for(db_kind))
             except Exception as recover_err:
               logger.error('DB %s: recovery failed: %s', db_kind, recover_err)
-              raise exc
+              raise exc from recover_err
             _clear_caches_for(db_kind)
-            return fn(*args, **kwargs)
+            # Fall through into the retry loop instead of returning, so a
+            # transient busy/locked error on the post-recovery call is itself
+            # retried with backoff rather than bubbling up immediately.
+            continue
           if not _is_db_busy_error(exc) or attempt >= DB_OPERATION_RETRY_MAX:
             raise
           _rollback_cached_connection(db_kind)

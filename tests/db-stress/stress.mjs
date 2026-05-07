@@ -12,6 +12,7 @@ const workerDir = path.join(rootDir, 'tests/db-stress');
 const nodeWorkerPath = path.join(workerDir, 'node-worker.mjs');
 const pythonWorkerPath = path.join(workerDir, 'python_worker.py');
 
+const pythonBin = process.env.PYTHON || process.env.PYTHON_BIN || 'python3';
 const nodeWorkers = Number(process.env.STRESS_NODE_WORKERS || '4');
 const pythonWorkers = Number(process.env.STRESS_PYTHON_WORKERS || '4');
 const iterations = Number(process.env.STRESS_ITERATIONS || '120');
@@ -93,7 +94,7 @@ async function runConcurrentWorkers(dataDir) {
   for (let i = 0; i < pythonWorkers; i += 1) {
     jobs.push(
       runChild(
-        'python3',
+        pythonBin,
         [pythonWorkerPath],
         stressEnv(dataDir, { WORKER_ID: String(i + nodeWorkers) }),
         `python-${i}`,
@@ -137,7 +138,7 @@ async function runCorruptionRecoveryCheck() {
 
   await Promise.all([
     runChild(process.execPath, [nodeWorkerPath], stressEnv(dataDir, { WORKER_ID: '1000', STRESS_ITERATIONS: '16' }), 'recovery-node'),
-    runChild('python3', [pythonWorkerPath], stressEnv(dataDir, { WORKER_ID: '2000', STRESS_ITERATIONS: '16' }), 'recovery-python'),
+    runChild(pythonBin, [pythonWorkerPath], stressEnv(dataDir, { WORKER_ID: '2000', STRESS_ITERATIONS: '16' }), 'recovery-python'),
   ]);
 
   verifyStressData(dataDir);
