@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "node src/index.js",
     "start": "node src/index.js",
-    "lint": "echo \"lint not configured\""
+    "lint": "echo \"lint not configured\"",
+    "stress:db": "node tests/db-stress/stress.mjs"
   },
   "keywords": [
     "whatsapp",

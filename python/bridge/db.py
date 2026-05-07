@@ -57,6 +57,37 @@ VALID_TRIGGERS = {'tag', 'reply', 'join', 'name'}
 DEFAULT_TRIGGERS = 'tag,reply,name'
 DEFAULT_SUBAGENT_ENABLED = False
 GLOBAL_CHAT_ID = '__global__'
+def _env_float(name: str, default: float, minimum: float) -> float:
+  raw = os.getenv(name)
+  if raw is None or not raw.strip():
+    return max(minimum, default)
+  try:
+    return max(minimum, float(raw))
+  except (TypeError, ValueError):
+    return max(minimum, default)
+
+
+def _env_int(name: str, default: int, minimum: int) -> int:
+  raw = os.getenv(name)
+  if raw is None or not raw.strip():
+    return max(minimum, default)
+  try:
+    return max(minimum, int(float(raw)))
+  except (TypeError, ValueError):
+    return max(minimum, default)
+
+
+DB_BUSY_TIMEOUT_SECONDS = _env_float('DB_BUSY_TIMEOUT_SECONDS', 30.0, 1.0)
+DB_BUSY_TIMEOUT_MS = int(DB_BUSY_TIMEOUT_SECONDS * 1000)
+DB_OPERATION_RETRY_MAX = _env_int('DB_OPERATION_RETRY_MAX', 8, 1)
+DB_OPERATION_RETRY_BASE_SECONDS = _env_float('DB_OPERATION_RETRY_BASE_SECONDS', 0.05, 0.001)
+DB_RECOVERY_LOCK_STALE_SECONDS = _env_float('DB_RECOVERY_LOCK_STALE_SECONDS', 120.0, 1.0)
+# Deadline waiting *for* the lock is independent of the staleness window, so a
+# legitimately slow recovery isn't both still-running and considered stale at
+# the same moment.
+DB_RECOVERY_LOCK_WAIT_SECONDS = _env_float(
+  'DB_RECOVERY_LOCK_WAIT_SECONDS', DB_RECOVERY_LOCK_STALE_SECONDS * 2, 1.0,
+)
 
 # Sentinel to distinguish "we looked it up and it was NULL/missing" from
 # "we haven't looked it up yet".
@@ -115,19 +146,15 @@ def _resolve_moderation_db_path() -> Path:
 
 
 def _backup_corrupt_file(db_path: Path) -> Optional[Path]:
-  """Move a corrupt DB file aside as ``<name>.corrupted[.N].bak``.
-
-  Returns the backup path on success, ``None`` if the file could not even be
-  renamed (in which case it is deleted as a last resort).
-  """
+  """Move a corrupt DB file aside as ``<name>.corrupted[.N].bak``."""
   if not db_path.exists():
     return None
-  backup = db_path.with_suffix(db_path.suffix + '.corrupted.bak')
+  backup = db_path.with_name(db_path.name + '.corrupted.bak')
   if backup.exists():
     i = 1
-    while backup.with_suffix(f'.corrupted.{i}.bak').exists():
+    while db_path.with_name(f'{db_path.name}.corrupted.{i}.bak').exists():
       i += 1
-    backup = backup.with_suffix(f'.corrupted.{i}.bak')
+    backup = db_path.with_name(f'{db_path.name}.corrupted.{i}.bak')
   try:
     db_path.rename(backup)
     logger.warning('DB recovery: corrupt %s renamed to %s', db_path.name, backup.name)
@@ -148,8 +175,10 @@ def _probe_db(db_path: Path) -> bool:
   Returns ``True`` iff SQLite reports the file as ``ok``. Any error or any
   non-``ok`` result is treated as corruption.
   """
+  if not db_path.exists():
+    return True
   try:
-    test_conn = sqlite3.connect(str(db_path), timeout=5)
+    test_conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True, timeout=DB_BUSY_TIMEOUT_SECONDS)
     try:
       rows = test_conn.execute('PRAGMA integrity_check').fetchall()
     finally:
@@ -162,66 +191,107 @@ def _probe_db(db_path: Path) -> bool:
     return False
 
 
-def _recover_corrupt_db(db_path: Path) -> None:
-  """Attempt to recover a corrupt SQLite database in two stages.
+class _RecoveryLock:
+  def __init__(self, db_path: Path):
+    self.lock_path = db_path.with_name(db_path.name + '.recover.lock')
+    self.fd: int | None = None
 
-  1. Delete stale WAL/SHM files from the previous (possibly unclean) run —
-     this is enough when the main DB file is intact and only the WAL is bad.
-  2. If the main DB still fails ``integrity_check``, rename it aside as
-     ``.corrupted.bak`` and let the next ``sqlite3.connect`` recreate an empty
-     file. The corresponding ``_ensure_*_tables`` migration recreates the
-     schema, so the application keeps running with empty tables instead of
-     crashing on every query.
-  """
-  for ext in ('-wal', '-shm', '-journal'):
-    p = db_path.with_suffix(db_path.suffix + ext)
-    if p.exists():
+  def __enter__(self):  # type: ignore[no-untyped-def]
+    deadline = time.monotonic() + DB_RECOVERY_LOCK_WAIT_SECONDS
+    while self.fd is None:
       try:
-        p.unlink()
-        logger.warning('DB recovery: removed stale %s file %s', ext.lstrip('-'), p)
-      except OSError as exc:
-        logger.warning('DB recovery: could not remove %s: %s', p, exc)
+        self.fd = os.open(str(self.lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        try:
+          os.write(self.fd, f'{os.getpid()}\n{time.time()}\n'.encode())
+        except OSError:
+          # Don't leak the fd or the lock file if the write itself fails
+          # (e.g. ENOSPC). __exit__ is not called when __enter__ raises, so
+          # clean up explicitly.
+          try:
+            os.close(self.fd)
+          except OSError:
+            pass
+          self.fd = None
+          try:
+            self.lock_path.unlink()
+          except FileNotFoundError:
+            pass
+          raise
+      except FileExistsError:
+        try:
+          age = time.time() - self.lock_path.stat().st_mtime
+          if age > DB_RECOVERY_LOCK_STALE_SECONDS:
+            self.lock_path.unlink()
+            continue
+        except FileNotFoundError:
+          continue
+        if time.monotonic() >= deadline:
+          raise TimeoutError(f'timed out waiting for DB recovery lock: {self.lock_path}')
+        time.sleep(0.05)
+    return self
 
-  if _probe_db(db_path):
-    logger.info('DB recovery: %s recovered after journal cleanup', db_path.name)
-    return
+  def heartbeat(self) -> None:
+    """Refresh the lock's mtime so peers don't consider it stale."""
+    try:
+      os.utime(self.lock_path, None)
+    except FileNotFoundError:
+      pass
 
-  logger.warning('DB recovery: %s still corrupt after journal cleanup, recreating', db_path.name)
-  _backup_corrupt_file(db_path)
+  def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+    if self.fd is not None:
+      os.close(self.fd)
+      self.fd = None
+    try:
+      self.lock_path.unlink()
+    except FileNotFoundError:
+      pass
+
+
+def _recover_corrupt_db(db_path: Path) -> None:
+  """Attempt to recover a corrupt SQLite database without deleting evidence."""
+  with _RecoveryLock(db_path) as lock:
+    if _probe_db(db_path):
+      return
+    lock.heartbeat()
+
+    for ext in ('-wal', '-shm', '-journal'):
+      p = db_path.with_name(db_path.name + ext)
+      if p.exists():
+        _backup_corrupt_file(p)
+    lock.heartbeat()
+
+    if _probe_db(db_path):
+      logger.info('DB recovery: %s recovered after sidecar quarantine', db_path.name)
+      return
+
+    logger.warning('DB recovery: %s still corrupt after sidecar quarantine, recreating', db_path.name)
+    _backup_corrupt_file(db_path)
 
 
 def _new_conn(db_path: Path) -> sqlite3.Connection:
-  """Open a SQLite connection with WAL mode and resilient PRAGMAs.
-
-  Tuned for durability + concurrent reads:
-    - ``journal_mode=WAL``       — allow concurrent readers + one writer.
-    - ``synchronous=NORMAL``     — fsync on commit; safe with WAL, fast.
-    - ``busy_timeout=5000``      — wait up to 5 s on contended writes.
-    - ``temp_store=MEMORY``      — keep temp btrees in RAM, not on disk.
-    - ``foreign_keys=ON``        — defensive for any future FK constraints.
-    - ``cache_size=-2000``       — ~2 MB page cache per connection.
-
-  On corruption (``database disk image is malformed`` etc.) the function calls
-  :func:`_recover_corrupt_db` once and retries. If the retry still fails the
-  exception propagates so the caller can decide what to do.
-  """
+  """Open a SQLite connection with WAL mode and resilient PRAGMAs."""
   def _configure(conn: sqlite3.Connection) -> None:
     conn.execute('PRAGMA journal_mode=WAL')
-    conn.execute('PRAGMA synchronous=NORMAL')
-    conn.execute('PRAGMA busy_timeout=5000')
+    conn.execute('PRAGMA synchronous=FULL')
+    conn.execute(f'PRAGMA busy_timeout={DB_BUSY_TIMEOUT_MS}')
+    conn.execute('PRAGMA wal_autocheckpoint=1000')
+    conn.execute('PRAGMA journal_size_limit=67108864')
     conn.execute('PRAGMA temp_store=MEMORY')
     conn.execute('PRAGMA foreign_keys=ON')
-    conn.execute('PRAGMA cache_size=-2000')
-    # Quick integrity probe — raises sqlite3.DatabaseError on corruption.
-    conn.execute('PRAGMA quick_check').fetchone()
+    conn.execute('PRAGMA cache_size=-4000')
+    row = conn.execute('PRAGMA quick_check').fetchone()
+    if row is None or row[0] != 'ok':
+      raise sqlite3.DatabaseError(f'database disk image is malformed (quick_check: {row[0] if row else "empty"})')
 
   conn: sqlite3.Connection | None = None
   try:
-    conn = sqlite3.connect(str(db_path), timeout=5)
+    conn = sqlite3.connect(str(db_path), timeout=DB_BUSY_TIMEOUT_SECONDS)
     _configure(conn)
     conn.row_factory = sqlite3.Row
     return conn
   except sqlite3.DatabaseError as exc:
+    if not _is_db_corruption_error(exc):
+      raise
     logger.warning('DB: %s appears corrupt on open (%s); attempting recovery', db_path.name, exc)
     if conn is not None:
       try:
@@ -229,7 +299,7 @@ def _new_conn(db_path: Path) -> sqlite3.Connection:
       except Exception:
         pass
     _recover_corrupt_db(db_path)
-    conn = sqlite3.connect(str(db_path), timeout=5)
+    conn = sqlite3.connect(str(db_path), timeout=DB_BUSY_TIMEOUT_SECONDS)
     _configure(conn)
     conn.row_factory = sqlite3.Row
     return conn
@@ -250,6 +320,13 @@ _DB_CORRUPTION_TOKENS: tuple[str, ...] = (
   'database corruption',
 )
 
+_DB_BUSY_TOKENS: tuple[str, ...] = (
+  'database is locked',
+  'database table is locked',
+  'database is busy',
+  'database schema is locked',
+)
+
 _F = TypeVar('_F', bound=Callable[..., object])
 
 
@@ -260,8 +337,42 @@ def _is_db_corruption_error(exc: BaseException) -> bool:
   return any(token in msg for token in _DB_CORRUPTION_TOKENS)
 
 
-def _conn_attr_for(db_kind: str) -> str:
-  return f'{db_kind}_conn'
+def _is_db_busy_error(exc: BaseException) -> bool:
+  if not isinstance(exc, sqlite3.OperationalError):
+    return False
+  msg = str(exc).lower()
+  return any(token in msg for token in _DB_BUSY_TOKENS)
+
+
+def _cached_connection(db_kind: str) -> sqlite3.Connection | None:
+  if db_kind == 'settings':
+    try:
+      return _LOCAL.settings_conn
+    except AttributeError:
+      return None
+  if db_kind == 'stats':
+    try:
+      return _LOCAL.stats_conn
+    except AttributeError:
+      return None
+  if db_kind == 'moderation':
+    try:
+      return _LOCAL.moderation_conn
+    except AttributeError:
+      return None
+  raise ValueError(f'unknown db_kind: {db_kind}')
+
+
+def _clear_cached_connection(db_kind: str) -> None:
+  attr = {
+    'settings': 'settings_conn',
+    'stats': 'stats_conn',
+    'moderation': 'moderation_conn',
+  }.get(db_kind)
+  if attr is None:
+    raise ValueError(f'unknown db_kind: {db_kind}')
+  if hasattr(_LOCAL, attr):
+    setattr(_LOCAL, attr, None)
 
 
 def _resolve_path_for(db_kind: str) -> Path:
@@ -275,20 +386,24 @@ def _resolve_path_for(db_kind: str) -> Path:
 
 
 def _drop_cached_connection(db_kind: str) -> None:
-  """Close + forget the thread-local connection for *db_kind*.
-
-  Safe to call multiple times. Errors during ``close()`` are swallowed because
-  the connection is already known-bad.
-  """
-  attr = _conn_attr_for(db_kind)
-  conn: sqlite3.Connection | None = getattr(_LOCAL, attr, None)
+  """Close + forget the thread-local connection for *db_kind*."""
+  conn = _cached_connection(db_kind)
   if conn is None:
     return
   try:
     conn.close()
   except Exception:
     pass
-  setattr(_LOCAL, attr, None)
+  _clear_cached_connection(db_kind)
+
+
+def _rollback_cached_connection(db_kind: str) -> None:
+  conn = _cached_connection(db_kind)
+  if conn is not None:
+    try:
+      conn.rollback()
+    except sqlite3.DatabaseError:
+      _drop_cached_connection(db_kind)
 
 
 def _clear_caches_for(db_kind: str) -> None:
@@ -312,35 +427,40 @@ def _clear_caches_for(db_kind: str) -> None:
 
 
 def _db_resilient(db_kind: str) -> Callable[[_F], _F]:
-  """Decorator: retry once after transparent corruption recovery.
-
-  Wraps a public DB helper. If the wrapped function raises a
-  ``sqlite3.DatabaseError`` whose message indicates corruption, the cached
-  connection is dropped, ``_recover_corrupt_db`` is called, and the function
-  is invoked again. A second failure propagates so the caller sees a real
-  error rather than spinning.
-  """
+  """Decorator: retry busy writes and recover once after corruption."""
   def decorator(fn: _F) -> _F:
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):  # type: ignore[no-untyped-def]
-      try:
-        return fn(*args, **kwargs)
-      except sqlite3.DatabaseError as exc:
-        if not _is_db_corruption_error(exc):
-          raise
-        logger.warning(
-          'DB %s: corruption detected in %s (%s); dropping connection and recovering',
-          db_kind, fn.__name__, exc,
-        )
-        _drop_cached_connection(db_kind)
+      attempt = 0
+      corruption_retries = 0
+      while True:
         try:
-          _recover_corrupt_db(_resolve_path_for(db_kind))
-        except Exception as recover_err:
-          logger.error('DB %s: recovery failed: %s', db_kind, recover_err)
-          raise exc
-        _clear_caches_for(db_kind)
-        # Single retry. If this still raises, propagate.
-        return fn(*args, **kwargs)
+          return fn(*args, **kwargs)
+        except sqlite3.DatabaseError as exc:
+          if _is_db_corruption_error(exc):
+            if corruption_retries >= 1:
+              raise
+            corruption_retries += 1
+            logger.warning(
+              'DB %s: corruption detected in %s (%s); dropping connection and recovering',
+              db_kind, fn.__name__, exc,
+            )
+            _drop_cached_connection(db_kind)
+            try:
+              _recover_corrupt_db(_resolve_path_for(db_kind))
+            except Exception as recover_err:
+              logger.error('DB %s: recovery failed: %s', db_kind, recover_err)
+              raise exc from recover_err
+            _clear_caches_for(db_kind)
+            # Reset the busy-retry counter after a fresh recovery so the
+            # post-recovery call gets a full backoff budget.
+            attempt = 0
+            continue
+          if not _is_db_busy_error(exc) or attempt >= DB_OPERATION_RETRY_MAX:
+            raise
+          _rollback_cached_connection(db_kind)
+          time.sleep(DB_OPERATION_RETRY_BASE_SECONDS * 2 ** attempt)
+          attempt += 1
     return wrapper  # type: ignore[return-value]
   return decorator
 
@@ -499,25 +619,23 @@ def _ensure_chat_row(chat_id: str) -> None:
 
   This prevents INSERT...ON CONFLICT from creating rows with SQL column defaults
   that shadow the __global__ fallback row with wrong values.
+  Uses INSERT OR IGNORE to avoid UNIQUE constraint violations when concurrent
+  workers (Node + Python) both observe the row is missing and try to insert.
   """
   if chat_id == GLOBAL_CHAT_ID:
     return
   conn = _get_settings_conn()
-  existing = conn.execute(
-    'SELECT 1 FROM chat_settings WHERE chat_id = ?', (chat_id,)
-  ).fetchone()
-  if existing is None:
-    conn.execute(
-      """
-      INSERT INTO chat_settings
-        (chat_id, prompt, permission, mode, triggers, llm2_model,
-         subagent_enabled, idle_trigger_min, idle_trigger_max, updated_at)
-      SELECT ?, prompt, permission, mode, triggers, llm2_model,
-             subagent_enabled, idle_trigger_min, idle_trigger_max, datetime('now')
-      FROM chat_settings WHERE chat_id = ?
-      """,
-      (chat_id, GLOBAL_CHAT_ID),
-    )
+  conn.execute(
+    """
+    INSERT OR IGNORE INTO chat_settings
+      (chat_id, prompt, permission, mode, triggers, llm2_model,
+       subagent_enabled, idle_trigger_min, idle_trigger_max, updated_at)
+    SELECT ?, prompt, permission, mode, triggers, llm2_model,
+           subagent_enabled, idle_trigger_min, idle_trigger_max, datetime('now')
+    FROM chat_settings WHERE chat_id = ?
+    """,
+    (chat_id, GLOBAL_CHAT_ID),
+  )
 
 
 def _get_setting_row(chat_id: str) -> Optional[sqlite3.Row]:
