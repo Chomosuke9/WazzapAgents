@@ -700,11 +700,11 @@ async def _deliver_subagent_result(
           message_id=f"local-send-{request_id}",
           role="assistant",
         )
-        hydrate_quoted_from_history(_prov_msg, history)
-        _append_history(
-          history,
-          _prov_msg,
-        )
+      hydrate_quoted_from_history(_prov_msg, history)
+      _append_history(
+        history,
+        _prov_msg,
+      )
     elif reinvoke_type == "react_message":
       await send_react_message(
         ws,
@@ -807,7 +807,7 @@ async def _deliver_subagent_result(
         quoted_sender_is_super_admin=False,
         message_id=f"local-send-{attach_rid}",
         role="assistant",
-      )
+    )
     hydrate_quoted_from_history(_prov_msg, history)
     _append_history(
       history,
