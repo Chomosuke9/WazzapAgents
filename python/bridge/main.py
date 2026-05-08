@@ -206,7 +206,7 @@ try:
     stage_output_files,
   )
   from .subagent.models import SubTask
-  from .subagent.config import SUBAGENT_WAIT_TIMEOUT_S, SUBAGENT_REPORT_MAX_CHARS
+  from .subagent.config import SUBAGENT_WAIT_TIMEOUT_S, SUBAGENT_MAX_WAIT_S, SUBAGENT_REPORT_MAX_CHARS
 except ImportError:
   import sys
   from pathlib import Path
@@ -227,6 +227,7 @@ except ImportError:
   from bridge.subagent.models import SubTask  # type: ignore
   from bridge.subagent.config import (  # type: ignore
     SUBAGENT_WAIT_TIMEOUT_S,
+    SUBAGENT_MAX_WAIT_S,
     SUBAGENT_REPORT_MAX_CHARS,
   )
 
@@ -1832,6 +1833,11 @@ async def handle_socket(ws):
             # event would be lost — leading to a full timeout wait.
             completion_event = asyncio.Event()
             subagent_webhook.register_completion_event(session_id, completion_event)
+            # Keepalive event: set each time a progress webhook arrives so
+            # the timeout resets instead of treating a slow but alive
+            # sub-agent as dead.
+            progress_event = asyncio.Event()
+            subagent_webhook.register_progress_event(session_id, progress_event)
 
             submit_failed = False
             try:
@@ -1845,6 +1851,7 @@ async def handle_socket(ws):
                 extra={"chat_id": chat_id, "session_id": session_id},
               )
               subagent_webhook.unregister_completion_event(session_id)
+              subagent_webhook.unregister_progress_event(session_id)
               subagent_tracker.finalize(session_id, {
                 "success": False,
                 "report": f"Failed to submit task to sub-agent: {submit_err}",
@@ -1858,6 +1865,7 @@ async def handle_socket(ws):
                 extra={"chat_id": chat_id},
               )
               subagent_webhook.unregister_completion_event(session_id)
+              subagent_webhook.unregister_progress_event(session_id)
               subagent_tracker.finalize(session_id, {
                 "success": False,
                 "report": f"Failed to submit task to sub-agent: {submit_err}",
@@ -1876,6 +1884,7 @@ async def handle_socket(ws):
             _bg_session_id = session_id
             _bg_chat_id = chat_id
             _bg_completion_event = completion_event
+            _bg_progress_event = progress_event
             _bg_history = history
             _bg_lock = lock
             _bg_current = current
@@ -1892,6 +1901,7 @@ async def handle_socket(ws):
               session_id: str = _bg_session_id,
               chat_id: str = _bg_chat_id,
               completion_event: asyncio.Event = _bg_completion_event,
+              progress_event: asyncio.Event = _bg_progress_event,
               history=_bg_history,
               lock: asyncio.Lock = _bg_lock,
               current=_bg_current,
@@ -1911,42 +1921,88 @@ async def handle_socket(ws):
               released as soon as the original action loop exits. New
               bursts arriving in the same chat while the sub-agent is
               running are processed normally (LLM2 sees the active-task
-              context block from ``SubTaskTracker.format_context``).
+context block from ``SubTaskTracker.format_context``).
               """
               try:
                 try:
-                  # Wait for the sub-agent to finish — the always-on webhook
-                  # will set ``completion_event`` when the sub-agent posts a
-                  # ``complete`` callback. On submit failure the event was
-                  # already set above so this returns immediately.
-                  #
-                  # We use a generous timeout as a safety net only; the webhook
-                  # server is persistent (auto-restarts on crash) so the
-                  # callback should always arrive. A timeout here means the
-                  # sub-agent service itself has gone away or the network is
-                  # partitioned — in that case there is no result to fetch.
-                  try:
-                    await asyncio.wait_for(
-                      completion_event.wait(), timeout=SUBAGENT_WAIT_TIMEOUT_S
-                    )
-                  except asyncio.TimeoutError:
-                    logger.error(
-                      "execute_subtask: webhook timeout session=%s — "
-                      "sub-agent did not call back within %ss",
-                      session_id,
-                      SUBAGENT_WAIT_TIMEOUT_S,
-                      extra={"chat_id": chat_id},
-                    )
-                    subagent_webhook.unregister_completion_event(session_id)
-                    subagent_tracker.finalize(session_id, {
-                      "success": False,
-                      "report": (
-                        f"Sub-agent did not return a result within "
-                        f"{int(SUBAGENT_WAIT_TIMEOUT_S)}s. The webhook server "
-                        f"is always-on, so this likely means the sub-agent "
-                        f"service crashed or the network is partitioned."
-                      ),
-                    })
+                  # Wait for the sub-agent to finish. The always-on webhook
+                  # server sets ``completion_event`` on the ``complete``
+                  # callback, and ``progress_event`` on every ``progress``
+                  # callback. The keepalive loop below resets the timeout
+                  # each time a progress event arrives, so a slow but still-
+                  # working sub-agent is not incorrectly declared dead.
+                  # An absolute ceiling (SUBAGENT_MAX_WAIT_S) prevents
+                  # infinite hangs.
+                  start_time = time.monotonic()
+                  timed_out = False
+                  while True:
+                    remaining = SUBAGENT_MAX_WAIT_S - (time.monotonic() - start_time)
+                    if remaining <= 0:
+                      # Absolute maximum exceeded.
+                      logger.error(
+                        "execute_subtask: absolute max wait exceeded session=%s — "
+                        "sub-agent did not finish within %ss total",
+                        session_id,
+                        SUBAGENT_MAX_WAIT_S,
+                        extra={"chat_id": chat_id},
+                      )
+                      subagent_webhook.unregister_completion_event(session_id)
+                      subagent_webhook.unregister_progress_event(session_id)
+                      subagent_tracker.finalize(session_id, {
+                        "success": False,
+                        "report": (
+                          f"Sub-agent did not return a result within "
+                          f"{int(SUBAGENT_MAX_WAIT_S)}s total. The task may "
+                          f"be too complex or the sub-agent is stuck."
+                        ),
+                      })
+                      timed_out = True
+                      break
+
+                    try:
+                      await asyncio.wait_for(
+                        completion_event.wait(), timeout=SUBAGENT_WAIT_TIMEOUT_S
+                      )
+                      # completion_event was set — sub-agent finished.
+                      break
+                    except asyncio.TimeoutError:
+                      # Check completion first (race: webhook arrived just
+                      # as the timeout fired).
+                      if completion_event.is_set():
+                        break
+                      # Progress keepalive received — the sub-agent is
+                      # still alive, so reset the per-batch timeout.
+                      if progress_event.is_set():
+                        progress_event.clear()
+                        logger.info(
+                          "execute_subtask: progress keepalive — resetting timeout session=%s",
+                          session_id,
+                          extra={"chat_id": chat_id},
+                        )
+                        continue
+                      # No completion and no progress for a full
+                      # SUBAGENT_WAIT_TIMEOUT_S — true timeout.
+                      logger.error(
+                        "execute_subtask: webhook timeout session=%s — "
+                        "sub-agent did not call back within %ss (no progress)",
+                        session_id,
+                        SUBAGENT_WAIT_TIMEOUT_S,
+                        extra={"chat_id": chat_id},
+                      )
+                      subagent_webhook.unregister_completion_event(session_id)
+                      subagent_webhook.unregister_progress_event(session_id)
+                      subagent_tracker.finalize(session_id, {
+                        "success": False,
+                        "report": (
+                          f"Sub-agent did not return a result within "
+                          f"{int(SUBAGENT_WAIT_TIMEOUT_S)}s and sent no "
+                          f"progress updates. The webhook server is "
+                          f"always-on, so this likely means the sub-agent "
+                          f"service crashed or the network is partitioned."
+                        ),
+                      })
+                      timed_out = True
+                      break
 
                   # Acquire the per-chat lock for history mutation + send.
                   # Other bursts arriving on this chat during the wait above
@@ -1978,6 +2034,11 @@ async def handle_socket(ws):
                   # leak on disk every time a sub-agent is in flight at
                   # shutdown. Output files in ``MEDIA_DIR/subagent_out/``
                   # are intentionally kept (Node may still need them).
+                  # Also clean up the progress event; the completion
+                  # event is cleaned up by the webhook server on
+                  # ``complete``, but a timeout or cancel path may
+                  # miss it.
+                  subagent_webhook.unregister_progress_event(session_id)
                   try:
                     cleanup_input_staging(session_id)
                   except Exception as cleanup_err:  # pylint: disable=broad-except

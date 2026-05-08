@@ -35,11 +35,17 @@ SUBAGENT_HTTP_TIMEOUT = _parse_positive_float(os.getenv("SUBAGENT_HTTP_TIMEOUT")
 SUBAGENT_ENABLED_DEFAULT = os.getenv("SUBAGENT_ENABLED_DEFAULT", "false").lower() == "true"
 
 # Maximum time (in seconds) to wait for the sub-agent to call back via the
-# always-on webhook server. Previously this was a polling-fallback timeout;
-# now the webhook server is persistent (auto-restarts on crash) and the
-# polling fallback has been removed. If this timeout fires, it means the
-# sub-agent service itself has crashed or the network is partitioned.
+# always-on webhook server. The webhook server auto-restarts on crash so
+# this is a safety net only — if it fires, the sub-agent service itself
+# has likely crashed or the network is partitioned. Default 300s (5 min).
+# NOTE: This timeout resets each time a progress webhook is received
+# (keepalive), so it only fires when the sub-agent goes completely silent.
 SUBAGENT_WAIT_TIMEOUT_S = _parse_positive_float(os.getenv("SUBAGENT_WAIT_TIMEOUT_S"), 300.0)
+
+# Absolute maximum wall-clock time (in seconds) for a sub-agent task,
+# regardless of progress keepalives. This prevents a runaway sub-agent
+# from keeping the bridge waiting indefinitely. Default 1800s (30 min).
+SUBAGENT_MAX_WAIT_S = _parse_positive_float(os.getenv("SUBAGENT_MAX_WAIT_S"), 1800.0)
 
 # Bounds for context that gets fed back to LLM2 so a noisy sub-agent
 # cannot blow up the context window of subsequent turns.

@@ -58,6 +58,10 @@ class SubAgentWebhookServer:
     self._tracker = tracker
     self._port = port or SUBAGENT_WEBHOOK_PORT
     self._completion_events: Dict[str, asyncio.Event] = {}
+    # Keepalive events: set each time a progress webhook arrives so the
+    # bridge can reset its per-batch timeout instead of treating a slow
+    # but still-working sub-agent as dead.
+    self._progress_events: Dict[str, asyncio.Event] = {}
     self._runner: web.AppRunner | None = None
     self._site: web.TCPSite | None = None
     self._queue_handler: Optional[QueueEventHandler] = None
@@ -199,6 +203,17 @@ class SubAgentWebhookServer:
     """Remove completion event to prevent memory leak."""
     self._completion_events.pop(session_id, None)
 
+  def register_progress_event(self, session_id: str, event: asyncio.Event) -> None:
+    """Register a keepalive event for *session_id* that is set each time a
+    progress webhook arrives. The bridge waits on this alongside the
+    completion event so it can reset the timeout when the sub-agent is
+    still alive."""
+    self._progress_events[session_id] = event
+
+  def unregister_progress_event(self, session_id: str) -> None:
+    """Remove keepalive event to prevent memory leak."""
+    self._progress_events.pop(session_id, None)
+
   def set_queue_handler(self, handler: Optional[QueueEventHandler]) -> None:
     """Register (or clear, with ``None``) the async handler invoked for
     every ``queued`` / ``queue_advanced`` webhook from WazzapSubAgents.
@@ -273,6 +288,10 @@ class SubAgentWebhookServer:
       # agents that still emit only ``detail`` will leave it as None.
       reason = entry.get("reason")
       self._tracker.update_progress(session_id, step, detail, reason=reason)
+      # Signal the keepalive event so the bridge resets its timeout.
+      progress_event = self._progress_events.get(session_id)
+      if progress_event is not None and not progress_event.is_set():
+        progress_event.set()
       # Promoted from DEBUG → INFO so progress is visible at default
       # log level. The bridge previously logged at DEBUG, so operators
       # had no signal that the sub-agent was actually running unless
@@ -292,6 +311,8 @@ class SubAgentWebhookServer:
       event = self._completion_events.pop(session_id, None)
       if event is not None:
         event.set()
+      # Also clean up the keepalive event — no more progress will arrive.
+      self._progress_events.pop(session_id, None)
       # Drop dedup state — once the session is finalised, any future
       # webhook with the same session_id is a real new event (extremely
       # unlikely in practice, but cheap to be tidy).
