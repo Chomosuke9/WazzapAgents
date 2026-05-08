@@ -12,6 +12,8 @@ try:
     assistant_name,
     assistant_sender_ref,
     format_context_time,
+    hydrate_quoted_from_history,
+    _format_role,
   )
   from ..log import setup_logging
   from ..config import (
@@ -27,6 +29,8 @@ except ImportError:
     assistant_name,
     assistant_sender_ref,
     format_context_time,
+    hydrate_quoted_from_history,
+    _format_role,
   )
   from bridge.log import setup_logging  # type: ignore
   from bridge.config import (  # type: ignore
@@ -367,7 +371,7 @@ def _resolve_quoted_mentions(quoted: dict, quoted_text: str | None) -> str | Non
       bot_jid = row["jid"]
       break
   resolved = _ensure_bot_token_in_text(resolved, bot_mentioned=bot_mentioned, bot_jid=bot_jid, bot_name=bot_name)
-  return resolved if resolved else quoted_text
+  return resolved if resolved is not None else quoted_text
 
 
 def _hydrate_quoted_from_history_payload(
@@ -376,35 +380,10 @@ def _hydrate_quoted_from_history_payload(
 ) -> None:
   """Look up the quoted message in history and fill in missing quoted fields.
 
-  Mutates msg in place. This fills in quoted_sender, quoted_sender_ref,
-  quoted_text, quoted_media, and admin flags from the history when the
-  original payload didn't carry them (e.g., for provisional assistant messages).
+  Delegates to :func:`hydrate_quoted_from_history` from :mod:`bridge.history`
+  to avoid duplicating the hydration logic.
   """
-  if not msg.quoted_message_id:
-    return
-  q_id = msg.quoted_message_id
-  if q_id in ("system", "pending"):
-    return
-  for hist_msg in reversed(history):
-    if hist_msg.context_msg_id != q_id:
-      continue
-    # Found the quoted message
-    if not msg.quoted_sender:
-      msg.quoted_sender = hist_msg.sender
-    if not msg.quoted_sender_ref:
-      msg.quoted_sender_ref = hist_msg.sender_ref
-    if not msg.quoted_text and hist_msg.text:
-      msg.quoted_text = hist_msg.text
-    if not msg.quoted_media and hist_msg.media:
-      msg.quoted_media = hist_msg.media
-    if hist_msg.sender_is_admin and not msg.quoted_sender_is_admin:
-      msg.quoted_sender_is_admin = True
-    if hist_msg.sender_is_super_admin and not msg.quoted_sender_is_super_admin:
-      msg.quoted_sender_is_super_admin = True
-    # If the quoted message is from the assistant, fix sender info
-    if hist_msg.role == "assistant" and not msg.quoted_sender_ref:
-      msg.quoted_sender_ref = assistant_sender_ref()
-    return
+  hydrate_quoted_from_history(msg, history)
 
 
 def _display_context_msg_id_from_payload(payload: dict) -> str:
@@ -462,14 +441,6 @@ def _payload_to_message(payload: dict) -> WhatsAppMessage:
   )
 
 
-def _format_role(is_admin: bool, is_super_admin: bool) -> str:
-  if is_super_admin:
-    return "(superadmin)"
-  if is_admin:
-    return "(admin)"
-  return ""
-
-
 def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
   last = payloads[-1]
   if len(payloads) == 1:
@@ -525,6 +496,11 @@ def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
         q_sender_display = f"{q_sender} ({q_sender_ref}){q_role_label}"
       else:
         q_sender_display = f"{q_sender}{q_role_label}"
+
+      # Suppress <media:...> stub in quoted text when quoted_media already
+      # carries the type — consistent with _message_text() in history.py.
+      if q_media and q_text and q_text.startswith("<media:") and q_text.endswith(">"):
+        q_text = ""
 
       q_content = f"[{q_media}] " if q_media else ""
       if q_text:

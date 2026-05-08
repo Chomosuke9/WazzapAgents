@@ -4,7 +4,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
 
 DEFAULT_ASSISTANT_NAME = "LLM"
 ASSISTANT_CONTEXT_SENDER_REF = "You"
@@ -127,11 +127,18 @@ def _normalize_context_msg_id(value: Optional[str], *, role: str = "user", media
   return "000000"
 
 
+def _is_media_stub(text: str) -> bool:
+  """Return True if text is a <media:...> placeholder that duplicates the [media] prefix."""
+  return text.startswith("<media:") and text.endswith(">")
+
+
 def _message_text(msg: WhatsAppMessage) -> str:
   media_part = f"[{msg.media}]" if msg.media else ""
   text_part = msg.text or ""
-  # Suppress <media:...> placeholders that duplicate the [media] prefix
-  if text_part.startswith("<media:") and text_part.endswith(">"):
+  # Suppress <media:...> placeholders that duplicate the [media] prefix.
+  # Only suppress when msg.media is set — without media, the text is the
+  # only content and must not be silently dropped.
+  if msg.media and _is_media_stub(text_part):
     text_part = ""
   if media_part and text_part:
     return f"{media_part} {text_part}"
@@ -139,6 +146,7 @@ def _message_text(msg: WhatsAppMessage) -> str:
 
 
 def _format_role(is_admin: bool, is_super_admin: bool = False) -> str:
+  """Format admin role label for display in LLM context."""
   if is_super_admin:
     return "(superadmin)"
   if is_admin:
@@ -146,11 +154,12 @@ def _format_role(is_admin: bool, is_super_admin: bool = False) -> str:
   return ""
 
 
-def _hydrate_quoted_from_history(msg: WhatsAppMessage, history: list[WhatsAppMessage]) -> None:
+def hydrate_quoted_from_history(msg: WhatsAppMessage, history: Sequence[WhatsAppMessage]) -> None:
   """Look up the quoted message in history and fill in missing quoted fields.
 
-  Mutates msg in place. Used by format_history() to hydrate REPLYING TO lines
-  with complete info when the original payload didn't carry it.
+  Mutates msg in place. Used by format_history() and by the processing
+  pipeline to hydrate REPLYING TO lines with complete info when the
+  original payload didn't carry them.
   """
   if not msg.quoted_message_id:
     return
@@ -184,12 +193,19 @@ def _hydrate_quoted_from_history(msg: WhatsAppMessage, history: list[WhatsAppMes
 
 def format_history(messages: Iterable[WhatsAppMessage], history: list[WhatsAppMessage] | None = None) -> str:
   lines: list[str] = []
-  # Materialize for reverse lookup during hydration
-  history_list = history if history is not None else list(messages)
-  for msg in messages:
+  # Materialize for reverse lookup during hydration, guarding against
+  # one-shot iterators: if no explicit history list is provided we
+  # must consume the iterator into a list first, then iterate the list.
+  if history is not None:
+    history_list = history
+    msg_iter = messages
+  else:
+    history_list = list(messages)
+    msg_iter = history_list  # type: ignore[assignment]
+  for msg in msg_iter:
     # Hydrate missing quoted fields from history
     if msg.quoted_message_id:
-      _hydrate_quoted_from_history(msg, history_list)
+      hydrate_quoted_from_history(msg, history_list)
     context_msg_id = _normalize_context_msg_id(msg.context_msg_id, role=msg.role, media=msg.media)
     time = format_context_time(msg.timestamp_ms)
 
@@ -240,6 +256,11 @@ def format_history(messages: Iterable[WhatsAppMessage], history: list[WhatsAppMe
         q_sender_display = f"{q_sender} ({q_sender_ref}){q_role_label}"
       else:
         q_sender_display = f"{q_sender}{q_role_label}"
+
+      # Suppress <media:...> stub in quoted text when quoted_media already
+      # carries the type — identical to the logic in _message_text().
+      if q_media and _is_media_stub(q_text):
+        q_text = ""
 
       q_content = f"[{q_media}] " if q_media else ""
       if q_text:

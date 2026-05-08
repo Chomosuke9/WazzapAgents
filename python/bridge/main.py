@@ -25,6 +25,7 @@ try:
     assistant_sender_ref,
     assistant_name_pattern,
     format_history,
+    hydrate_quoted_from_history,
   )
   from .log import setup_logging, set_chat_log_context, reset_chat_log_context
   from .llm.llm1 import call_llm1, LLM1Decision
@@ -64,7 +65,6 @@ try:
     _extract_all_send_ack_entries,
     _extract_send_ack_context_msg_id,
     _hydrate_provisional_context_id_from_ack,
-    _hydrate_quoted_from_history_payload,
     _infer_media,
     _is_context_only_payload,
     _make_request_id,
@@ -113,6 +113,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     assistant_sender_ref,
     assistant_name_pattern,
     format_history,
+    hydrate_quoted_from_history,
   )
   from bridge.log import setup_logging, set_chat_log_context, reset_chat_log_context  # type: ignore
   from bridge.llm.llm1 import call_llm1, LLM1Decision  # type: ignore
@@ -153,7 +154,6 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     _extract_all_send_ack_entries,
     _extract_send_ack_context_msg_id,
     _hydrate_provisional_context_id_from_ack,
-    _hydrate_quoted_from_history_payload,
     _infer_media,
     _is_context_only_payload,
     _make_request_id,
@@ -463,7 +463,8 @@ def _append_sticker_log_to_history(
   """Append a synthetic assistant entry to the conversation history for sticker creation."""
   history.append(WhatsAppMessage(
     timestamp_ms=int(time.time() * 1000),
-    sender="bot",
+    sender=assistant_name(),
+    sender_ref=assistant_sender_ref(),
     text=log_text,
     role="assistant",
   ))
@@ -699,7 +700,7 @@ async def _deliver_subagent_result(
           message_id=f"local-send-{request_id}",
           role="assistant",
         )
-        _hydrate_quoted_from_history_payload(_prov_msg, history)
+        hydrate_quoted_from_history(_prov_msg, history)
         _append_history(
           history,
           _prov_msg,
@@ -807,7 +808,7 @@ async def _deliver_subagent_result(
         message_id=f"local-send-{attach_rid}",
         role="assistant",
       )
-      _hydrate_quoted_from_history_payload(_prov_msg, history)
+      hydrate_quoted_from_history(_prov_msg, history)
       _append_history(
         history,
         _prov_msg,
@@ -1643,7 +1644,7 @@ async def handle_socket(ws):
               message_id=f"local-send-{request_id}",
               role="assistant",
             )
-            _hydrate_quoted_from_history_payload(_prov_msg, history)
+            hydrate_quoted_from_history(_prov_msg, history)
             _append_history(
               history,
               _prov_msg,
