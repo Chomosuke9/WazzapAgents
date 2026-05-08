@@ -808,11 +808,11 @@ async def _deliver_subagent_result(
         message_id=f"local-send-{attach_rid}",
         role="assistant",
       )
-      hydrate_quoted_from_history(_prov_msg, history)
-      _append_history(
-        history,
-        _prov_msg,
-      )
+    hydrate_quoted_from_history(_prov_msg, history)
+    _append_history(
+      history,
+      _prov_msg,
+    )
     # Register in pending_subagent_attachments so the action_ack handler
     # can store the file path in media_paths_by_chat under the real
     # contextMsgId once it arrives.
