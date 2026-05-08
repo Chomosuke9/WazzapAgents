@@ -50,6 +50,9 @@ def _truncate_message(msg: WhatsAppMessage, max_chars: int) -> WhatsAppMessage:
     quoted_sender=msg.quoted_sender,
     quoted_text=_truncate_text(msg.quoted_text, max_chars),
     quoted_media=msg.quoted_media,
+    quoted_sender_ref=msg.quoted_sender_ref,
+    quoted_sender_is_admin=msg.quoted_sender_is_admin,
+    quoted_sender_is_super_admin=msg.quoted_sender_is_super_admin,
     message_id=msg.message_id,
     role=msg.role,
   )
@@ -82,7 +85,7 @@ def _format_current_window(msg: WhatsAppMessage) -> str:
   text = (msg.text or "").strip()
   if text.startswith("Burst messages ("):
     return text
-  return format_history([msg])
+  return format_history([msg], history=[msg])
 
 
 def _llm1_history_limit_for_prompt() -> int:
@@ -124,7 +127,7 @@ def build_llm1_prompt(
   history_list = list(history)[-history_limit:]
   prompt_history = [_truncate_message(msg, message_max_chars) for msg in history_list]
   current_prompt_msg = _truncate_message(current, message_max_chars)
-  hist_text = format_history(prompt_history) or "(no older messages)"
+  hist_text = format_history(prompt_history, history=prompt_history) or "(no older messages)"
   current_line = _format_current_window(current_prompt_msg) or "(no current messages)"
   group_text = _group_description_block(group_description)
   context_messages = (
@@ -201,7 +204,7 @@ expression = single emoji OR exact sticker name from <sticker> catalog.
 - `Group description`: use to judge topic relevance
 - `Older messages` = background; `Current messages (burst)` = trigger window
 - Message IDs: 6-digit inside `[#...]`. `[#system]`/`[#pending]` = non-actionable.
-- Roles: `(admin)`, `(superadmin)`, or `(assistant)` are shown next to the name. Normal members have no role label.
+- Roles: `(admin)`, `(superadmin)` are shown next to the name. Bot's own messages use `(You)` as senderRef. Normal members have no role label.
 
 ---
 

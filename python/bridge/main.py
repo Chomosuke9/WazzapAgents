@@ -24,6 +24,7 @@ try:
     assistant_name,
     assistant_sender_ref,
     assistant_name_pattern,
+    format_history,
   )
   from .log import setup_logging, set_chat_log_context, reset_chat_log_context
   from .llm.llm1 import call_llm1, LLM1Decision
@@ -63,6 +64,7 @@ try:
     _extract_all_send_ack_entries,
     _extract_send_ack_context_msg_id,
     _hydrate_provisional_context_id_from_ack,
+    _hydrate_quoted_from_history_payload,
     _infer_media,
     _is_context_only_payload,
     _make_request_id,
@@ -110,6 +112,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     assistant_name,
     assistant_sender_ref,
     assistant_name_pattern,
+    format_history,
   )
   from bridge.log import setup_logging, set_chat_log_context, reset_chat_log_context  # type: ignore
   from bridge.llm.llm1 import call_llm1, LLM1Decision  # type: ignore
@@ -150,6 +153,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     _extract_all_send_ack_entries,
     _extract_send_ack_context_msg_id,
     _hydrate_provisional_context_id_from_ack,
+    _hydrate_quoted_from_history_payload,
     _infer_media,
     _is_context_only_payload,
     _make_request_id,
@@ -677,9 +681,7 @@ async def _deliver_subagent_result(
         request_id=request_id,
       )
       record_stat_fn(chat_id, "responses_sent")
-      _append_history(
-        history,
-        WhatsAppMessage(
+      _prov_msg = WhatsAppMessage(
           timestamp_ms=int(time.time() * 1000),
           sender=assistant_name(),
           context_msg_id="pending",
@@ -691,10 +693,17 @@ async def _deliver_subagent_result(
           quoted_sender=None,
           quoted_text=None,
           quoted_media=None,
+          quoted_sender_ref=None,
+          quoted_sender_is_admin=False,
+          quoted_sender_is_super_admin=False,
           message_id=f"local-send-{request_id}",
           role="assistant",
-        ),
-      )
+        )
+        _hydrate_quoted_from_history_payload(_prov_msg, history)
+        _append_history(
+          history,
+          _prov_msg,
+        )
     elif reinvoke_type == "react_message":
       await send_react_message(
         ws,
@@ -780,9 +789,7 @@ async def _deliver_subagent_result(
     # when the gateway acknowledges the send.
     attach_media_label = staged_file.kind or "document"
     attach_media_text = staged_file.name if staged_file.name else None
-    _append_history(
-      history,
-      WhatsAppMessage(
+    _prov_msg = WhatsAppMessage(
         timestamp_ms=int(time.time() * 1000),
         sender=assistant_name(),
         context_msg_id="pending",
@@ -794,10 +801,17 @@ async def _deliver_subagent_result(
         quoted_sender=None,
         quoted_text=None,
         quoted_media=None,
+        quoted_sender_ref=None,
+        quoted_sender_is_admin=False,
+        quoted_sender_is_super_admin=False,
         message_id=f"local-send-{attach_rid}",
         role="assistant",
-      ),
-    )
+      )
+      _hydrate_quoted_from_history_payload(_prov_msg, history)
+      _append_history(
+        history,
+        _prov_msg,
+      )
     # Register in pending_subagent_attachments so the action_ack handler
     # can store the file path in media_paths_by_chat under the real
     # contextMsgId once it arrives.
@@ -1611,23 +1625,28 @@ async def handle_socket(ws):
             pending_send_request_chat.move_to_end(request_id)
             while len(pending_send_request_chat) > 4096:
               pending_send_request_chat.popitem(last=False)
+            _prov_msg = WhatsAppMessage(
+              timestamp_ms=int(time.time() * 1000),
+              sender=assistant_name(),
+              context_msg_id="pending",
+              sender_ref=assistant_sender_ref(),
+              sender_is_admin=False,
+              text=action_text or None,
+              media=None,
+              quoted_message_id=_normalize_context_msg_id(action.get("replyTo")),
+              quoted_sender=None,
+              quoted_text=None,
+              quoted_media=None,
+              quoted_sender_ref=None,
+              quoted_sender_is_admin=False,
+              quoted_sender_is_super_admin=False,
+              message_id=f"local-send-{request_id}",
+              role="assistant",
+            )
+            _hydrate_quoted_from_history_payload(_prov_msg, history)
             _append_history(
               history,
-              WhatsAppMessage(
-                timestamp_ms=int(time.time() * 1000),
-                sender=assistant_name(),
-                context_msg_id="pending",
-                sender_ref=assistant_sender_ref(),
-                sender_is_admin=False,
-                text=action_text or None,
-                media=None,
-                quoted_message_id=_normalize_context_msg_id(action.get("replyTo")),
-                quoted_sender=None,
-                quoted_text=None,
-                quoted_media=None,
-                message_id=f"local-send-{request_id}",
-                role="assistant",
-              ),
+              _prov_msg,
             )
             action_counts[action_type] += 1
             continue

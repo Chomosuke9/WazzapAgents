@@ -6,6 +6,7 @@ import logger from './logger.js';
 import {
   normalizeJid,
   findContextMsgIdByMessageId,
+  rememberSenderRef,
 } from './identifiers.js';
 import {
   rememberParticipantName,
@@ -195,6 +196,8 @@ async function extractQuoted(messageOrContent, chatId, { allowGroupLookup = true
   const locationText = location ? formatLocationText(location) : null;
   const qText = extractText(qMsg);
   const text = [qText, locationText].filter(Boolean).join('\n') || null;
+  // Extract mentionedJids from the quoted sub-message for mention resolution
+  const qMentionedJids = extractMentionedJids(qMsg) || [];
   let senderId = ctx.participant ? normalizeJid(ctx.participant) : null;
   let senderName = null;
   const quotedMsg = ctx.stanzaId ? messageCache.get(ctx.stanzaId) : null;
@@ -219,11 +222,16 @@ async function extractQuoted(messageOrContent, chatId, { allowGroupLookup = true
   }
   const contextMsgId = ctx.stanzaId ? findContextMsgIdByMessageId(chatId, ctx.stanzaId) : null;
 
+  // Resolve senderRef for the quoted sender
+  const quotedSenderRef = senderId ? rememberSenderRef(chatId, senderId, ctx.participant || senderId) : null;
+
   return {
     messageId: ctx.stanzaId,
     contextMsgId,
     senderId,
     senderName: senderName || senderId,
+    senderRef: quotedSenderRef,
+    mentionedJids: qMentionedJids,
     text,
     type: qType,
     location,

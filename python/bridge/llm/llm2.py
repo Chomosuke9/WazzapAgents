@@ -230,7 +230,7 @@ def _format_current_window(msg: WhatsAppMessage) -> str:
   text = (msg.text or "").strip()
   if text.startswith("Burst messages ("):
     return text
-  return format_history([msg])
+  return format_history([msg], history=[msg])
 
 
 def _normalize_chat_type(chat_type: str | None) -> str:
@@ -499,7 +499,7 @@ async def generate_reply(
   if message_max_chars > 0:
     history_list = [_truncate_message(msg, message_max_chars) for msg in history_list]
     current = _truncate_message(current, message_max_chars)
-  hist_text = format_history(history_list) or "(no older messages)"
+  hist_text = format_history(history_list, history=history_list) or "(no older messages)"
   current_line = _format_current_window(current) or "(no current messages)"
   group_text = _group_description_block(group_description)
   context_injection = _context_injection_block(

@@ -90,6 +90,11 @@ def _quoted_sender(quoted: dict) -> str | None:
   return str(sender)
 
 
+def _quoted_sender_ref(quoted: dict) -> str | None:
+  ref = quoted.get("senderRef")
+  return str(ref).strip() if ref else None
+
+
 def _normalize_context_msg_id(value) -> str | None:
   if value is None:
     return None
@@ -322,6 +327,86 @@ def _is_system_payload(payload: dict) -> bool:
   return False
 
 
+def _resolve_quoted_mentions(quoted: dict, quoted_text: str | None) -> str | None:
+  """Resolve @phone_number mentions in quoted text using mentionedParticipants from the quoted payload.
+
+  This converts raw @phone references to @Name (senderRef) format so that
+  REPLYING TO lines show readable mentions instead of phone numbers.
+  """
+  if not quoted_text:
+    return quoted_text
+  mentioned_participants = quoted.get("mentionedParticipants")
+  if not isinstance(mentioned_participants, list) or not mentioned_participants:
+    return quoted_text
+  rows: list[dict] = []
+  for item in mentioned_participants:
+    if not isinstance(item, dict):
+      continue
+    name = _clean_text(item.get("name")) or None
+    sender_ref = _clean_text(item.get("senderRef")) or None
+    jid = _clean_text(item.get("jid")) or None
+    is_bot = bool(item.get("isBot"))
+    if not (name or sender_ref or jid):
+      continue
+    rows.append({
+      "name": name,
+      "senderRef": sender_ref,
+      "jid": jid,
+      "isBot": is_bot,
+    })
+  if not rows:
+    return quoted_text
+  labels = [_mention_label(row) for row in rows]
+  resolved, _ = _replace_mentions_in_text(quoted_text, rows, labels)
+  # Also ensure bot token if needed
+  bot_mentioned = any(row.get("isBot") for row in rows)
+  bot_name = assistant_name()
+  bot_jid = None
+  for row in rows:
+    if row.get("isBot") and row.get("jid"):
+      bot_jid = row["jid"]
+      break
+  resolved = _ensure_bot_token_in_text(resolved, bot_mentioned=bot_mentioned, bot_jid=bot_jid, bot_name=bot_name)
+  return resolved if resolved else quoted_text
+
+
+def _hydrate_quoted_from_history_payload(
+  msg: WhatsAppMessage,
+  history: Deque[WhatsAppMessage],
+) -> None:
+  """Look up the quoted message in history and fill in missing quoted fields.
+
+  Mutates msg in place. This fills in quoted_sender, quoted_sender_ref,
+  quoted_text, quoted_media, and admin flags from the history when the
+  original payload didn't carry them (e.g., for provisional assistant messages).
+  """
+  if not msg.quoted_message_id:
+    return
+  q_id = msg.quoted_message_id
+  if q_id in ("system", "pending"):
+    return
+  for hist_msg in reversed(history):
+    if hist_msg.context_msg_id != q_id:
+      continue
+    # Found the quoted message
+    if not msg.quoted_sender:
+      msg.quoted_sender = hist_msg.sender
+    if not msg.quoted_sender_ref:
+      msg.quoted_sender_ref = hist_msg.sender_ref
+    if not msg.quoted_text and hist_msg.text:
+      msg.quoted_text = hist_msg.text
+    if not msg.quoted_media and hist_msg.media:
+      msg.quoted_media = hist_msg.media
+    if hist_msg.sender_is_admin and not msg.quoted_sender_is_admin:
+      msg.quoted_sender_is_admin = True
+    if hist_msg.sender_is_super_admin and not msg.quoted_sender_is_super_admin:
+      msg.quoted_sender_is_super_admin = True
+    # If the quoted message is from the assistant, fix sender info
+    if hist_msg.role == "assistant" and not msg.quoted_sender_ref:
+      msg.quoted_sender_ref = assistant_sender_ref()
+    return
+
+
 def _display_context_msg_id_from_payload(payload: dict) -> str:
   if _is_system_payload(payload):
     return SYSTEM_CONTEXT_TOKEN
@@ -367,8 +452,11 @@ def _payload_to_message(payload: dict) -> WhatsAppMessage:
       or (str(quoted.get("messageId")) if quoted.get("messageId") else None)
     ),
     quoted_sender=_quoted_sender(quoted),
-    quoted_text=quoted.get("text"),
+    quoted_text=_resolve_quoted_mentions(quoted, quoted.get("text")),
     quoted_media=_infer_quoted_media(quoted),
+    quoted_sender_ref=_quoted_sender_ref(quoted),
+    quoted_sender_is_admin=bool(quoted.get("senderIsAdmin")),
+    quoted_sender_is_super_admin=bool(quoted.get("senderIsSuperAdmin")),
     message_id=None if is_context_only else (str(payload.get("messageId")) if payload.get("messageId") else None),
     role=role,
   )
@@ -376,9 +464,9 @@ def _payload_to_message(payload: dict) -> WhatsAppMessage:
 
 def _format_role(is_admin: bool, is_super_admin: bool) -> str:
   if is_super_admin:
-    return "superadmin"
+    return "(superadmin)"
   if is_admin:
-    return "admin"
+    return "(admin)"
   return ""
 
 
@@ -393,7 +481,7 @@ def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
     if bool(item.get("fromMe")):
       sender = assistant_name()
       sender_ref = assistant_sender_ref()
-      role_label = "(assistant)"
+      role_label = ""  # (You) already identifies bot messages
     else:
       sender = item.get("senderName") or item.get("senderId") or item.get("chatId") or "unknown"
       sender_ref = _clean_text(item.get("senderRef")) or "unknown"
@@ -412,16 +500,39 @@ def _build_burst_current(payloads: list[dict]) -> WhatsAppMessage:
     if quoted:
       q_id = _normalize_context_msg_id(quoted.get("contextMsgId")) or quoted.get("messageId") or "000000"
       q_sender = _quoted_sender(quoted) or "someone"
-      q_text = _normalize_preview_text(quoted.get("text"))
+      q_sender_ref = _quoted_sender_ref(quoted)
+      q_text = _normalize_preview_text(_resolve_quoted_mentions(quoted, quoted.get("text")))
       q_media = _infer_quoted_media(quoted)
-      
+
+      # Build sender display: "Name (ref) (role)"
+      q_is_admin = bool(quoted.get("senderIsAdmin"))
+      q_is_super_admin = bool(quoted.get("senderIsSuperAdmin"))
+
+      # If the quoted message is from the bot (fromMe), use (You) as senderRef
+      if bool(quoted.get("fromMe")):
+        q_sender_ref = assistant_sender_ref()
+      elif bool(item.get("fromMe")):
+        # The current sender is the bot replying — quoted sender stays as-is
+        pass
+
+      q_role_label = ""
+      if q_is_super_admin:
+        q_role_label = " (superadmin)"
+      elif q_is_admin:
+        q_role_label = " (admin)"
+
+      if q_sender_ref:
+        q_sender_display = f"{q_sender} ({q_sender_ref}){q_role_label}"
+      else:
+        q_sender_display = f"{q_sender}{q_role_label}"
+
       q_content = f"[{q_media}] " if q_media else ""
       if q_text:
         q_content += f'"{q_text}"'
       elif not q_media:
         q_content = "(empty)"
-      
-      lines.append(f"REPLYING TO [#{q_id}] {q_sender}: {q_content}")
+
+      lines.append(f"REPLYING TO [#{q_id}] {q_sender_display}: {q_content}")
 
     # Content line
     media_part = f"[{media}] " if media else ""
@@ -506,6 +617,9 @@ def _merge_fromme_echo_into_provisional(
     candidate.quoted_sender = echo_msg.quoted_sender
     candidate.quoted_text = echo_msg.quoted_text
     candidate.quoted_media = echo_msg.quoted_media
+    candidate.quoted_sender_ref = echo_msg.quoted_sender_ref
+    candidate.quoted_sender_is_admin = echo_msg.quoted_sender_is_admin
+    candidate.quoted_sender_is_super_admin = echo_msg.quoted_sender_is_super_admin
     candidate.message_id = echo_msg.message_id
     candidate.role = echo_msg.role
     return True
@@ -518,6 +632,7 @@ def _append_or_merge_history_payload(
   payload: dict,
 ) -> None:
   msg = _payload_to_message(payload)
+  _hydrate_quoted_from_history_payload(msg, history)
   if bool(payload.get("fromMe")) and _merge_fromme_echo_into_provisional(history, msg):
     return
   _append_history(history, msg)

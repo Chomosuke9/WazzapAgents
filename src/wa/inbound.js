@@ -206,6 +206,20 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
   const quotedStartMs = Date.now();
   const quoted = await extractQuoted(innerMessage, chatId, { allowGroupLookup: !fromMe, getGroupParticipantName });
   perf.quotedMs = Date.now() - quotedStartMs;
+  // Determine admin role for the quoted sender
+  if (quoted && quoted.senderId && isGroup && group) {
+    const quotedRole = roleFlagsForJid(group.participantRoles, quoted.senderId);
+    quoted.senderIsAdmin = Boolean(quotedRole?.isAdmin);
+    quoted.senderIsSuperAdmin = Boolean(quotedRole?.isSuperAdmin);
+  }
+  // Build mentionedParticipants for the quoted message for mention resolution
+  let quotedMentionedParticipants = null;
+  if (quoted && Array.isArray(quoted.mentionedJids) && quoted.mentionedJids.length > 0) {
+    quotedMentionedParticipants = await buildMentionedParticipants(chatId, quoted.mentionedJids, botAliases);
+  }
+  if (quoted) {
+    quoted.mentionedParticipants = quotedMentionedParticipants;
+  }
   const mentionedJidsRaw = extractMentionedJids(innerMessage);
   const mentionedJids = Array.isArray(mentionedJidsRaw)
     ? Array.from(new Set(

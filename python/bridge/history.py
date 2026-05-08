@@ -71,6 +71,9 @@ class WhatsAppMessage:
   quoted_sender: Optional[str] = None
   quoted_text: Optional[str] = None
   quoted_media: Optional[str] = None
+  quoted_sender_ref: Optional[str] = None
+  quoted_sender_is_admin: bool = False
+  quoted_sender_is_super_admin: bool = False
   message_id: Optional[str] = None
   role: str = "user"  # "user" | "assistant"
 
@@ -127,6 +130,9 @@ def _normalize_context_msg_id(value: Optional[str], *, role: str = "user", media
 def _message_text(msg: WhatsAppMessage) -> str:
   media_part = f"[{msg.media}]" if msg.media else ""
   text_part = msg.text or ""
+  # Suppress <media:...> placeholders that duplicate the [media] prefix
+  if text_part.startswith("<media:") and text_part.endswith(">"):
+    text_part = ""
   if media_part and text_part:
     return f"{media_part} {text_part}"
   return media_part or text_part or "(empty)"
@@ -140,9 +146,50 @@ def _format_role(is_admin: bool, is_super_admin: bool = False) -> str:
   return ""
 
 
-def format_history(messages: Iterable[WhatsAppMessage]) -> str:
+def _hydrate_quoted_from_history(msg: WhatsAppMessage, history: list[WhatsAppMessage]) -> None:
+  """Look up the quoted message in history and fill in missing quoted fields.
+
+  Mutates msg in place. Used by format_history() to hydrate REPLYING TO lines
+  with complete info when the original payload didn't carry it.
+  """
+  if not msg.quoted_message_id:
+    return
+  q_id = msg.quoted_message_id
+  # Don't look up "system" or "pending" context IDs
+  if q_id in ("system", "pending"):
+    return
+  # Search history in reverse (newest first for best match)
+  for hist_msg in reversed(history):
+    if hist_msg.context_msg_id != q_id:
+      continue
+    # Found the quoted message — hydrate missing fields
+    if not msg.quoted_sender:
+      msg.quoted_sender = hist_msg.sender
+    if not msg.quoted_sender_ref:
+      msg.quoted_sender_ref = hist_msg.sender_ref
+    if not msg.quoted_text and hist_msg.text:
+      msg.quoted_text = hist_msg.text
+    if not msg.quoted_media and hist_msg.media:
+      msg.quoted_media = hist_msg.media
+    # Always hydrate admin flags from history if the sender matches
+    if hist_msg.sender_is_admin and not msg.quoted_sender_is_admin:
+      msg.quoted_sender_is_admin = True
+    if hist_msg.sender_is_super_admin and not msg.quoted_sender_is_super_admin:
+      msg.quoted_sender_is_super_admin = True
+    # If the quoted message is from the assistant, fix sender info
+    if hist_msg.role == "assistant" and not msg.quoted_sender_ref:
+      msg.quoted_sender_ref = assistant_sender_ref()
+    return
+
+
+def format_history(messages: Iterable[WhatsAppMessage], history: list[WhatsAppMessage] | None = None) -> str:
   lines: list[str] = []
+  # Materialize for reverse lookup during hydration
+  history_list = history if history is not None else list(messages)
   for msg in messages:
+    # Hydrate missing quoted fields from history
+    if msg.quoted_message_id:
+      _hydrate_quoted_from_history(msg, history_list)
     context_msg_id = _normalize_context_msg_id(msg.context_msg_id, role=msg.role, media=msg.media)
     time = format_context_time(msg.timestamp_ms)
 
@@ -165,7 +212,7 @@ def format_history(messages: Iterable[WhatsAppMessage]) -> str:
     if msg.role == "assistant":
       sender = assistant_name()
       sender_ref = assistant_sender_ref()
-      role_label = "(assistant)"
+      role_label = ""  # (You) already identifies bot messages
     else:
       sender = _compact(msg.sender) or "unknown"
       sender_ref = _compact(msg.sender_ref) or "unknown"
@@ -178,18 +225,29 @@ def format_history(messages: Iterable[WhatsAppMessage]) -> str:
     if msg.quoted_message_id:
       q_id = _normalize_context_msg_id(msg.quoted_message_id)
       q_sender = _compact(msg.quoted_sender) or "someone"
-      # Note: we don't always have the quoted sender's ref or role in the history object
-      # for historical messages if they weren't captured.
+      q_sender_ref = _compact(msg.quoted_sender_ref) or None
       q_text = _compact(msg.quoted_text) or ""
       q_media = _compact(msg.quoted_media)
-      
+
+      # Build sender display: "Name (ref) (role)"
+      q_role_label = ""
+      if msg.quoted_sender_is_super_admin:
+        q_role_label = " (superadmin)"
+      elif msg.quoted_sender_is_admin:
+        q_role_label = " (admin)"
+
+      if q_sender_ref:
+        q_sender_display = f"{q_sender} ({q_sender_ref}){q_role_label}"
+      else:
+        q_sender_display = f"{q_sender}{q_role_label}"
+
       q_content = f"[{q_media}] " if q_media else ""
       if q_text:
         q_content += f'"{q_text}"'
       elif not q_media:
         q_content = "(empty)"
-      
-      lines.append(f"REPLYING TO [#{q_id}] {q_sender}: {q_content}")
+
+      lines.append(f"REPLYING TO [#{q_id}] {q_sender_display}: {q_content}")
 
     # Content line
     message_text = _message_text(msg)
