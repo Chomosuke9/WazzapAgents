@@ -17,7 +17,7 @@ try:
   from ..db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute, get_llm2_model as db_get_llm2_model, get_default_llm2_model, get_model_vision_support
   from .schemas import build_llm2_tools
   from ..config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _clean_env, _endpoint_base_url
-  from .prompt import _truncate_message
+  from .prompt import _truncate_message, _sanitize_group_description, _group_description_user_message  # noqa: F401 (_sanitize_group_description re-exported for tests/callers)
   from .error_utils import _is_timeout_error, _error_chain
 except ImportError:  # allow running as script
   import sys
@@ -29,7 +29,7 @@ except ImportError:  # allow running as script
   from bridge.db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute, get_model_vision_support  # type: ignore
   from bridge.llm.schemas import build_llm2_tools  # type: ignore
   from bridge.config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _clean_env, _endpoint_base_url  # type: ignore
-  from bridge.llm.prompt import _truncate_message  # type: ignore
+  from bridge.llm.prompt import _truncate_message, _sanitize_group_description, _group_description_user_message  # type: ignore
   from bridge.llm.error_utils import _is_timeout_error, _error_chain  # type: ignore
 
 logger = setup_logging()
@@ -216,13 +216,6 @@ def _render_system_prompt(
     .replace("{{subagent_rules}}", _SUBAGENT_RULES if allow_subagent else "")
     .replace("{{ subagent_rules }}", _SUBAGENT_RULES if allow_subagent else "")
   )
-
-
-def _group_description_block(group_description: str | None) -> str:
-  cleaned = (group_description or "").strip()
-  if cleaned:
-    return cleaned
-  return "(none)"
 
 
 def _format_current_window(msg: WhatsAppMessage) -> str:
@@ -501,7 +494,7 @@ async def generate_reply(
     current = _truncate_message(current, message_max_chars)
   hist_text = format_history(history_list, history=history_list) or "(no older messages)"
   current_line = _format_current_window(current) or "(no current messages)"
-  group_text = _group_description_block(group_description)
+  group_description_message = _group_description_user_message(group_description)
   context_injection = _context_injection_block(
     current_payload,
     chat_type=chat_type or "private",
@@ -545,7 +538,7 @@ async def generate_reply(
   #   5) user          : sub-agent FINISHED-this-turn block (re-invoke only)
   #   6) user          : older messages + current burst
   msgs = [SystemMessage(content=rendered_system)]
-  msgs.append(HumanMessage(content=f"Group description:\n{group_text}"))
+  msgs.append(HumanMessage(content=group_description_message))
   msgs.append(HumanMessage(content=context_injection))
   # Sub-agent context block: always injected as a dedicated HumanMessage
   # so LLM2 has an explicit signal about the sub-agent state (active task,
@@ -566,7 +559,7 @@ async def generate_reply(
     first_target = targets[0]
     logged_messages: list[dict] = [
       {"role": "system", "content": rendered_system},
-      {"role": "user", "content": f"Group description:\n{group_text}"},
+      {"role": "user", "content": group_description_message},
       {"role": "user", "content": context_injection},
     ]
     if subagent_block:
@@ -587,7 +580,7 @@ async def generate_reply(
     )
   prompt_preview = trunc(
     (
-      group_text
+      group_description_message
       + '\n'
       + context_injection
       + '\nolder messages:\n'
@@ -748,7 +741,7 @@ async def generate_reply(
         )
         fallback_msgs = [
           SystemMessage(content=rendered_system),
-          HumanMessage(content=f"Group description:\n{group_text}"),
+          HumanMessage(content=group_description_message),
           HumanMessage(content=context_injection),
         ]
         if subagent_block:
