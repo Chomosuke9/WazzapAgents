@@ -17,7 +17,7 @@ try:
   from ..db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute, get_llm2_model as db_get_llm2_model, get_default_llm2_model, get_model_vision_support
   from .schemas import build_llm2_tools
   from ..config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _clean_env, _endpoint_base_url
-  from .prompt import _truncate_message, _sanitize_group_description, _group_description_user_message  # noqa: F401 (_sanitize_group_description re-exported for tests/callers)
+  from .prompt import _truncate_message, _group_description_user_message
   from .error_utils import _is_timeout_error, _error_chain
 except ImportError:  # allow running as script
   import sys
@@ -29,7 +29,7 @@ except ImportError:  # allow running as script
   from bridge.db import get_permission as db_get_permission, permission_allows_kick, permission_allows_delete, permission_allows_mute, get_model_vision_support  # type: ignore
   from bridge.llm.schemas import build_llm2_tools  # type: ignore
   from bridge.config import _parse_positive_int, _parse_positive_float, _parse_non_negative_int, _clean_env, _endpoint_base_url  # type: ignore
-  from bridge.llm.prompt import _truncate_message, _sanitize_group_description, _group_description_user_message  # type: ignore
+  from bridge.llm.prompt import _truncate_message, _group_description_user_message  # type: ignore
   from bridge.llm.error_utils import _is_timeout_error, _error_chain  # type: ignore
 
 logger = setup_logging()
