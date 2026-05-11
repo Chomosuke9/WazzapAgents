@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import json
+import logging
 import os
 import random
 import shutil
@@ -76,6 +77,7 @@ try:
   )
   from .messaging.filtering import (
     _chat_state_from_payload,
+    _match_prefix_reason,
     _message_matches_prefix,
     _payload_has_meaningful_content,
     _payload_triggers_llm1,
@@ -165,6 +167,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
   )
   from bridge.messaging.filtering import (  # type: ignore
     _chat_state_from_payload,
+    _match_prefix_reason,
     _message_matches_prefix,
     _payload_has_meaningful_content,
     _payload_triggers_llm1,
@@ -926,14 +929,63 @@ async def handle_socket(ws):
     """Check if the idle trigger should fire based on the message count."""
     cfg = db_get_idle_trigger(chat_id)
     if not cfg:
+      if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+          "idle trigger: no config",
+          extra={
+            "chat_id": chat_id,
+            "msg_count": msg_count,
+            "fired": False,
+          },
+        )
       return False
     min_val, max_val = cfg
     if msg_count < min_val:
+      if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+          "idle trigger: below min",
+          extra={
+            "chat_id": chat_id,
+            "msg_count": msg_count,
+            "min": min_val,
+            "max": max_val,
+            "probability": 0.0,
+            "fired": False,
+          },
+        )
       return False
     if min_val == max_val:
+      if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+          "idle trigger: deterministic fire at min==max",
+          extra={
+            "chat_id": chat_id,
+            "msg_count": msg_count,
+            "min": min_val,
+            "max": max_val,
+            "probability": 1.0,
+            "fired": True,
+          },
+        )
       return True
     range_size = max_val - min_val
-    return random.random() < (1.0 / (max_val - msg_count + 1))
+    probability = 1.0 / (max_val - msg_count + 1)
+    roll = random.random()
+    fired = roll < probability
+    if logger.isEnabledFor(logging.DEBUG):
+      logger.debug(
+        "idle trigger: rolled",
+        extra={
+          "chat_id": chat_id,
+          "msg_count": msg_count,
+          "min": min_val,
+          "max": max_val,
+          "probability": probability,
+          "roll": roll,
+          "fired": fired,
+        },
+      )
+    return fired
 
   async def process_message_batch(payloads: list[dict]):
     if not payloads:
@@ -1230,6 +1282,17 @@ async def handle_socket(ws):
             else:
               for payload in non_empty_payloads:
                 _append_or_merge_history_payload(history, payload)
+              if logger.isEnabledFor(logging.DEBUG):
+                _idle_cfg = db_get_idle_trigger(chat_id)
+                logger.debug(
+                  "prefix mode: idle roll did not fire",
+                  extra={
+                    "chat_id": chat_id,
+                    "idle_count": idle_msg_count[chat_id],
+                    "idle_range": list(_idle_cfg) if _idle_cfg else None,
+                    "fired": False,
+                  },
+                )
               logger.info(
                 "prefix mode: no match; skipping",
                 extra={"chat_id": chat_id, "triggers": sorted(triggers), "batch_size": len(llm1_trigger_payloads)},
@@ -1250,10 +1313,19 @@ async def handle_socket(ws):
               _pp_name = _clean_text(_pp.get("senderName"))
               if _pp_ref:
                 record_user_invoke(chat_id, _pp_ref, _pp_name)
+            prefix_reasons = [_match_prefix_reason(p, triggers) for p in prefix_matched_payloads]
+            prefix_reason_senders = [
+              _clean_text(p.get("senderRef")) or None for p in prefix_matched_payloads
+            ]
             logger.info(
               "prefix mode: matched %d/%d payloads; skipping LLM1",
               len(prefix_matched_payloads), len(llm1_trigger_payloads),
-              extra={"chat_id": chat_id, "triggers": sorted(triggers)},
+              extra={
+                "chat_id": chat_id,
+                "triggers": sorted(triggers),
+                "reasons": prefix_reasons,
+                "reason_senders": prefix_reason_senders,
+              },
             )
         elif chat_mode == "hybrid":
           # Hybrid mode: check prefix triggers first, fall back to auto (LLM1)
@@ -1271,10 +1343,19 @@ async def handle_socket(ws):
               _pp_name = _clean_text(_pp.get("senderName"))
               if _pp_ref:
                 record_user_invoke(chat_id, _pp_ref, _pp_name)
+            hybrid_reasons = [_match_prefix_reason(p, triggers) for p in prefix_matched_payloads]
+            hybrid_reason_senders = [
+              _clean_text(p.get("senderRef")) or None for p in prefix_matched_payloads
+            ]
             logger.info(
               "hybrid mode: prefix matched %d/%d payloads; skipping LLM1",
               len(prefix_matched_payloads), len(llm1_trigger_payloads),
-              extra={"chat_id": chat_id, "triggers": sorted(triggers)},
+              extra={
+                "chat_id": chat_id,
+                "triggers": sorted(triggers),
+                "reasons": hybrid_reasons,
+                "reason_senders": hybrid_reason_senders,
+              },
             )
           else:
             # No prefix match in batch — run LLM1 with cancellation support
@@ -1328,16 +1409,27 @@ async def handle_socket(ws):
                 reason="Hybrid mode: prefix trigger interrupted LLM1; responding immediately.",
               )
               # Record invoking users from new payloads
-              for _np in new_payloads:
-                if _message_matches_prefix(_np, triggers):
-                  _np_ref = _clean_text(_np.get("senderRef"))
-                  _np_name = _clean_text(_np.get("senderName"))
-                  if _np_ref:
-                    record_user_invoke(chat_id, _np_ref, _np_name)
+              interrupt_matched_payloads = [p for p in new_payloads if _message_matches_prefix(p, triggers)]
+              for _np in interrupt_matched_payloads:
+                _np_ref = _clean_text(_np.get("senderRef"))
+                _np_name = _clean_text(_np.get("senderName"))
+                if _np_ref:
+                  record_user_invoke(chat_id, _np_ref, _np_name)
+              interrupt_reasons = [
+                _match_prefix_reason(p, triggers) for p in interrupt_matched_payloads
+              ]
+              interrupt_reason_senders = [
+                _clean_text(p.get("senderRef")) or None for p in interrupt_matched_payloads
+              ]
               logger.info(
                 "hybrid mode: prefix trigger interrupted LLM1 after %dms; merged %d new payloads",
                 llm1_ms, len(new_payloads),
-                extra={"chat_id": chat_id, "triggers": sorted(triggers)},
+                extra={
+                  "chat_id": chat_id,
+                  "triggers": sorted(triggers),
+                  "reasons": interrupt_reasons,
+                  "reason_senders": interrupt_reason_senders,
+                },
               )
             else:
               # LLM1 finished before any prefix interrupt
@@ -2116,19 +2208,39 @@ context block from ``SubTaskTracker.format_context``).
 
         # Skip debounce for private chats and prefix/hybrid mode matches.
         _skip_debounce = False
+        _skip_debounce_reason: str | None = None
+        _skip_debounce_matched_payload: dict | None = None
         _last_p = pending.payloads[-1] if pending.payloads else {}
         _flush_chat_type, _, _ = _chat_state_from_payload(_last_p)
         if _flush_chat_type == "private":
           _skip_debounce = True
+          _skip_debounce_reason = "private"
         elif db_get_mode(chat_id) in ("prefix", "hybrid"):
           _flush_triggers = db_get_triggers(chat_id)
           for _fp in pending.payloads:
-            if _message_matches_prefix(_fp, _flush_triggers):
+            _fp_reason = _match_prefix_reason(_fp, _flush_triggers)
+            if _fp_reason is not None:
               _skip_debounce = True
+              _skip_debounce_reason = _fp_reason
+              _skip_debounce_matched_payload = _fp
               break
 
         if _skip_debounce:
           timeout_s = 0.0
+          if _skip_debounce_reason != "private" and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+              "flush_pending: skipping debounce for prefix trigger",
+              extra={
+                "chat_id": chat_id,
+                "reason": _skip_debounce_reason,
+                "sender_ref": (
+                  _clean_text(_skip_debounce_matched_payload.get("senderRef"))
+                  if isinstance(_skip_debounce_matched_payload, dict)
+                  else None
+                ) or None,
+                "pending_count": len(pending.payloads),
+              },
+            )
         else:
           quiet_deadline = last_event_at + INCOMING_DEBOUNCE_SECONDS
           hard_deadline = burst_started_at + INCOMING_BURST_MAX_SECONDS

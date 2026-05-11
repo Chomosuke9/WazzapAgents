@@ -249,6 +249,26 @@ async function handleIncomingMessage(msg, { precomputedContextMsgId = null } = {
   const repliedToBot = Boolean(quotedSenderId && botAliases.has(quotedSenderId));
   const replyToInteractive = repliedToBot && quoted?.type === 'interactiveMessage';
 
+  if (logger.isLevelEnabled && logger.isLevelEnabled('debug')) {
+    let matchedBotMentionToken = null;
+    if (botMentionedByText && typeof text === 'string') {
+      for (const token of botMentionTokens) {
+        if (new RegExp(`(^|[^0-9A-Za-z_])@${escapeRegex(token)}(?=$|[^0-9A-Za-z_])`).test(text)) {
+          matchedBotMentionToken = token;
+          break;
+        }
+      }
+    }
+    logger.debug({
+      chatId,
+      messageId: msg.key.id,
+      botMentionedByJid,
+      botMentionedByText,
+      repliedToBot,
+      matchedBotMentionToken,
+    }, 'inbound bot-trigger booleans');
+  }
+
   const attachments = [];
   const mediaKinds = [
     'imageMessage',

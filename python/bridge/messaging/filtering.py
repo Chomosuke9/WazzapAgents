@@ -50,23 +50,36 @@ def _payload_triggers_llm1(payload: dict) -> bool:
   return bool(payload.get("triggerLlm1"))
 
 
-def _message_matches_prefix(payload: dict, triggers: set[str]) -> bool:
-  """Check if a payload matches any enabled prefix trigger."""
+def _match_prefix_reason(payload: dict, triggers: set[str]) -> str | None:
+  """Return a short string naming the first matching prefix trigger.
+
+  Returns one of `'tag'`, `'reply'`, `'join'`, or `f'name:{matched}'` when any
+  enabled trigger matches the payload, or `None` when nothing matches. The
+  branch order (tag -> reply -> join -> name) mirrors `_message_matches_prefix`
+  and is relied upon by diagnostic logs and tests; do not reorder.
+  """
   if not triggers:
-    return False
+    return None
   if "tag" in triggers and bool(payload.get("botMentioned")):
-    return True
+    return "tag"
   if "reply" in triggers and bool(payload.get("repliedToBot")):
-    return True
+    return "reply"
   if "join" in triggers:
     msg_type = str(payload.get("messageType") or "").strip().lower()
     if msg_type == "groupparticipantsupdate":
-      return True
+      return "join"
   if "name" in triggers:
     text = _clean_text(payload.get("text"))
-    if text and assistant_name_pattern().search(text):
-      return True
-  return False
+    if text:
+      match = assistant_name_pattern().search(text)
+      if match:
+        return f"name:{match.group(0)}"
+  return None
+
+
+def _message_matches_prefix(payload: dict, triggers: set[str]) -> bool:
+  """Check if a payload matches any enabled prefix trigger."""
+  return _match_prefix_reason(payload, triggers) is not None
 
 
 def _payload_has_meaningful_content(payload: dict) -> bool:
