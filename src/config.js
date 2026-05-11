@@ -34,6 +34,15 @@ function nonNegativeInt(value, fallback) {
   return Math.max(0, Math.floor(parsed));
 }
 
+function parseRatio(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (parsed < 0) return 0;
+  if (parsed > 1) return 1;
+  return parsed;
+}
+
 function normalizeOwnerJid(raw) {
   const trimmed = raw.trim().toLowerCase();
   if (!trimmed) return [];
@@ -59,6 +68,10 @@ const config = {
   moderationDbPath: MODERATION_DB_PATH,
   subagentDbPath: SUBAGENT_DB_PATH,
   reconnectIntervalMs: positiveInt(process.env.WS_RECONNECT_MS, 5000),
+  wsReconnectMaxMs: positiveInt(process.env.WS_RECONNECT_MAX_MS, 60000),
+  wsReconnectJitterRatio: parseRatio(process.env.WS_RECONNECT_JITTER_RATIO, 0.2),
+  wsHeartbeatIntervalMs: positiveInt(process.env.WS_HEARTBEAT_INTERVAL_MS, 20000),
+  wsHeartbeatTimeoutMs: positiveInt(process.env.WS_HEARTBEAT_TIMEOUT_MS, 20000),
   authDir: AUTH_DIR,
   mediaDir: MEDIA_DIR,
   stickersDir: STICKERS_DIR,

@@ -268,6 +268,10 @@ Key optional variables — grouped by concern:
 **Node Gateway:**
 `INSTANCE_ID`, `BOT_OWNER_JIDS`, `ASSISTANT_NAME`, `LLM_WS_TOKEN`,
 `DATA_DIR`, `MEDIA_DIR`, `LOG_LEVEL`, `WS_RECONNECT_MS`,
+`WS_RECONNECT_MAX_MS` (cap for exponential backoff, default 60000),
+`WS_RECONNECT_JITTER_RATIO` (+/- jitter fraction 0..1, default 0.2),
+`WS_HEARTBEAT_INTERVAL_MS` (ping cadence when connected, default 20000),
+`WS_HEARTBEAT_TIMEOUT_MS` (pong wait before terminating a dead socket, default 20000),
 `GROUP_METADATA_TIMEOUT_MS`, `DOWNLOAD_TIMEOUT_MS`, `SEND_TIMEOUT_MS`,
 `UPSERT_CONCURRENCY`, `PERF_LOG_ENABLED`, `PERF_LOG_THRESHOLD_MS`
 
@@ -330,9 +334,14 @@ these for exact cost calculation.
 
 ### WebSocket reconnection
 
-- If the Python bridge restarts, Node's `wsClient` auto-reconnects on a
-  timer (`WS_RECONNECT_MS`, default 5s) and flushes queued `sendReliable()`
-  messages after reconnection.
+- If the Python bridge restarts, Node's `wsClient` reconnects with exponential
+  backoff + full-jitter (`WS_RECONNECT_MS` base, `WS_RECONNECT_MAX_MS` cap,
+  `WS_RECONNECT_JITTER_RATIO` +/- spread) and flushes queued `sendReliable()`
+  messages after reconnect. A per-connection heartbeat pings every
+  `WS_HEARTBEAT_INTERVAL_MS` and `terminate()`s the socket if no pong arrives
+  within `WS_HEARTBEAT_TIMEOUT_MS`, so silent half-open TCP drops are caught
+  quickly. This mirrors the Python server's symmetrical
+  `ping_interval=20, ping_timeout=20` in `python/bridge/main.py`.
 - If Node restarts, Python must reconnect. There's no persistent queue on the
   Python side — in-flight batches are lost.
 

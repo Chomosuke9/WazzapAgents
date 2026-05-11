@@ -230,6 +230,7 @@ function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   logger.info({ signal }, 'shutting down');
+  wsClient.close();
   closeAllDbs();
   process.exit(0);
 }
