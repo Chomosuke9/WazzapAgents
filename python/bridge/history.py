@@ -46,7 +46,13 @@ def assistant_name_pattern() -> re.Pattern:
   _parse_assistant_names()  # ensure cache is fresh
   if _cached_pattern is not None:
     return _cached_pattern
-  aliases = _cached_names
+  # Belt-and-suspenders: _parse_assistant_names already drops empties, but
+  # guard here too so a corrupted/poisoned _cached_names (e.g. ["Vivy", ""])
+  # cannot produce an unsafe alternation like r"(?i)\b(?:Vivy|)\b" that
+  # matches every word boundary and fires the name trigger on every message.
+  aliases = [a for a in _cached_names if a and a.strip()]
+  if not aliases:
+    aliases = [DEFAULT_ASSISTANT_NAME]
   escaped = [re.escape(a) for a in aliases]
   pattern = r"(?i)\b(?:" + "|".join(escaped) + r")\b"
   _cached_pattern = re.compile(pattern)
