@@ -83,6 +83,11 @@ def _sanitize_group_description(text: str | None, max_chars: int = 2000) -> str:
     * neutralize any forged ``<group_description>`` / ``</group_description>``
       delimiter tokens (case-insensitive) so an attacker cannot close the
       wrapping delimiter used by :func:`_group_description_user_message`
+    * neutralize any other tag name the surrounding LLM1/LLM2 prompts teach
+      the model to honor (``<prompt_override>``, ``<subagent>``,
+      ``<context_behavior>``, ``<delete>``, ``<mute>``, ``<kick>``,
+      ``<sticker>``, ``<help>``) so an attacker cannot forge a block the
+      model already treats as authoritative from inside the description body
     * truncate to ``max_chars`` to bound prompt growth
 
   Returns ``"(none)"`` when the input is empty after stripping.
@@ -92,21 +97,35 @@ def _sanitize_group_description(text: str | None, max_chars: int = 2000) -> str:
     return "(none)"
   # Escape any literal delimiter tokens in the user-controlled text so the
   # wrapping <group_description>...</group_description> envelope cannot be
-  # forged or closed prematurely. Case-insensitive match; angle brackets are
-  # replaced with safe fullwidth look-alikes that still render readably but
-  # are not treated as a tag boundary by the model.
-  cleaned = re.sub(
-    r"</\s*group_description\s*>",
-    "(/group_description)",
-    cleaned,
-    flags=re.IGNORECASE,
+  # forged or closed prematurely, and so that other fences the surrounding
+  # prompts treat as authoritative cannot be reconstructed inside the body.
+  # Case-insensitive match; angle brackets are replaced with safe
+  # parenthesized forms that still render readably but are not treated as a
+  # tag boundary by the model.
+  _fence_names = (
+    "group_description",
+    "prompt_override",
+    "subagent",
+    "context_behavior",
+    "delete",
+    "mute",
+    "kick",
+    "sticker",
+    "help",
   )
-  cleaned = re.sub(
-    r"<\s*group_description\s*>",
-    "(group_description)",
-    cleaned,
-    flags=re.IGNORECASE,
-  )
+  for name in _fence_names:
+    cleaned = re.sub(
+      rf"</\s*{name}\s*>",
+      f"(/{name})",
+      cleaned,
+      flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+      rf"<\s*{name}\s*>",
+      f"({name})",
+      cleaned,
+      flags=re.IGNORECASE,
+    )
   if len(cleaned) > max_chars:
     if max_chars <= 3:
       cleaned = cleaned[:max_chars]
