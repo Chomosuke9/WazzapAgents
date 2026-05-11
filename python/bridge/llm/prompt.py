@@ -86,7 +86,8 @@ def _sanitize_group_description(text: str | None, max_chars: int = 2000) -> str:
     * neutralize any other tag name the surrounding LLM1/LLM2 prompts teach
       the model to honor (``<prompt_override>``, ``<subagent>``,
       ``<context_behavior>``, ``<delete>``, ``<mute>``, ``<kick>``,
-      ``<sticker>``, ``<help>``) so an attacker cannot forge a block the
+      ``<sticker>``, ``<help>``, ``<mandatory>``, ``<action_rules>``,
+      ``<output>``, ``<command>``) so an attacker cannot forge a block the
       model already treats as authoritative from inside the description body
     * truncate to ``max_chars`` to bound prompt growth
 
@@ -112,6 +113,10 @@ def _sanitize_group_description(text: str | None, max_chars: int = 2000) -> str:
     "kick",
     "sticker",
     "help",
+    "mandatory",
+    "action_rules",
+    "output",
+    "command",
   )
   for name in _fence_names:
     cleaned = re.sub(
