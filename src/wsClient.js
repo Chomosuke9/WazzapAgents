@@ -12,26 +12,44 @@
  *                         `invalidate_chat_settings`, `set_subagent_enabled`.
  *
  * Reconnect strategy:
- *   Exponential backoff with full-jitter. Base delay is `WS_RECONNECT_MS`
+ *   Exponential backoff with symmetric jitter. Base delay is `WS_RECONNECT_MS`
  *   (default 5000), capped at `WS_RECONNECT_MAX_MS` (default 60000), with
  *   +/- `WS_RECONNECT_JITTER_RATIO` (default 0.2 = 20%) applied symmetrically
  *   so retries desynchronise across instances and avoid hammering a
- *   struggling server. The pure function `computeReconnectDelay` is exported
- *   for deterministic unit testing.
+ *   struggling server. The jittered result is also clamped to `maxMs` so a
+ *   large jitter ratio can never exceed the configured cap. The pure function
+ *   `computeReconnectDelay` is exported for deterministic unit testing.
+ *
+ *   To protect against "accept-then-kick" flaps (server 1xxx closes
+ *   immediately after handshake) the `attempt` counter is NOT reset on the
+ *   `'open'` event. Instead we arm a grace timer for
+ *   `max(WS_RECONNECT_MS, 5000)`; only if the socket stays OPEN for that
+ *   long is `attempt` reset to 0. A close before the grace expires leaves
+ *   the counter intact so backoff keeps growing.
  *
  * Heartbeat:
- *   Once connected, Node sends a WS ping every `WS_HEARTBEAT_INTERVAL_MS`
- *   (default 20000). If the matching pong does not arrive within
- *   `WS_HEARTBEAT_TIMEOUT_MS` (default 20000) the socket is deemed half-open
- *   and `ws.terminate()` is invoked, which triggers the normal `close`
- *   reconnect path. This is symmetrical with the Python side, which runs
+ *   Canonical `ws` docs pattern (check-then-ping). On open we mark the
+ *   socket alive; every pong re-marks it alive. A single interval timer
+ *   fires every `WS_HEARTBEAT_INTERVAL_MS` (default 20000): if the socket
+ *   was not marked alive since the previous tick, `ws.terminate()` is
+ *   invoked, which triggers the normal `close` reconnect path. Otherwise
+ *   the flag is cleared and a fresh ping is sent. Detection latency is
+ *   exactly one interval and there is no second timer to race against.
+ *   This is symmetrical with the Python side, which runs
  *   `websockets.serve(..., ping_interval=20, ping_timeout=20)` in
  *   `python/bridge/main.py` and would detect a dead Node the same way.
  *
  * Graceful shutdown:
- *   Call `close()` on the instance to cancel the reconnect timer, clear
- *   heartbeat timers, empty the reliable queue, remove listeners, and close
- *   the socket. `src/index.js` wires this into its SIGINT/SIGTERM handler.
+ *   `close()` is async and returns a promise that resolves when the socket
+ *   emits `'close'` or after a bounded 1000ms timeout, whichever comes
+ *   first. It cancels the reconnect timer, clears heartbeat timers,
+ *   best-effort flushes the reliable queue if the socket is still OPEN,
+ *   drops whatever remains, and closes the socket. It does NOT strip
+ *   listeners registered by external callers on the instance itself
+ *   (e.g. `wsClient.on('message', ...)` in `src/index.js`); only the
+ *   internal listeners on the underlying `ws` socket are removed.
+ *   `src/index.js` awaits this in its SIGINT/SIGTERM handler before
+ *   closing databases and calling `process.exit(0)`.
  *
  * The class is exported as a named export so tests can construct fresh
  * instances; the module's default export is a process-wide singleton used
@@ -44,25 +62,29 @@ import config from './config.js';
 
 /**
  * Pure function computing the next reconnect delay (in ms) for a given
- * attempt number using exponential backoff with full-jitter.
+ * attempt number using exponential backoff with symmetric jitter.
  *
  * Intended to be called for attempt >= 1 (attempt 0 is the initial connect
  * and should not be scheduled). For attempt <= 0 this returns 0.
  *
+ * The jittered delay is clamped to `maxMs` so a large `jitterRatio` cannot
+ * push the returned delay above the configured cap.
+ *
  * @param {object} opts
  * @param {number} opts.attempt      Reconnect attempt number (1-indexed).
  * @param {number} opts.baseMs       Base delay for attempt 1 (e.g. 5000).
- * @param {number} opts.maxMs        Cap for the exponential growth.
+ * @param {number} opts.maxMs        Cap for the exponential growth and jittered result.
  * @param {number} opts.jitterRatio  [0,1] fraction of delay used for symmetric jitter.
  * @param {() => number} [opts.rand] Random source in [0,1). Injectable for tests.
- * @returns {number} Delay in ms, rounded and floored to 0.
+ * @returns {number} Delay in ms, rounded, floored to 0, and capped at maxMs.
  */
 export function computeReconnectDelay({ attempt, baseMs, maxMs, jitterRatio, rand = Math.random }) {
   if (!Number.isFinite(attempt) || attempt < 1) return 0;
   const exp = baseMs * Math.pow(2, attempt - 1);
   const delay = Math.min(maxMs, exp);
   const jitter = delay * jitterRatio * (rand() * 2 - 1);
-  return Math.max(0, Math.round(delay + jitter));
+  const jittered = Math.max(0, Math.round(delay + jitter));
+  return Math.min(maxMs, jittered);
 }
 
 export class LLMWebSocket extends EventEmitter {
@@ -76,7 +98,8 @@ export class LLMWebSocket extends EventEmitter {
     this.reliableQueue = [];
     this.attempt = 0;
     this.heartbeatInterval = null;
-    this.pendingPongTimeout = null;
+    this.stableResetTimer = null;
+    this.isAlive = false;
   }
 
   connect() {
@@ -85,8 +108,8 @@ export class LLMWebSocket extends EventEmitter {
       return;
     }
 
-    // Clear any prior heartbeat timers before opening a new socket so we
-    // never leak timers across socket lifetimes.
+    // Clear any prior timers before opening a new socket so we never leak
+    // timers across socket lifetimes.
     this._clearHeartbeat();
 
     if (this.ws) {
@@ -108,8 +131,17 @@ export class LLMWebSocket extends EventEmitter {
 
     this.ws.on('open', () => {
       logger.info('LLM websocket connected');
-      this.attempt = 0;
+      this.isAlive = true;
       this._startHeartbeat();
+      // Reset attempt only after the socket has been OPEN for a grace
+      // period; this prevents an immediate accept-then-kick flap from
+      // perpetually masking backoff. Cancel in _clearHeartbeat (which is
+      // invoked on close) and in close().
+      const stableAfterMs = Math.max(config.wsReconnectIntervalMs, 5000);
+      this.stableResetTimer = setTimeout(() => {
+        this.attempt = 0;
+        this.stableResetTimer = null;
+      }, stableAfterMs);
       this.send({
         type: 'hello',
         payload: {
@@ -122,10 +154,7 @@ export class LLMWebSocket extends EventEmitter {
     });
 
     this.ws.on('pong', () => {
-      if (this.pendingPongTimeout) {
-        clearTimeout(this.pendingPongTimeout);
-        this.pendingPongTimeout = null;
-      }
+      this.isAlive = true;
     });
 
     this.ws.on('message', (data) => {
@@ -154,7 +183,7 @@ export class LLMWebSocket extends EventEmitter {
     this.attempt += 1;
     const delay = computeReconnectDelay({
       attempt: this.attempt,
-      baseMs: config.reconnectIntervalMs,
+      baseMs: config.wsReconnectIntervalMs,
       maxMs: config.wsReconnectMaxMs,
       jitterRatio: config.wsReconnectJitterRatio,
     });
@@ -169,24 +198,21 @@ export class LLMWebSocket extends EventEmitter {
     this._clearHeartbeat();
     this.heartbeatInterval = setInterval(() => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      if (this.isAlive === false) {
+        logger.warn({ intervalMs: config.wsHeartbeatIntervalMs }, 'ws heartbeat missed pong, terminating socket');
+        try {
+          this.ws.terminate();
+        } catch (err) {
+          logger.warn({ err }, 'ws terminate failed');
+        }
+        return;
+      }
+      this.isAlive = false;
       try {
         this.ws.ping();
       } catch (err) {
         logger.warn({ err }, 'ws ping failed');
-        return;
       }
-      if (this.pendingPongTimeout) {
-        clearTimeout(this.pendingPongTimeout);
-      }
-      this.pendingPongTimeout = setTimeout(() => {
-        this.pendingPongTimeout = null;
-        logger.warn({ timeoutMs: config.wsHeartbeatTimeoutMs }, 'ws pong timeout, terminating socket');
-        try {
-          this.ws?.terminate();
-        } catch (err) {
-          logger.warn({ err }, 'ws terminate failed');
-        }
-      }, config.wsHeartbeatTimeoutMs);
     }, config.wsHeartbeatIntervalMs);
   }
 
@@ -195,32 +221,53 @@ export class LLMWebSocket extends EventEmitter {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
     }
-    if (this.pendingPongTimeout) {
-      clearTimeout(this.pendingPongTimeout);
-      this.pendingPongTimeout = null;
+    if (this.stableResetTimer) {
+      clearTimeout(this.stableResetTimer);
+      this.stableResetTimer = null;
     }
   }
 
-  close() {
+  async close() {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     this._clearHeartbeat();
+    // Best-effort: if the socket is still OPEN, flush queued reliable
+    // messages before dropping anything.
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.reliableQueue.length > 0) {
+      this.flushReliableQueue();
+    }
     if (this.reliableQueue.length > 0) {
       logger.info({ dropped: this.reliableQueue.length }, 'ws close dropping queued reliable messages');
       this.reliableQueue.length = 0;
     }
-    this.removeAllListeners();
-    if (this.ws) {
-      this.ws.removeAllListeners();
+    if (!this.ws) return;
+    const ws = this.ws;
+    this.ws = null;
+    // Drop only the listeners this class owns on the socket. External
+    // listeners registered on the instance itself (e.g. `on('message', ...)`
+    // in bootstrap) are left alone; the caller owns their own subscriptions.
+    ws.removeAllListeners();
+    if (ws.readyState === WebSocket.CLOSED) return;
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(finish, 1000);
+      if (typeof timer.unref === 'function') timer.unref();
+      ws.once('close', finish);
       try {
-        this.ws.close();
+        ws.close();
       } catch (err) {
         logger.warn({ err }, 'ws close failed');
+        finish();
       }
-      this.ws = null;
-    }
+    });
   }
 
   isConnected() {

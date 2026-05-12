@@ -67,7 +67,7 @@ const config = {
   statsDbPath: STATS_DB_PATH,
   moderationDbPath: MODERATION_DB_PATH,
   subagentDbPath: SUBAGENT_DB_PATH,
-  reconnectIntervalMs: positiveInt(process.env.WS_RECONNECT_MS, 5000),
+  wsReconnectIntervalMs: positiveInt(process.env.WS_RECONNECT_MS, 5000),
   wsReconnectMaxMs: positiveInt(process.env.WS_RECONNECT_MAX_MS, 60000),
   wsReconnectJitterRatio: parseRatio(process.env.WS_RECONNECT_JITTER_RATIO, 0.2),
   wsHeartbeatIntervalMs: positiveInt(process.env.WS_HEARTBEAT_INTERVAL_MS, 20000),
