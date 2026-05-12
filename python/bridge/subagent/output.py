@@ -419,10 +419,10 @@ def stage_output_files(
     # in files_content. These are oversized files that SubAgents couldn't inline;
     # they still live on disk (single-machine or shared-FS) and must not be
     # silently dropped when files_content is non-empty.
-    content_staged_names = {f.name for f in staged}
+    content_original_names = {(item.get("name") or "unnamed").strip() for item in files_content}
     for src in paths:
       name = os.path.basename(src) or "unnamed"
-      if name in content_staged_names:
+      if name in content_original_names:
         # Already delivered via base64 content; skip the path-copy.
         continue
       if not src or not os.path.exists(src):
