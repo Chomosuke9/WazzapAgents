@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -11,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import bridge.subagent.output
 from bridge.subagent.output import (
   MAX_FILE_SIZE_BYTES,
   StagedFile,
@@ -23,6 +25,8 @@ from bridge.subagent.output import (
   stage_output_files,
 )
 from bridge.messaging.gateway import send_attachment
+import bridge.subagent.client
+from bridge.subagent.client import SubAgentClient
 
 
 # ---------------------------------------------------------------------------
@@ -614,3 +618,139 @@ class TestSendAttachment:
       request_id="req-5",
     ))
     assert ws.sent == []
+
+
+# ---------------------------------------------------------------------------
+# TestStageOutputFilesFromContent
+# ---------------------------------------------------------------------------
+
+class TestStageOutputFilesFromContent:
+  def test_uses_files_content_to_write_file(self, tmp_path):
+    pdf_bytes = b'%PDF-1.4'
+    encoded = base64.b64encode(pdf_bytes).decode("ascii")
+    result = stage_output_files(
+      "sess_b64",
+      [],
+      files_content=[{"name": "report.pdf", "content_base64": encoded, "mime": "application/pdf"}],
+      base_dir=tmp_path,
+    )
+    staged = result.staged
+    assert len(staged) == 1
+    assert staged[0].name == "report.pdf"
+    assert staged[0].kind == "document"
+    assert staged[0].size_bytes == len(pdf_bytes)
+    assert Path(staged[0].path).exists()
+    assert Path(staged[0].path).read_bytes() == pdf_bytes
+
+  def test_files_content_image_detected(self, tmp_path):
+    jpeg_bytes = b'\xff\xd8\xff\xe0' + b'\x00' * 12
+    encoded = base64.b64encode(jpeg_bytes).decode("ascii")
+    result = stage_output_files(
+      "sess_img",
+      [],
+      files_content=[{"name": "photo.jpg", "content_base64": encoded}],
+      base_dir=tmp_path,
+    )
+    staged = result.staged
+    assert len(staged) == 1
+    assert staged[0].kind == "image"
+    assert staged[0].mime == "image/jpeg"
+
+  def test_empty_files_content_falls_back_to_raw_paths(self, tmp_path):
+    real_file = tmp_path / "source" / "data.txt"
+    real_file.parent.mkdir()
+    real_file.write_bytes(b"hello")
+    result = stage_output_files(
+      "sess_fb",
+      [str(real_file)],
+      files_content=[],
+      base_dir=tmp_path / "out",
+    )
+    assert len(result.staged) == 1
+    assert result.staged[0].name == "data.txt"
+
+  def test_none_files_content_falls_back_to_raw_paths(self, tmp_path):
+    real_file = tmp_path / "source" / "readme.txt"
+    real_file.parent.mkdir()
+    real_file.write_bytes(b"world")
+    result = stage_output_files(
+      "sess_none",
+      [str(real_file)],
+      files_content=None,
+      base_dir=tmp_path / "out",
+    )
+    assert len(result.staged) == 1
+    assert result.staged[0].name == "readme.txt"
+
+  def test_invalid_base64_is_skipped(self, tmp_path):
+    result = stage_output_files(
+      "sess_invalid",
+      [],
+      files_content=[{"name": "bad.bin", "content_base64": "not-valid-base64!!!"}],
+      base_dir=tmp_path,
+    )
+    assert result.staged == []
+    assert len(result.skipped) == 1
+    assert "base64 decode failed" in result.skipped[0].reason
+
+  def test_oversized_files_content_is_skipped(self, tmp_path, monkeypatch):
+    monkeypatch.setattr("bridge.subagent.output.MAX_FILE_SIZE_BYTES", 4)
+    data = b"12345678"  # 8 bytes > 4 byte limit
+    encoded = base64.b64encode(data).decode("ascii")
+    result = stage_output_files(
+      "sess_over",
+      [],
+      files_content=[{"name": "big.bin", "content_base64": encoded}],
+      base_dir=tmp_path,
+    )
+    assert result.staged == []
+    assert len(result.skipped) == 1
+    assert "too large" in result.skipped[0].reason
+
+  def test_collision_handling_in_files_content(self, tmp_path):
+    data1 = base64.b64encode(b"content-one").decode("ascii")
+    data2 = base64.b64encode(b"content-two").decode("ascii")
+    result = stage_output_files(
+      "sess_coll",
+      [],
+      files_content=[
+        {"name": "out.csv", "content_base64": data1},
+        {"name": "out.csv", "content_base64": data2},
+      ],
+      base_dir=tmp_path,
+    )
+    assert len(result.staged) == 2
+    names = sorted(f.name for f in result.staged)
+    assert names == ["out.csv", "out_1.csv"]
+
+
+# ---------------------------------------------------------------------------
+# TestSubAgentClientEncodeInputFiles
+# ---------------------------------------------------------------------------
+
+class TestSubAgentClientEncodeInputFiles:
+  def test_encodes_small_file(self, tmp_path):
+    tmp_file = tmp_path / "hello.txt"
+    tmp_file.write_bytes(b"hello world")
+    client = SubAgentClient(base_url="http://localhost:9999", webhook_url="http://localhost:9999/cb")
+    result = client._encode_input_files([str(tmp_file)])
+    assert len(result) == 1
+    assert result[0]["name"] == "hello.txt"
+    assert base64.b64decode(result[0]["content_base64"]) == b"hello world"
+
+  def test_skips_missing_file(self, tmp_path):
+    client = SubAgentClient(base_url="http://localhost:9999", webhook_url="http://localhost:9999/cb")
+    result = client._encode_input_files([str(tmp_path / "nonexistent.txt")])
+    assert result == []
+
+  def test_skips_oversized_file(self, tmp_path, monkeypatch):
+    monkeypatch.setattr("bridge.subagent.client.SUBAGENT_MAX_INLINE_FILE_BYTES", 4)
+    big_file = tmp_path / "big.bin"
+    big_file.write_bytes(b"12345678")  # 8 bytes > 4 byte limit
+    client = SubAgentClient(base_url="http://localhost:9999", webhook_url="http://localhost:9999/cb")
+    result = client._encode_input_files([str(big_file)])
+    assert result == []
+
+  def test_returns_empty_for_empty_input(self):
+    client = SubAgentClient(base_url="http://localhost:9999", webhook_url="http://localhost:9999/cb")
+    assert client._encode_input_files([]) == []
