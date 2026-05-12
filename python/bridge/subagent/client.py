@@ -10,6 +10,16 @@ except ImportError:
   requests = None  # type: ignore
 
 try:
+  from ..log import setup_logging
+except ImportError:
+  import sys
+  from pathlib import Path
+  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
+  from bridge.log import setup_logging  # type: ignore
+
+logger = setup_logging()
+
+try:
   from .config import (
     SUBAGENT_URL,
     SUBAGENT_WEBHOOK_URL,
@@ -162,6 +172,12 @@ class SubAgentClient:
           continue
         size = os.path.getsize(path)
         if size > SUBAGENT_MAX_INLINE_FILE_BYTES:
+          logger.info(
+            "omitting %s from input_files_content: size %d bytes exceeds inline limit %d",
+            os.path.basename(path),
+            size,
+            SUBAGENT_MAX_INLINE_FILE_BYTES,
+          )
           continue
         with open(path, "rb") as fh:
           data = fh.read()
