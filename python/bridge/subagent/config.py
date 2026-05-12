@@ -53,3 +53,11 @@ SUBAGENT_REPORT_MAX_CHARS = _parse_non_negative_int(os.getenv("SUBAGENT_REPORT_M
 SUBAGENT_PROGRESS_DETAIL_MAX_CHARS = _parse_non_negative_int(
   os.getenv("SUBAGENT_PROGRESS_DETAIL_MAX_CHARS"), 500
 )
+
+# Maximum file size (in bytes) to inline as base64 in the /execute payload
+# for cross-machine deployments. Files larger than this are sent as path
+# references only (backward-compatible single-machine behavior).
+# Default 50 MB. Set to 0 to disable inlining entirely.
+SUBAGENT_MAX_INLINE_FILE_BYTES = _parse_non_negative_int(
+  os.getenv("SUBAGENT_MAX_INLINE_FILE_BYTES"), 50 * 1024 * 1024
+)
