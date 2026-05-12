@@ -348,6 +348,15 @@ def stage_output_files(
       if not b64:
         skipped.append(SkippedFile(source_path="", name=name, reason="empty base64 content"))
         continue
+      # Pre-check: estimated decoded size avoids materializing a huge
+      # allocation when the payload is clearly oversized.
+      estimated_size = len(b64) * 3 // 4
+      if estimated_size > MAX_FILE_SIZE_BYTES:
+        skipped.append(SkippedFile(
+          source_path="", name=name,
+          reason=f"file too large (estimated {_format_size(estimated_size)} > 200 MB)",
+        ))
+        continue
       try:
         data = base64.b64decode(b64)
       except Exception as err:
@@ -405,6 +414,75 @@ def stage_output_files(
         kind=kind,
         thumbnail_base64=thumbnail_b64_val,
       ))
+
+    # Second pass: copy any raw_paths whose basename is NOT already represented
+    # in files_content. These are oversized files that SubAgents couldn't inline;
+    # they still live on disk (single-machine or shared-FS) and must not be
+    # silently dropped when files_content is non-empty.
+    content_staged_names = {f.name for f in staged}
+    for src in paths:
+      name = os.path.basename(src) or "unnamed"
+      if name in content_staged_names:
+        # Already delivered via base64 content; skip the path-copy.
+        continue
+      if not src or not os.path.exists(src):
+        logger.warning(
+          "stage_output_files: oversized raw_path not found, skipping: %s", src,
+        )
+        skipped.append(SkippedFile(source_path=src, name=name, reason="file not found"))
+        continue
+      if not os.path.isfile(src):
+        skipped.append(SkippedFile(source_path=src, name=name, reason="not a regular file"))
+        continue
+      try:
+        size = os.path.getsize(src)
+      except OSError as err:
+        skipped.append(SkippedFile(source_path=src, name=name, reason=f"stat failed: {err}"))
+        continue
+      if size > MAX_FILE_SIZE_BYTES:
+        skipped.append(SkippedFile(
+          source_path=src,
+          name=name,
+          reason=f"file too large ({_format_size(size)} > 200 MB)",
+        ))
+        continue
+
+      final_name = name
+      counter = 1
+      while final_name in used_names or (target_root / final_name).exists():
+        stem, ext = os.path.splitext(name)
+        final_name = f"{stem}_{counter}{ext}"
+        counter += 1
+      used_names.add(final_name)
+
+      dest = target_root / final_name
+      try:
+        shutil.copyfile(src, dest)
+      except OSError as err:
+        skipped.append(SkippedFile(source_path=src, name=name, reason=f"copy failed: {err}"))
+        continue
+
+      real_dest = str(dest.resolve())
+      kind, mime = detect_kind(real_dest)
+
+      thumbnail_b64_val = None
+      if kind == "document" and generate_document_thumbnail is not None:
+        try:
+          thumb_bytes = generate_document_thumbnail(real_dest, mime)
+          if thumb_bytes:
+            thumbnail_b64_val = base64.b64encode(thumb_bytes).decode("ascii")
+        except Exception:
+          logger.debug("stage_output_files: thumbnail generation failed for %s", real_dest, exc_info=True)
+
+      staged.append(StagedFile(
+        path=real_dest,
+        name=final_name,
+        size_bytes=size,
+        mime=mime,
+        kind=kind,
+        thumbnail_base64=thumbnail_b64_val,
+      ))
+
     return StagedOutputs(staged=staged, skipped=skipped)
 
   # Original path-copy logic (single-machine / backward-compat)

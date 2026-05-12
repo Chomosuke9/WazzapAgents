@@ -723,6 +723,30 @@ class TestStageOutputFilesFromContent:
     names = sorted(f.name for f in result.staged)
     assert names == ["out.csv", "out_1.csv"]
 
+  def test_oversized_content_file_falls_back_to_raw_path(self, tmp_path):
+    # Scenario: files_content has one small PDF, but raw_paths has a second
+    # file (different name) that was too large to inline. The second file
+    # must NOT be silently dropped — it should be copied via path-copy logic.
+    src_dir = tmp_path / "src"
+    src_dir.mkdir()
+    big_file = src_dir / "big_video.mp4"
+    big_file.write_bytes(b"\x00" * 64)  # real file on disk (simulating oversized)
+
+    pdf_bytes = b'%PDF-1.4 test'
+    encoded = base64.b64encode(pdf_bytes).decode("ascii")
+    result = stage_output_files(
+      "sess_mixed",
+      [str(big_file)],  # raw_paths contains the oversized file
+      files_content=[{"name": "report.pdf", "content_base64": encoded, "mime": "application/pdf"}],
+      base_dir=tmp_path / "out",
+    )
+    staged_names = {f.name for f in result.staged}
+    # The inlined PDF must be present
+    assert "report.pdf" in staged_names
+    # The raw_path file (different name, not in files_content) must also be staged
+    assert "big_video.mp4" in staged_names
+    assert len(result.staged) == 2
+
 
 # ---------------------------------------------------------------------------
 # TestSubAgentClientEncodeInputFiles
