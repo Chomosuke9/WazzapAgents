@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import os
 
 try:
   import requests
 except ImportError:
   requests = None  # type: ignore
+
+try:
+  from ..log import setup_logging
+except ImportError:
+  import sys
+  from pathlib import Path
+  sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
+  from bridge.log import setup_logging  # type: ignore
+
+logger = setup_logging()
 
 try:
   from .config import (
@@ -15,6 +27,7 @@ try:
     SUBAGENT_SUBMIT_RETRY_BASE_BACKOFF,
     SUBAGENT_SUBMIT_RETRY_MAX_BACKOFF,
     SUBAGENT_HTTP_TIMEOUT,
+    SUBAGENT_MAX_INLINE_FILE_BYTES,
   )
 except ImportError:
   import sys
@@ -27,6 +40,7 @@ except ImportError:
     SUBAGENT_SUBMIT_RETRY_BASE_BACKOFF,
     SUBAGENT_SUBMIT_RETRY_MAX_BACKOFF,
     SUBAGENT_HTTP_TIMEOUT,
+    SUBAGENT_MAX_INLINE_FILE_BYTES,
   )
 
 
@@ -82,6 +96,10 @@ class SubAgentClient:
       "progress_webhook": self._webhook_url,
       "high_quality": high_quality,
     }
+    try:
+      payload["input_files_content"] = self._encode_input_files(input_files)
+    except Exception:  # encoding failure must never break submit
+      payload["input_files_content"] = []
     url = f"{self._base_url}/execute"
     attempts = max(1, SUBAGENT_SUBMIT_RETRY_MAX + 1)
     last_status: int | None = None
@@ -137,6 +155,39 @@ class SubAgentClient:
     if retry_after:
       body["_retry_after"] = retry_after
     return body
+
+  def _encode_input_files(self, input_files: list[str]) -> list[dict]:
+    """Base64-encode input files for cross-machine transfer.
+
+    For each path in input_files: if the file exists and its size is within
+    SUBAGENT_MAX_INLINE_FILE_BYTES, read and base64-encode its bytes.
+    Returns a list of {name, content_base64} dicts. Entries that don't
+    exist, aren't regular files, or exceed the size limit are silently
+    skipped (they stay in input_files for the path-based fallback).
+    """
+    result: list[dict] = []
+    for path in input_files:
+      try:
+        if not os.path.isfile(path):
+          continue
+        size = os.path.getsize(path)
+        if size > SUBAGENT_MAX_INLINE_FILE_BYTES:
+          logger.info(
+            "omitting %s from input_files_content: size %d bytes exceeds inline limit %d",
+            os.path.basename(path),
+            size,
+            SUBAGENT_MAX_INLINE_FILE_BYTES,
+          )
+          continue
+        with open(path, "rb") as fh:
+          data = fh.read()
+        result.append({
+          "name": os.path.basename(path),
+          "content_base64": base64.b64encode(data).decode("ascii"),
+        })
+      except Exception:  # noqa: BLE001 — never let encoding break submit
+        continue
+    return result
 
 
 def _backoff_seconds(attempt: int, *, body: dict | None = None) -> float:
