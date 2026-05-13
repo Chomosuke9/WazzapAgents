@@ -226,16 +226,23 @@ async function bootstrap() {
 
 let shuttingDown = false;
 
-function shutdown(signal) {
+async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   logger.info({ signal }, 'shutting down');
+  try {
+    await wsClient.close();
+  } catch (err) {
+    logger.error({ err }, 'ws close failed during shutdown');
+  }
   closeAllDbs();
   process.exit(0);
 }
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => shutdown(signal));
+  process.on(signal, () => {
+    shutdown(signal).catch((err) => logger.error({ err }, 'shutdown error'));
+  });
 }
 
 bootstrap().catch((err) => {

@@ -8,6 +8,7 @@
     "dev": "node src/index.js",
     "start": "node src/index.js",
     "lint": "echo \"lint not configured\"",
+    "test": "node --test 'tests/node/**/*.test.mjs'",
     "stress:db": "node tests/db-stress/stress.mjs"
   },
   "keywords": [

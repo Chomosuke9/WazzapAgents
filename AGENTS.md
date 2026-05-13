@@ -268,6 +268,10 @@ Key optional variables — grouped by concern:
 **Node Gateway:**
 `INSTANCE_ID`, `BOT_OWNER_JIDS`, `ASSISTANT_NAME`, `LLM_WS_TOKEN`,
 `DATA_DIR`, `MEDIA_DIR`, `LOG_LEVEL`, `WS_RECONNECT_MS`,
+`WS_RECONNECT_MAX_MS` (cap for exponential backoff, default 60000),
+`WS_RECONNECT_JITTER_RATIO` (+/- jitter fraction 0..1, default 0.2),
+`WS_HEARTBEAT_INTERVAL_MS` (ping cadence and detection granularity when connected, default 20000),
+`WS_HEARTBEAT_TIMEOUT_MS` (deprecated no-op under the `isAlive` heartbeat pattern; parsed but unused, default 20000),
 `GROUP_METADATA_TIMEOUT_MS`, `DOWNLOAD_TIMEOUT_MS`, `SEND_TIMEOUT_MS`,
 `UPSERT_CONCURRENCY`, `PERF_LOG_ENABLED`, `PERF_LOG_THRESHOLD_MS`
 
@@ -330,9 +334,19 @@ these for exact cost calculation.
 
 ### WebSocket reconnection
 
-- If the Python bridge restarts, Node's `wsClient` auto-reconnects on a
-  timer (`WS_RECONNECT_MS`, default 5s) and flushes queued `sendReliable()`
-  messages after reconnection.
+- If the Python bridge restarts, Node's `wsClient` reconnects with exponential
+  backoff + symmetric jitter (`WS_RECONNECT_MS` base, `WS_RECONNECT_MAX_MS` cap,
+  `WS_RECONNECT_JITTER_RATIO` +/- spread; the jittered delay is also clamped to
+  the cap) and flushes queued `sendReliable()` messages after reconnect. The
+  `attempt` counter is reset only after the socket has stayed OPEN for a short
+  grace period, so a server that accepts the handshake and kicks immediately
+  still sees exponential backoff. A per-connection heartbeat uses the canonical
+  `ws`-docs `isAlive` pattern: the interval at `WS_HEARTBEAT_INTERVAL_MS` is
+  both pinger and reaper, so the interval itself is the detection granularity
+  and there is no second timer to race. `WS_HEARTBEAT_TIMEOUT_MS` is kept for
+  backwards compatibility with existing `.env` files but is effectively a
+  no-op under the new scheme. This mirrors the Python server's symmetrical
+  `ping_interval=20, ping_timeout=20` in `python/bridge/main.py`.
 - If Node restarts, Python must reconnect. There's no persistent queue on the
   Python side — in-flight batches are lost.
 
