@@ -344,7 +344,8 @@ LLM2_SUBAGENT_TOOL = {
             "Set to true to use a higher-capability model for tasks requiring "
             "deeper reasoning, complex analysis, or code generation. "
             "Defaults to false for routine tasks like format conversion, "
-            "simple lookups, or basic scripting."
+            "simple lookups, or basic scripting. "
+            "Warning: high quality model could take 10+ minutes. Most case only needed low quality and faster model."
           ),
         },
       },
