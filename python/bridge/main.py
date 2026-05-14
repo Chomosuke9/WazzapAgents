@@ -559,6 +559,12 @@ async def _deliver_subagent_result(
     if file_list_text:
       system_lines.append("")
       system_lines.append(file_list_text)
+    if final_task.result.get("output_files_content_dropped"):
+      system_lines.append("")
+      system_lines.append(
+        "Note: output file(s) could not be delivered because they were too "
+        "large to transfer inline. Tell the user their file could not be sent."
+      )
     subtask_finished_text = "\n".join(system_lines)
     history.append(WhatsAppMessage(
       timestamp_ms=int(time.time() * 1000),
