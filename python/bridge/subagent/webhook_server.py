@@ -73,7 +73,14 @@ class SubAgentWebhookServer:
     # ``_keeper_task`` holds the always-on background task.
     self._shutdown = False
     self._keeper_task: asyncio.Task | None = None
-    self._client_max_size = int(os.getenv("SUBAGENT_WEBHOOK_MAX_BODY_BYTES", str(200 * 1024 * 1024)))
+    _raw = os.getenv("SUBAGENT_WEBHOOK_MAX_BODY_BYTES", str(200 * 1024 * 1024))
+    try:
+      self._client_max_size = int(_raw)
+    except ValueError:
+      raise ValueError(
+        f"SUBAGENT_WEBHOOK_MAX_BODY_BYTES must be a plain integer number of bytes; "
+        f"got {_raw!r}"
+      ) from None
 
   async def start(self) -> None:
     """Start the webhook server once (no auto-restart).

@@ -338,10 +338,9 @@ async def test_request_entity_too_large_returns_413():
   assert resp.status == 413
 
 
-def test_client_max_size_default_is_200mb():
+def test_client_max_size_default_is_200mb(monkeypatch):
   """Without any env override, _client_max_size defaults to 200 MB."""
-  import os
-  os.environ.pop("SUBAGENT_WEBHOOK_MAX_BODY_BYTES", None)
+  monkeypatch.delenv("SUBAGENT_WEBHOOK_MAX_BODY_BYTES", raising=False)
   tracker = SubTaskTracker()
   server = SubAgentWebhookServer(tracker, port=0)
   assert server._client_max_size == 200 * 1024 * 1024
