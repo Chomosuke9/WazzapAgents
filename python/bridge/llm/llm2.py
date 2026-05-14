@@ -386,9 +386,8 @@ def _context_injection_block(
     llm1_reason = " ".join(llm1_reason_raw.split())
   elif llm1_reason_raw is not None:
     llm1_reason = " ".join(str(llm1_reason_raw).split())
-
   if llm1_reason:
-    llm1_reason_line = f"\nLLM1 routing reason: {llm1_reason}\n\n"
+    llm1_reason_line = f"\nInvoke reason: {llm1_reason}\n\n"
   else:
     llm1_reason_line = "\n"
 

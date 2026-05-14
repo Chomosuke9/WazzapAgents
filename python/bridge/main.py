@@ -1226,7 +1226,7 @@ async def handle_socket(ws):
               decision = LLM1Decision(
                 should_response=True,
                 confidence=100,
-                reason="Idle trigger: bot has been silent too long.",
+                reason="Idle trigger: bot has been silent too long, try to join the conversation.",
               )
               llm1_ms = 0
               logger.info(
@@ -1455,7 +1455,7 @@ async def handle_socket(ws):
             decision = LLM1Decision(
               should_response=True,
               confidence=100,
-              reason="Idle trigger: bot has been silent too long.",
+              reason="Idle trigger: bot has been silent too long, try to join the conversation.",
             )
             logger.info(
               "llm1 skip overridden by idle trigger",

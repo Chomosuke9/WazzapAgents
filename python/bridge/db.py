@@ -57,6 +57,27 @@ VALID_TRIGGERS = {'tag', 'reply', 'join', 'name'}
 DEFAULT_TRIGGERS = 'tag,reply,name'
 DEFAULT_SUBAGENT_ENABLED = False
 GLOBAL_CHAT_ID = '__global__'
+PROMPT_OVERRIDE_PATH = Path(__file__).resolve().parent.parent / "promptoverride.txt"
+_DEFAULT_PROMPT_OVERRIDE: str | None = None
+
+
+def _load_default_prompt_override() -> str | None:
+  """Load the default prompt override from promptoverride.txt, or None if empty/missing."""
+  try:
+    lines = PROMPT_OVERRIDE_PATH.read_text(encoding="utf-8").splitlines()
+    # Strip leading/trailing whitespace per line, filter out empty and comment-only lines
+    cleaned = '\n'.join(
+      line for line in (l.strip() for l in lines)
+      if line and not line.startswith('//')
+    ).strip()
+    return cleaned if cleaned else None
+  except (FileNotFoundError, IOError, OSError):
+    return None
+
+
+_DEFAULT_PROMPT_OVERRIDE = _load_default_prompt_override()
+
+
 def _env_float(name: str, default: float, minimum: float) -> float:
   raw = os.getenv(name)
   if raw is None or not raw.strip():
@@ -517,6 +538,14 @@ def _ensure_settings_tables(conn: sqlite3.Connection) -> None:
   )
   conn.commit()
 
+  # Set the global default prompt from promptoverride.txt if available
+  if _DEFAULT_PROMPT_OVERRIDE:
+    conn.execute(
+      'UPDATE chat_settings SET prompt = ? WHERE chat_id = ? AND prompt IS NULL',
+      (_DEFAULT_PROMPT_OVERRIDE, GLOBAL_CHAT_ID),
+    )
+    conn.commit()
+
 
 def _ensure_stats_tables(conn: sqlite3.Connection) -> None:
   conn.executescript(
@@ -652,6 +681,15 @@ def _get_setting_row(chat_id: str) -> Optional[sqlite3.Row]:
   ).fetchone()
 
 
+def _get_global_setting_row() -> Optional[sqlite3.Row]:
+  """Return the __global__ settings row directly."""
+  _ensure_split_ready()
+  conn = _get_settings_conn()
+  return conn.execute(
+    'SELECT * FROM chat_settings WHERE chat_id = ?', (GLOBAL_CHAT_ID,)
+  ).fetchone()
+
+
 @_db_resilient('settings')
 def get_prompt(chat_id: str) -> Optional[str]:
   """Return the custom prompt for *chat_id*, or ``None`` if not set."""
@@ -662,6 +700,13 @@ def get_prompt(chat_id: str) -> Optional[str]:
 
   row = _get_setting_row(chat_id)
   value = row['prompt'] if row is not None else None
+
+  # Fallback to the __global__ row if per-chat prompt is NULL
+  if value is None:
+    global_row = _get_global_setting_row()
+    if global_row is not None and global_row['prompt'] is not None:
+      value = global_row['prompt']
+
   with _cache_lock:
     _prompt_cache[chat_id] = value
   return value
@@ -678,8 +723,6 @@ def set_prompt(chat_id: str, prompt: Optional[str]) -> None:
   )
   conn.commit()
   _pop_all_chat_caches(chat_id)
-  with _cache_lock:
-    _prompt_cache[chat_id] = prompt
   logger.info('DB set_prompt chat_id=%s len=%s', chat_id, len(prompt) if prompt else 0)
 
 
