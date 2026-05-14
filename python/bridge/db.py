@@ -530,6 +530,12 @@ def _ensure_settings_tables(conn: sqlite3.Connection) -> None:
   except sqlite3.OperationalError:
     pass
 
+  # Check whether the __global__ row already exists before we try to create it.
+  # This tells us whether we should seed the default prompt override.
+  global_exists = conn.execute(
+    'SELECT 1 FROM chat_settings WHERE chat_id = ?', (GLOBAL_CHAT_ID,)
+  ).fetchone() is not None
+
   # Ensure a __global__ defaults row exists so setGlobal* updates propagate
   # and get_* functions can fall back to it for chats without a specific row.
   conn.execute(
@@ -538,10 +544,12 @@ def _ensure_settings_tables(conn: sqlite3.Connection) -> None:
   )
   conn.commit()
 
-  # Set the global default prompt from promptoverride.txt if available
-  if _DEFAULT_PROMPT_OVERRIDE:
+  # Only seed the default prompt override when creating the __global__ row for
+  # the first time.  This prevents overwriting a user-cleared prompt on every
+  # connection reset (e.g. after reset_settings_connection() or a new thread).
+  if not global_exists and _DEFAULT_PROMPT_OVERRIDE:
     conn.execute(
-      'UPDATE chat_settings SET prompt = ? WHERE chat_id = ? AND prompt IS NULL',
+      'UPDATE chat_settings SET prompt = ? WHERE chat_id = ?',
       (_DEFAULT_PROMPT_OVERRIDE, GLOBAL_CHAT_ID),
     )
     conn.commit()
@@ -691,24 +699,56 @@ def _get_global_setting_row() -> Optional[sqlite3.Row]:
 
 
 @_db_resilient('settings')
-def get_prompt(chat_id: str) -> Optional[str]:
-  """Return the custom prompt for *chat_id*, or ``None`` if not set."""
+def get_prompt(chat_id: str, *, fallback_to_global: bool = True) -> Optional[str]:
+  """Return the prompt for *chat_id*.
+
+  When *fallback_to_global* is True (the default), returns the per-chat prompt
+  if set, otherwise falls back to the global prompt override.  When False,
+  returns only the per-chat prompt without falling back — useful for the
+  ``/prompt`` command which needs to distinguish *"no custom prompt"* from
+  *"uses the global default"*.
+
+  The per-chat value is cached and shared regardless of *fallback_to_global*;
+  the fallback is resolved at read time (never cached under a per-chat key)
+  so that a global-prompt update immediately propagates to non-explicit chats.
+  """
   with _cache_lock:
     cached = _prompt_cache.get(chat_id, _MISSING)
   if cached is not _MISSING:
-    return cached  # type: ignore[return-value]
+    raw = cached  # type: ignore[assignment]
+  else:
+    # Query the per-chat row directly (not via _get_setting_row which falls
+    # back to the __global__ row at the row level).  This ensures the cached
+    # value is the per-chat prompt only, so the fallback logic below can be
+    # applied freshly on every read.
+    _ensure_split_ready()
+    conn = _get_settings_conn()
+    row = conn.execute(
+      'SELECT prompt FROM chat_settings WHERE chat_id = ?', (chat_id,)
+    ).fetchone()
+    raw = row['prompt'] if row is not None else None
+    with _cache_lock:
+      _prompt_cache[chat_id] = raw
 
-  row = _get_setting_row(chat_id)
-  value = row['prompt'] if row is not None else None
+  # Apply fallback on top of the cached raw value
+  if raw is None and fallback_to_global:
+    global_prompt = _get_global_prompt_cached()
+    if global_prompt is not None:
+      return global_prompt
+  return raw
 
-  # Fallback to the __global__ row if per-chat prompt is NULL
-  if value is None:
-    global_row = _get_global_setting_row()
-    if global_row is not None and global_row['prompt'] is not None:
-      value = global_row['prompt']
 
+def _get_global_prompt_cached() -> Optional[str]:
+  """Return the global prompt value, using the per-chat cache when available."""
   with _cache_lock:
-    _prompt_cache[chat_id] = value
+    global_cached = _prompt_cache.get(GLOBAL_CHAT_ID, _MISSING)
+  if global_cached is not _MISSING:
+    return global_cached  # type: ignore[return-value]
+  # Not in cache — read from DB and cache it.
+  row = _get_global_setting_row()
+  value = row['prompt'] if row is not None else None
+  with _cache_lock:
+    _prompt_cache[GLOBAL_CHAT_ID] = value
   return value
 
 
@@ -722,7 +762,17 @@ def set_prompt(chat_id: str, prompt: Optional[str]) -> None:
     (prompt, 'now', chat_id),
   )
   conn.commit()
+  # Invalidate per-chat caches for this row (permission, mode, triggers, …).
   _pop_all_chat_caches(chat_id)
+  # When the __global__ prompt changes, every per-chat prompt cache entry that
+  # may hold a stale global-fallback value must also be evicted — clearing the
+  # entire dict is the simplest safe approach.
+  if chat_id == GLOBAL_CHAT_ID:
+    with _cache_lock:
+      _prompt_cache.clear()
+  # Re-cache the new value so the next get_prompt() hits the cache.
+  with _cache_lock:
+    _prompt_cache[chat_id] = prompt
   logger.info('DB set_prompt chat_id=%s len=%s', chat_id, len(prompt) if prompt else 0)
 
 
@@ -765,13 +815,14 @@ def clear_settings(chat_id: str) -> None:
   conn = _get_settings_conn()
   conn.execute('DELETE FROM chat_settings WHERE chat_id = ?', (chat_id,))
   conn.commit()
-  with _cache_lock:
-    _prompt_cache.pop(chat_id, None)
-    _permission_cache.pop(chat_id, None)
-    _mode_cache.pop(chat_id, None)
-    _triggers_cache.pop(chat_id, None)
-    _llm2_model_cache.pop(chat_id, None)
-    _subagent_enabled_cache.pop(chat_id, None)
+  if chat_id == GLOBAL_CHAT_ID:
+    # Clearing the global row affects every chat that falls back to it.
+    with _cache_lock:
+      _prompt_cache.clear()
+  else:
+    with _cache_lock:
+      _prompt_cache.pop(chat_id, None)
+  _pop_all_chat_caches(chat_id)
 
 
 def permission_description(level: int) -> str:

@@ -158,8 +158,9 @@ def _handle_prompt(
     )
 
   if not args:
-    # Show current prompt
-    current = get_prompt(chat_id)
+    # Show the per-chat prompt only (not the global fallback), so the user can
+    # tell whether a custom prompt is set or the chat is using the default.
+    current = get_prompt(chat_id, fallback_to_global=False)
     if current:
       return CommandResult(
         command="prompt",
