@@ -735,11 +735,18 @@ def get_prompt(chat_id: str, *, fallback_to_global: bool = True) -> Optional[str
     global_prompt = _get_global_prompt_cached()
     if global_prompt is not None:
       return global_prompt
+    # Last resort: the default prompt override from promptoverride.txt
+    if _DEFAULT_PROMPT_OVERRIDE is not None:
+      return _DEFAULT_PROMPT_OVERRIDE
   return raw
 
 
 def _get_global_prompt_cached() -> Optional[str]:
-  """Return the global prompt value, using the per-chat cache when available."""
+  """Return the global prompt value, using the per-chat cache when available.
+
+  Falls back to the default prompt override from ``promptoverride.txt`` when
+  the database value is NULL, ensuring the file-based default is always live.
+  """
   with _cache_lock:
     global_cached = _prompt_cache.get(GLOBAL_CHAT_ID, _MISSING)
   if global_cached is not _MISSING:
@@ -747,6 +754,9 @@ def _get_global_prompt_cached() -> Optional[str]:
   # Not in cache — read from DB and cache it.
   row = _get_global_setting_row()
   value = row['prompt'] if row is not None else None
+  # Fall back to the default prompt override from promptoverride.txt
+  if value is None:
+    value = _DEFAULT_PROMPT_OVERRIDE
   with _cache_lock:
     _prompt_cache[GLOBAL_CHAT_ID] = value
   return value
