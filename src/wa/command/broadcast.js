@@ -19,6 +19,52 @@ async function reconstructAndSend(sock, targetJid, cachedMsg) {
       const content = { text };
       if (mentions.length > 0) content.mentions = mentions;
 
+      // Newsletter forward: relay raw proto to preserve forwardedNewsletterMessageInfo
+      if (ext?.contextInfo?.forwardedNewsletterMessageInfo) {
+        const { generateMessageID, generateWAMessageFromContent } = await import('baileys');
+        const rawMsg = {
+          extendedTextMessage: {
+            text: ext.text,
+            previewType: ext.previewType ?? 0,
+            contextInfo: ext.contextInfo
+          }
+        };
+        const wrappedMsg = generateWAMessageFromContent(targetJid, rawMsg, { userJid: sock.user.id });
+        await sock.relayMessage(targetJid, wrappedMsg.message, { messageId: wrappedMsg.key.id });
+        return { ok: true };
+      }
+
+      // Invite link with thumbnail (chat.whatsapp.com URL or inviteLinkGroupTypeV2 non-zero/non-DEFAULT)
+      const isInviteLink = (ext?.matchedText && ext.matchedText.startsWith('https://chat.whatsapp.com/')) ||
+        (ext?.inviteLinkGroupTypeV2 !== undefined && ext?.inviteLinkGroupTypeV2 !== 'DEFAULT' && ext?.inviteLinkGroupTypeV2 !== 0);
+      if (isInviteLink) {
+        const toBuffer = (v) => v ? (Buffer.isBuffer(v) ? v : Buffer.from(v, 'base64')) : undefined;
+        const linkPreview = {
+          'matched-text': ext.matchedText,
+          title: ext.title || '',
+          description: ext.description || ''
+        };
+        if (ext.jpegThumbnail) {
+          linkPreview.jpegThumbnail = Buffer.isBuffer(ext.jpegThumbnail)
+            ? ext.jpegThumbnail
+            : Buffer.from(ext.jpegThumbnail, 'base64');
+        }
+        if (ext.thumbnailDirectPath) {
+          linkPreview.highQualityThumbnail = {
+            directPath: ext.thumbnailDirectPath,
+            mediaKey: toBuffer(ext.mediaKey),
+            mediaKeyTimestamp: ext.mediaKeyTimestamp ? Number(ext.mediaKeyTimestamp) : undefined,
+            width: ext.thumbnailWidth,
+            height: ext.thumbnailHeight,
+            fileSha256: toBuffer(ext.thumbnailSha256),
+            fileEncSha256: toBuffer(ext.thumbnailEncSha256)
+          };
+        }
+        content.linkPreview = linkPreview;
+        await sock.sendMessage(targetJid, content);
+        return { ok: true };
+      }
+
       // Reconstruct link preview if present
       if (ext?.canonicalUrl && ext?.matchedText) {
         const linkPreview = {
@@ -309,4 +355,4 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
   }
 }
 
-export { handleBroadcastCommand };
+export { handleBroadcastCommand, reconstructAndSend };
