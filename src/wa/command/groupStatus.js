@@ -6,7 +6,8 @@ import {
 } from "baileys";
 import logger from "../../logger.js";
 import { getSock } from "../connection.js";
-import { unwrapMessage } from "../../messageParser.js";
+import { extractContextInfo } from "../../messageParser.js";
+import { findRawMediaContent } from "./groupStatusHelpers.js";
 import { downloadMediaToFile, mapMediaKind } from "../../mediaHandler.js";
 import config from "../../config.js";
 import { withTimeout } from "../utils.js";
@@ -172,32 +173,36 @@ async function handleGroupStatus({
 
   const caption = (args || "").trim();
   const authorJid = sock.user?.id || senderId;
-  const { contentType, message: innerMessage } =
-    unwrapMessage(msg.message) || {};
   let mediaResult = null;
 
   // Mode 1: Media attached directly to this message
-  if (contentType === "imageMessage" || contentType === "videoMessage") {
+  // Use raw key inspection (NOT normalizeMessageContent) because
+  // normalizeMessageContent transforms imageMessage-with-caption into
+  // extendedTextMessage, destroying the downloadable media object.
+  const rawMedia = findRawMediaContent(msg.message);
+  if (rawMedia) {
     mediaResult = await downloadMediaContent(
-      innerMessage[contentType],
-      contentType,
+      rawMedia.content,
+      rawMedia.contentType,
       msg.key.id,
     );
   }
 
   // Mode 2: Reply to a media message
-  if (!mediaResult && innerMessage?.extendedTextMessage?.contextInfo) {
-    const ctx = innerMessage.extendedTextMessage.contextInfo;
-    if (ctx.quotedMessage) {
-      const { contentType: qType, message: qMsg } =
-        unwrapMessage(ctx.quotedMessage) || {};
-      if (
-        (qType === "imageMessage" || qType === "videoMessage") &&
-        qMsg?.[qType]
-      ) {
+  // Use extractContextInfo (not innerMessage?.extendedTextMessage?.contextInfo)
+  // so contextInfo is found regardless of the outer message type.
+  // Use findRawMediaContent on the quoted message (NOT unwrapMessage) for the
+  // same reason as Mode 1 — unwrapMessage calls normalizeMessageContent which
+  // transforms imageMessage-with-caption into extendedTextMessage, silently
+  // dropping the downloadable media object.
+  if (!mediaResult) {
+    const ctx = extractContextInfo(msg.message);
+    if (ctx?.quotedMessage) {
+      const quotedMedia = findRawMediaContent(ctx.quotedMessage);
+      if (quotedMedia) {
         mediaResult = await downloadMediaContent(
-          qMsg[qType],
-          qType,
+          quotedMedia.content,
+          quotedMedia.contentType,
           ctx.stanzaId,
         );
       }
