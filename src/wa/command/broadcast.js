@@ -8,7 +8,7 @@ async function reconstructAndSend(sock, targetJid, cachedMsg) {
   const msg = cachedMsg.message;
   if (!msg) {
     logger.warn({ targetJid }, 'reconstructAndSend: cachedMsg.message is empty');
-    return false;
+    return { ok: false, reason: 'error' };
   }
 
   try {
@@ -18,8 +18,12 @@ async function reconstructAndSend(sock, targetJid, cachedMsg) {
       const content = { text };
       if (mentions.length > 0) content.mentions = mentions;
       await sock.sendMessage(targetJid, content);
-      return true;
+      return { ok: true };
     }
+
+    // Media keys from the original message are reused as-is. If the WhatsApp CDN validates
+    // keys against the source chat session, recipients in different groups may see silent
+    // download failures. Validate with a real multi-group test before relying on media broadcast.
 
     if (msg.imageMessage) {
       const img = msg.imageMessage;
@@ -38,7 +42,7 @@ async function reconstructAndSend(sock, targetJid, cachedMsg) {
       const mentions = img.contextInfo?.mentionedJid || [];
       if (mentions.length > 0) content.mentions = mentions;
       await sock.sendMessage(targetJid, content);
-      return true;
+      return { ok: true };
     }
 
     if (msg.videoMessage) {
@@ -58,7 +62,7 @@ async function reconstructAndSend(sock, targetJid, cachedMsg) {
       const mentions = vid.contextInfo?.mentionedJid || [];
       if (mentions.length > 0) content.mentions = mentions;
       await sock.sendMessage(targetJid, content);
-      return true;
+      return { ok: true };
     }
 
     if (msg.audioMessage) {
@@ -76,7 +80,7 @@ async function reconstructAndSend(sock, targetJid, cachedMsg) {
         ptt: audio.ptt || false
       };
       await sock.sendMessage(targetJid, content);
-      return true;
+      return { ok: true };
     }
 
     if (msg.documentMessage) {
@@ -97,7 +101,7 @@ async function reconstructAndSend(sock, targetJid, cachedMsg) {
       const mentions = doc.contextInfo?.mentionedJid || [];
       if (mentions.length > 0) content.mentions = mentions;
       await sock.sendMessage(targetJid, content);
-      return true;
+      return { ok: true };
     }
 
     if (msg.stickerMessage) {
@@ -114,16 +118,43 @@ async function reconstructAndSend(sock, targetJid, cachedMsg) {
         mimetype: sticker.mimetype
       };
       await sock.sendMessage(targetJid, content);
-      return true;
+      return { ok: true };
     }
 
     const msgType = Object.keys(msg)[0] || 'unknown';
     logger.warn({ targetJid, msgType }, 'reconstructAndSend: unsupported message type');
-    return false;
+    return { ok: false, reason: 'unsupported' };
   } catch (err) {
     logger.warn({ err, targetJid }, 'reconstructAndSend: failed to send message');
-    return false;
+    return { ok: false, reason: 'error' };
   }
+}
+
+async function fetchGroupJids(sock, chatId) {
+  let groupJids = [];
+  try {
+    const groups = await sock.groupFetchAllParticipating();
+    groupJids = Object.keys(groups || {});
+  } catch (err) {
+    logger.error({ err }, 'failed fetching groups for broadcast');
+    try {
+      await sock.sendMessage(chatId, { text: 'Failed to fetch group list.' });
+    } catch (e) {
+      logger.warn({ e }, 'failed sending group fetch error');
+    }
+    return null;
+  }
+
+  if (groupJids.length === 0) {
+    try {
+      await sock.sendMessage(chatId, { text: 'Bot is not in any groups.' });
+    } catch (e) {
+      logger.warn({ e }, 'failed sending no-groups message');
+    }
+    return null;
+  }
+
+  return groupJids;
 }
 
 async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId, contextMsgId, msg }) {
@@ -144,28 +175,8 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
 
   if (isTextBroadcast) {
     // Text broadcast: /broadcast <text>
-    let groupJids = [];
-    try {
-      const groups = await sock.groupFetchAllParticipating();
-      groupJids = Object.keys(groups || {});
-    } catch (err) {
-      logger.error({ err }, 'failed fetching groups for broadcast');
-      try {
-        await sock.sendMessage(chatId, { text: 'Failed to fetch group list.' });
-      } catch (e) {
-        logger.warn({ e }, 'failed sending group fetch error');
-      }
-      return;
-    }
-
-    if (groupJids.length === 0) {
-      try {
-        await sock.sendMessage(chatId, { text: 'Bot is not in any groups.' });
-      } catch (e) {
-        logger.warn({ e }, 'failed sending no-groups message');
-      }
-      return;
-    }
+    const groupJids = await fetchGroupJids(sock, chatId);
+    if (!groupJids) return;
 
     let sent = 0;
     let failed = 0;
@@ -187,6 +198,13 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
     }
 
     logger.info({ sent, failed, total: groupJids.length, chatId, senderId }, 'broadcast completed');
+  } else if (isDebug && !quotedMessageId) {
+    // Debug mode invoked without a quoted message
+    try {
+      await sock.sendMessage(chatId, { text: 'Reply to a message to use `/broadcast debug`.' });
+    } catch (e) {
+      logger.warn({ e }, 'failed sending debug no-reply error');
+    }
   } else if (quotedMessageId) {
     // Reply broadcast: /broadcast (replying to a message), with optional 'debug' flag
     const cachedMsg = messageCache.get(quotedMessageId);
@@ -211,48 +229,35 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
     }
 
     // Full broadcast to all groups
-    let groupJids = [];
-    try {
-      const groups = await sock.groupFetchAllParticipating();
-      groupJids = Object.keys(groups || {});
-    } catch (err) {
-      logger.error({ err }, 'failed fetching groups for broadcast');
-      try {
-        await sock.sendMessage(chatId, { text: 'Failed to fetch group list.' });
-      } catch (e) {
-        logger.warn({ e }, 'failed sending group fetch error');
-      }
-      return;
-    }
-
-    if (groupJids.length === 0) {
-      try {
-        await sock.sendMessage(chatId, { text: 'Bot is not in any groups.' });
-      } catch (e) {
-        logger.warn({ e }, 'failed sending no-groups message');
-      }
-      return;
-    }
+    const groupJids = await fetchGroupJids(sock, chatId);
+    if (!groupJids) return;
 
     let sent = 0;
     let failed = 0;
+    let unsupported = 0;
     for (const groupJid of groupJids) {
-      const ok = await reconstructAndSend(sock, groupJid, cachedMsg);
-      if (ok) {
+      const result = await reconstructAndSend(sock, groupJid, cachedMsg);
+      if (result.ok) {
         sent += 1;
+      } else if (result.reason === 'unsupported') {
+        unsupported += 1;
       } else {
         failed += 1;
       }
     }
 
     try {
-      const summary = `Broadcast complete: ${sent} group${sent !== 1 ? 's' : ''} sent${failed > 0 ? `, ${failed} failed` : ''}.`;
+      let summary = `Broadcast complete: ${sent} group${sent !== 1 ? 's' : ''} sent${failed > 0 ? `, ${failed} failed` : ''}`;
+      if (unsupported > 0) {
+        summary += ` (${unsupported} unsupported type${unsupported !== 1 ? 's' : ''})`;
+      }
+      summary += '.';
       await sock.sendMessage(chatId, { text: summary });
     } catch (err) {
       logger.warn({ err }, 'failed sending broadcast confirmation');
     }
 
-    logger.info({ sent, failed, total: groupJids.length, chatId, senderId }, 'broadcast completed');
+    logger.info({ sent, failed, unsupported, total: groupJids.length, chatId, senderId }, 'broadcast completed');
   } else {
     try {
       await sock.sendMessage(chatId, { text: 'Usage: `/broadcast <text>`, or reply to a message with `/broadcast` (broadcasts to all groups) or `/broadcast debug` (sends only to this chat).' });
