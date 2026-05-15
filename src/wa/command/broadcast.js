@@ -170,8 +170,9 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
   }
 
   const trimmedText = text && text.trim();
-  const isTextBroadcast = trimmedText && trimmedText.toLowerCase() !== 'debug';
-  const isDebug = trimmedText && trimmedText.toLowerCase() === 'debug';
+  const firstWord = trimmedText ? trimmedText.split(/\s+/)[0].toLowerCase() : '';
+  const isDebug = firstWord === 'debug';
+  const isTextBroadcast = trimmedText && !isDebug;
 
   if (isTextBroadcast) {
     // Text broadcast: /broadcast <text>
