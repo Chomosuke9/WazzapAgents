@@ -14,9 +14,23 @@ async function reconstructAndSend(sock, targetJid, cachedMsg) {
   try {
     if (msg.conversation || msg.extendedTextMessage) {
       const text = msg.conversation || msg.extendedTextMessage?.text;
-      const mentions = msg.extendedTextMessage?.contextInfo?.mentionedJid || [];
+      const ext = msg.extendedTextMessage;
+      const mentions = ext?.contextInfo?.mentionedJid || [];
       const content = { text };
       if (mentions.length > 0) content.mentions = mentions;
+
+      // Reconstruct link preview if present
+      if (ext?.canonicalUrl && ext?.matchedText) {
+        const linkPreview = {
+          'canonical-url': ext.canonicalUrl,
+          'matched-text': ext.matchedText,
+          title: ext.title || ''
+        };
+        if (ext.description) linkPreview.description = ext.description;
+        if (ext.jpegThumbnail) linkPreview.jpegThumbnail = Buffer.isBuffer(ext.jpegThumbnail) ? ext.jpegThumbnail : Buffer.from(ext.jpegThumbnail);
+        content.linkPreview = linkPreview;
+      }
+
       await sock.sendMessage(targetJid, content);
       return { ok: true };
     }
@@ -118,6 +132,28 @@ async function reconstructAndSend(sock, targetJid, cachedMsg) {
         mimetype: sticker.mimetype
       };
       await sock.sendMessage(targetJid, content);
+      return { ok: true };
+    }
+
+    if (msg.groupInviteMessage) {
+      const inv = msg.groupInviteMessage;
+      const content = {
+        groupInvite: {
+          inviteCode: inv.inviteCode,
+          inviteExpiration: Number(inv.inviteExpiration) || 0,
+          text: inv.caption || '',
+          jid: inv.groupJid,
+          subject: inv.groupName || ''
+        }
+      };
+      await sock.sendMessage(targetJid, content);
+      return { ok: true };
+    }
+
+    if (msg.newsletterAdminInviteMessage) {
+      // Relay raw proto message — Baileys does not expose a high-level API for this type
+      const { generateMessageID } = await import('baileys');
+      await sock.relayMessage(targetJid, { newsletterAdminInviteMessage: msg.newsletterAdminInviteMessage }, { messageId: generateMessageID() });
       return { ok: true };
     }
 
