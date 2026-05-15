@@ -172,23 +172,46 @@ async function handleGroupStatus({
 
   const caption = (args || "").trim();
   const authorJid = sock.user?.id || senderId;
-  const { contentType, message: innerMessage } =
-    unwrapMessage(msg.message) || {};
+  const { message: innerMessage } = unwrapMessage(msg.message) || {};
   let mediaResult = null;
 
-  // Mode 1: Media attached directly to this message
-  if (contentType === "imageMessage" || contentType === "videoMessage") {
+  // Mode 1: Media attached directly to this message.
+  // We must check the RAW message (msg.message) directly — normalizeMessageContent
+  // can convert an imageMessage/videoMessage with a caption that looks like a command
+  // into an extendedTextMessage, hiding the actual media type from contentType.
+  const rawMsg = msg.message;
+  const rawNormalized =
+    rawMsg?.ephemeralMessage?.message ||
+    rawMsg?.viewOnceMessage?.message ||
+    rawMsg?.viewOnceMessageV2?.message?.viewOnceMessage?.message ||
+    rawMsg;
+  const directImageContent = rawNormalized?.imageMessage;
+  const directVideoContent = rawNormalized?.videoMessage;
+  const directMediaContent = directImageContent || directVideoContent;
+  const directMediaType = directImageContent
+    ? "imageMessage"
+    : directVideoContent
+      ? "videoMessage"
+      : null;
+
+  if (directMediaType && directMediaContent) {
     mediaResult = await downloadMediaContent(
-      innerMessage[contentType],
-      contentType,
+      directMediaContent,
+      directMediaType,
       msg.key.id,
     );
   }
 
   // Mode 2: Reply to a media message
-  if (!mediaResult && innerMessage?.extendedTextMessage?.contextInfo) {
-    const ctx = innerMessage.extendedTextMessage.contextInfo;
-    if (ctx.quotedMessage) {
+  // contextInfo can live inside extendedTextMessage (text reply) or inside the
+  // media message itself (image/video reply with caption).
+  if (!mediaResult) {
+    const contextInfo =
+      innerMessage?.extendedTextMessage?.contextInfo ||
+      (directMediaType && directMediaContent?.contextInfo) ||
+      null;
+    if (contextInfo?.quotedMessage) {
+      const ctx = contextInfo;
       const { contentType: qType, message: qMsg } =
         unwrapMessage(ctx.quotedMessage) || {};
       if (
