@@ -21,7 +21,7 @@ async function reconstructAndSend(sock, targetJid, cachedMsg) {
 
       // Newsletter forward: relay raw proto to preserve forwardedNewsletterMessageInfo
       if (ext?.contextInfo?.forwardedNewsletterMessageInfo) {
-        const { generateMessageID, generateWAMessageFromContent } = await import('baileys');
+        const { generateWAMessageFromContent } = await import('baileys');
         const rawMsg = {
           extendedTextMessage: {
             text: ext.text,
@@ -40,7 +40,7 @@ async function reconstructAndSend(sock, targetJid, cachedMsg) {
       if (isInviteLink) {
         const toBuffer = (v) => v ? (Buffer.isBuffer(v) ? v : Buffer.from(v, 'base64')) : undefined;
         const linkPreview = {
-          'matched-text': ext.matchedText,
+          'matched-text': ext.matchedText || ext.text,
           title: ext.title || '',
           description: ext.description || ''
         };

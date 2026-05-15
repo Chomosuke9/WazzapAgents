@@ -76,6 +76,14 @@ describe('reconstructAndSend', () => {
     assert.equal(result.ok, true);
     assert.equal(sock._calls.relayMessage.length, 1, 'relayMessage should be called once');
     assert.equal(sock._calls.sendMessage.length, 0, 'sendMessage should not be called');
+
+    const [relayJid, relayPayload] = sock._calls.relayMessage[0];
+    assert.equal(relayJid, 'target@g.us');
+    const etm = relayPayload?.extendedTextMessage;
+    assert.ok(etm, 'relayed payload must contain extendedTextMessage');
+    assert.ok(etm?.contextInfo?.forwardedNewsletterMessageInfo, 'forwardedNewsletterMessageInfo must be preserved');
+    assert.equal(etm.contextInfo.forwardedNewsletterMessageInfo.newsletterJid, '123@newsletter');
+    assert.equal(etm.contextInfo.forwardedNewsletterMessageInfo.newsletterName, 'Test');
   });
 
   it('plain text uses sendMessage with text', async () => {
