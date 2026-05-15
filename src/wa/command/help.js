@@ -21,7 +21,10 @@ const HELP_TEXT = `*WazzapAgents - Daftar Perintah*
 • \`/idle\` [n|n-m|off] — Auto-trigger LLM2 setelah n pesan tanpa bicara
 • \`/group-status\` [text/media] — Kirim group status
 
-_Ketik perintah tanpa argumen untuk melihat status saat ini._`;
+_Ketik perintah tanpa argumen untuk melihat status saat ini._
+
+Kesulitan? silahkan gabung ke group ini untuk bantuan lebih lanjut.
+https://chat.whatsapp.com/BkMkMS2pX376ZWrOkXgDoM`;
 
 async function handleHelp({ chatId }) {
   const sock = getSock();
