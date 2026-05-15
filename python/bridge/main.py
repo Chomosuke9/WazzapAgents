@@ -99,6 +99,7 @@ try:
     send_mark_read,
     send_message,
     send_react_message,
+    send_run_command,
     send_sticker,
     send_typing,
     typing_indicator,
@@ -188,6 +189,7 @@ except ImportError:  # allow running as `python python/bridge/main.py`
     send_mark_read,
     send_message,
     send_react_message,
+    send_run_command,
     send_sticker,
     send_typing,
     typing_indicator,
@@ -860,6 +862,11 @@ async def handle_socket(ws):
   # Uses OrderedDict for LRU eviction to prevent unbounded growth if acks
   # are lost or delayed.
   pending_subagent_attachments: OrderedDict[str, tuple[str, list[dict]]] = OrderedDict()
+  # Tracks `run_command` actions awaiting an action_ack from the gateway.
+  # Keyed by ``request_id``; value is ``(chat_id, command_text)`` so the ack
+  # handler can append a synthetic "Command X executed successfully" entry to
+  # per-chat history. Uses OrderedDict for LRU eviction.
+  pending_run_command_chat: OrderedDict[str, tuple[str, str]] = OrderedDict()
   idle_msg_count: Dict[str, int] = defaultdict(int)
   tasks: Set[asyncio.Task] = set()
   logger.info("Gateway connected")
@@ -2094,6 +2101,27 @@ context block from ``SubTaskTracker.format_context``).
             _track_task(bg_task)
             action_counts[action_type] += 1
             continue
+          if action_type == "run_command":
+            command_text = str(action.get("command") or "").strip()
+            if not command_text:
+              continue
+            request_id = _make_request_id("cmd")
+            await send_run_command(
+              ws,
+              chat_id,
+              command_text,
+              action.get("contextMsgId"),
+              request_id=request_id,
+            )
+            # Track this request so the action_ack handler can append the
+            # corresponding "Command X executed successfully/failed" log
+            # line into per-chat history once Node confirms execution.
+            pending_run_command_chat[request_id] = (chat_id, command_text)
+            pending_run_command_chat.move_to_end(request_id)
+            while len(pending_run_command_chat) > 4096:
+              pending_run_command_chat.popitem(last=False)
+            action_counts[action_type] += 1
+            continue
           logger.warning(
             "unknown action type from parser: %s",
             action_type,
@@ -2279,6 +2307,50 @@ context block from ``SubTaskTracker.format_context``).
                 "request_id": request_id,
                 "entries": len(all_entries),
                 "files": len(attach_files),
+              },
+            )
+        # Handle run_command acks: append a synthetic
+        # "Command X executed successfully/failed" entry to per-chat
+        # history so the LLM sees the outcome on its next turn (this is
+        # how it learns its silent /sticker, /help, /owner-contact, etc.
+        # actually fired). Using the same _append_sticker_log_to_history
+        # helper keeps the entry shape consistent with the existing
+        # /sticker note that the inline command handler emits.
+        if (
+          event_type == "action_ack"
+          and isinstance(payload, dict)
+          and str(payload.get("action") or "") == "run_command"
+        ):
+          rc_request_id = _clean_text(payload.get("requestId"))
+          rc_entry = pending_run_command_chat.pop(rc_request_id, None) if rc_request_id else None
+          if rc_entry is not None:
+            rc_chat_id, rc_command_text = rc_entry
+            ok = bool(payload.get("ok"))
+            # Strip leading slash and grab the canonical command name
+            # from the result if Node provided one, otherwise infer from
+            # the command text. Node's parseSlashCommand already
+            # canonicalises aliases (settings -> setting, etc.).
+            result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+            cmd_name = (
+              str(result.get("command") or "").strip().lower()
+              or rc_command_text.lstrip("/").split(maxsplit=1)[0].lower()
+            )
+            if ok:
+              log_text = f"Command {cmd_name} executed successfully"
+            else:
+              detail = str(payload.get("detail") or "unknown error").strip()
+              log_text = f"Command {cmd_name} failed: {detail}"
+            history = per_chat[rc_chat_id]
+            lock = per_chat_lock[rc_chat_id]
+            async with lock:
+              _append_sticker_log_to_history(history, log_text)
+            logger.info(
+              "run_command ack",
+              extra={
+                "chat_id": rc_chat_id,
+                "request_id": rc_request_id,
+                "command": cmd_name,
+                "ok": ok,
               },
             )
         logger.debug("Gateway ack: %s", event.get("payload"))

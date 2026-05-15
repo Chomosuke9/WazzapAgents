@@ -117,9 +117,12 @@ LLM2_REPLY_TOOL = {
   "function": {
     "name": "reply_message",
     "description": (
-      "Send a text reply. Use context_msg_id to reply to a specific message, "
-      "or 'none' to send without quoting. Inline mentions as @Name (senderRef). "
-      "You can execute command with this tool too."
+      "Send a text reply, and optionally trigger a slash command in the same call. "
+      "Use context_msg_id to reply to a specific message, or 'none' to send without quoting. "
+      "Inline mentions as @Name (senderRef). "
+      "When `command` is provided, it is executed silently on the gateway side "
+      "(NOT sent as a WhatsApp message) using the same context_msg_id as the text reply. "
+      "The text reply itself is always delivered to the chat."
     ),
     "parameters": {
       "type": "object",
@@ -127,16 +130,31 @@ LLM2_REPLY_TOOL = {
         "context_msg_id": {
           "type": "string",
           "description": (
-            "The 6-digit contextMsgId to reply to, or 'none' for a standalone message."
+            "The 6-digit contextMsgId to reply to, or 'none' for a standalone message. "
+            "Also used as the target/anchor for the optional `command`."
           ),
         },
         "text": {
           "type": "string",
-          "description": "The reply text or command.",
+          "description": "The reply text shown to the user. Required.",
           "minLength": 1,
         },
+        # Strict mode: every property must appear in `required`. To keep
+        # `command` optional, we accept `null` and downstream extraction
+        # treats null/empty as "no command".
+        "command": {
+          "type": ["string", "null"],
+          "description": (
+            "Optional slash command to execute alongside the text reply, "
+            "e.g. '/sticker', '/help', '/owner-contact', '/group-status some text'. "
+            "Must start with '/'. The command runs silently on the gateway "
+            "(it is NOT posted to the WhatsApp chat) and inherits the same "
+            "context_msg_id as the reply (so e.g. '/sticker' targets the same "
+            "quoted media as the reply). Pass null when no command is needed."
+          ),
+        },
       },
-      "required": ["context_msg_id", "text"],
+      "required": ["context_msg_id", "text", "command"],
       "additionalProperties": False,
     },
     "strict": True,

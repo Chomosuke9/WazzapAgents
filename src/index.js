@@ -13,6 +13,7 @@ import {
   sendCarousel,
 } from './wa/index.js';
 import { getSock } from './wa/connection.js';
+import { dispatchRunCommand } from './wa/runCommand.js';
 import config from './config.js';
 
 function actionErrorCode(err) {
@@ -143,6 +144,37 @@ async function dispatchCommand(msg) {
 
   if (type === 'mark_read') {
     await markChatRead(payload);
+    return;
+  }
+
+  if (type === 'run_command') {
+    // LLM2 self-triggered slash command (no WhatsApp echo). The actual
+    // dispatch lives in src/wa/runCommand.js to keep the index router
+    // thin. We always emit an action_ack so Python can append a
+    // synthetic "Command X executed/failed" line to LLM history.
+    let result;
+    try {
+      result = await dispatchRunCommand(payload);
+    } catch (err) {
+      const detail = actionErrorDetail(err);
+      emitActionAck({
+        requestId,
+        action: 'run_command',
+        ok: false,
+        detail,
+        result: { command: null, error: detail },
+        code: actionErrorCode(err),
+      });
+      return;
+    }
+    emitActionAck({
+      requestId,
+      action: 'run_command',
+      ok: Boolean(result?.ok),
+      detail: result?.detail || (result?.ok ? 'executed' : 'failed'),
+      result: { command: result?.command || null },
+      code: result?.ok ? null : 'invalid_target',
+    });
     return;
   }
 

@@ -407,6 +407,28 @@ def _extract_actions_from_tool_calls(
         "replyTo": reply_to,
       })
 
+      # Optional `command` parameter: dispatched to the Node gateway as a
+      # `run_command` action *after* the text reply. The command runs
+      # silently — it is NOT posted as a WhatsApp message — and inherits
+      # the same context_msg_id as the reply (so e.g. `/sticker` targets
+      # the same quoted media). Strict-mode tool calls always populate
+      # `command` (with `null` when unused), so we treat null/empty as
+      # "no command".
+      raw_command = args.get("command")
+      command_text = str(raw_command or "").strip() if raw_command else ""
+      if command_text:
+        if not command_text.startswith("/"):
+          logger.warning(
+            "reply_message.command ignored: must start with '/' (got %r)",
+            command_text[:80],
+          )
+        else:
+          actions.append({
+            "type": "run_command",
+            "command": command_text,
+            "contextMsgId": reply_to,
+          })
+
     elif name == "llm_express":
       expression = str(args.get("expression") or "").strip()
       ctx_id = _normalize_context_msg_id(args.get("context_msg_id"))
