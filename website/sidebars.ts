@@ -14,7 +14,7 @@ const sidebars: SidebarsConfig = {
         type: "doc",
         id: "instalasi/index",
       },
-      items: ["instalasi/index", "instalasi/memulai", "instalasi/cara-mendapatkan-lid"],
+      items: ["instalasi/memulai", "instalasi/cara-mendapatkan-lid"],
     },
     {
       type: "category",
@@ -34,6 +34,7 @@ const sidebars: SidebarsConfig = {
       label: "Dokumentasi Developer",
       items: [
         "dev/arsitektur",
+        "dev/setup",
         "dev/gateway",
         "dev/bridge",
         "dev/protokol",
