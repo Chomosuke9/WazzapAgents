@@ -12,6 +12,12 @@
  *   - Inside viewOnceMessage wrapper
  *   - Inside viewOnceMessageV2 wrapper
  *
+ * NOTE: Each wrapper is checked independently — nested wrapper combinations
+ * (e.g. ephemeralMessage wrapping a viewOnceMessage) are NOT supported and
+ * will return null. This combination has not been observed in practice with
+ * the Baileys message formats we handle, so silent null is the correct
+ * fallback rather than adding recursive complexity.
+ *
  * @param {object|null|undefined} rawMessage - Raw Baileys message object (msg.message)
  * @returns {{ contentType: string, content: object }|null}
  */

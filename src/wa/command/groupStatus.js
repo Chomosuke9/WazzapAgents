@@ -6,7 +6,7 @@ import {
 } from "baileys";
 import logger from "../../logger.js";
 import { getSock } from "../connection.js";
-import { unwrapMessage, extractContextInfo } from "../../messageParser.js";
+import { extractContextInfo } from "../../messageParser.js";
 import { findRawMediaContent } from "./groupStatusHelpers.js";
 import { downloadMediaToFile, mapMediaKind } from "../../mediaHandler.js";
 import config from "../../config.js";
@@ -176,7 +176,7 @@ async function handleGroupStatus({
   let mediaResult = null;
 
   // Mode 1: Media attached directly to this message
-  // Use raw key inspection (NOT unwrapMessage/normalizeMessageContent) because
+  // Use raw key inspection (NOT normalizeMessageContent) because
   // normalizeMessageContent transforms imageMessage-with-caption into
   // extendedTextMessage, destroying the downloadable media object.
   const rawMedia = findRawMediaContent(msg.message);
@@ -191,18 +191,18 @@ async function handleGroupStatus({
   // Mode 2: Reply to a media message
   // Use extractContextInfo (not innerMessage?.extendedTextMessage?.contextInfo)
   // so contextInfo is found regardless of the outer message type.
+  // Use findRawMediaContent on the quoted message (NOT unwrapMessage) for the
+  // same reason as Mode 1 — unwrapMessage calls normalizeMessageContent which
+  // transforms imageMessage-with-caption into extendedTextMessage, silently
+  // dropping the downloadable media object.
   if (!mediaResult) {
     const ctx = extractContextInfo(msg.message);
     if (ctx?.quotedMessage) {
-      const { contentType: qType, message: qMsg } =
-        unwrapMessage(ctx.quotedMessage) || {};
-      if (
-        (qType === "imageMessage" || qType === "videoMessage") &&
-        qMsg?.[qType]
-      ) {
+      const quotedMedia = findRawMediaContent(ctx.quotedMessage);
+      if (quotedMedia) {
         mediaResult = await downloadMediaContent(
-          qMsg[qType],
-          qType,
+          quotedMedia.content,
+          quotedMedia.contentType,
           ctx.stanzaId,
         );
       }
