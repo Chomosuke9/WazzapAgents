@@ -219,9 +219,13 @@ async function handleBroadcastCommand({ chatId, senderId, text, quotedMessageId,
 
     if (isDebug) {
       // Debug mode: send only to this chat
-      await reconstructAndSend(sock, chatId, cachedMsg);
+      const debugResult = await reconstructAndSend(sock, chatId, cachedMsg);
       try {
-        await sock.sendMessage(chatId, { text: 'Debug broadcast: message sent to this chat only.' });
+        if (debugResult.ok) {
+          await sock.sendMessage(chatId, { text: 'Debug broadcast: message sent to this chat only.' });
+        } else {
+          await sock.sendMessage(chatId, { text: `Debug broadcast failed: ${debugResult.reason || 'unknown error'}.` });
+        }
       } catch (err) {
         logger.warn({ err }, 'failed sending debug broadcast confirmation');
       }
