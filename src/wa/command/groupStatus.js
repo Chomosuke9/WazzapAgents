@@ -173,33 +173,52 @@ async function handleGroupStatus({
 
   const caption = (args || "").trim();
   const authorJid = sock.user?.id || senderId;
+  const { message: innerMessage } = unwrapMessage(msg.message) || {};
   let mediaResult = null;
 
-  // Mode 1: Media attached directly to this message
-  // Use raw key inspection (NOT normalizeMessageContent) because
-  // normalizeMessageContent transforms imageMessage-with-caption into
-  // extendedTextMessage, destroying the downloadable media object.
-  const rawMedia = findRawMediaContent(msg.message);
-  if (rawMedia) {
+  // Mode 1: Media attached directly to this message.
+  // We must check the RAW message (msg.message) directly — normalizeMessageContent
+  // can convert an imageMessage/videoMessage with a caption that looks like a command
+  // into an extendedTextMessage, hiding the actual media type from contentType.
+  const rawMsg = msg.message;
+  const rawNormalized =
+    rawMsg?.ephemeralMessage?.message ||
+    rawMsg?.viewOnceMessage?.message ||
+    rawMsg?.viewOnceMessageV2?.message?.viewOnceMessage?.message ||
+    rawMsg;
+  const directImageContent = rawNormalized?.imageMessage;
+  const directVideoContent = rawNormalized?.videoMessage;
+  const directMediaContent = directImageContent || directVideoContent;
+  const directMediaType = directImageContent
+    ? "imageMessage"
+    : directVideoContent
+      ? "videoMessage"
+      : null;
+
+  if (directMediaType && directMediaContent) {
     mediaResult = await downloadMediaContent(
-      rawMedia.content,
-      rawMedia.contentType,
+      directMediaContent,
+      directMediaType,
       msg.key.id,
     );
   }
 
   // Mode 2: Reply to a media message
-  // Use extractContextInfo (not innerMessage?.extendedTextMessage?.contextInfo)
-  // so contextInfo is found regardless of the outer message type.
-  // Use findRawMediaContent on the quoted message (NOT unwrapMessage) for the
-  // same reason as Mode 1 — unwrapMessage calls normalizeMessageContent which
-  // transforms imageMessage-with-caption into extendedTextMessage, silently
-  // dropping the downloadable media object.
+  // contextInfo can live inside extendedTextMessage (text reply) or inside the
+  // media message itself (image/video reply with caption).
   if (!mediaResult) {
-    const ctx = extractContextInfo(msg.message);
-    if (ctx?.quotedMessage) {
-      const quotedMedia = findRawMediaContent(ctx.quotedMessage);
-      if (quotedMedia) {
+    const contextInfo =
+      innerMessage?.extendedTextMessage?.contextInfo ||
+      (directMediaType && directMediaContent?.contextInfo) ||
+      null;
+    if (contextInfo?.quotedMessage) {
+      const ctx = contextInfo;
+      const { contentType: qType, message: qMsg } =
+        unwrapMessage(ctx.quotedMessage) || {};
+      if (
+        (qType === "imageMessage" || qType === "videoMessage") &&
+        qMsg?.[qType]
+      ) {
         mediaResult = await downloadMediaContent(
           quotedMedia.content,
           quotedMedia.contentType,
