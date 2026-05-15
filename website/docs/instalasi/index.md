@@ -71,7 +71,7 @@ BOT_OWNER_JIDS=
 :::note
 Setiap nomor bisa memakai JID(nomor handphone) atau LID(ID yang diberikan WhatsApp), jika JID(nomor handphone) tidak bekerja, gunakan LID dengan mengetik `/info` untuk mendapatkan LID-nya.
 
-[**Cara lengkapnya ada disini**](/instalasi/cara-mendapatkan-lid.md)
+[**Cara lengkapnya ada disini**](/instalasi/cara-mendapatkan-lid)
 :::
 
 
@@ -115,7 +115,7 @@ Saat pertama kali jalan, gateway akan menampilkan QR code di terminal. Scan deng
 Kamu harus menambahkan model Ai yang ingin kamu gunakan terlebih dahulu, tanpa modelnya, bot ini hampir tidak bisa melakukan apapun.
 
 Langkah-langkah:
-1. Pastikan nomor kamu sudah terdaftar sebagai nomor owner, [**kalau belum atur itu sekarang juga**](/instalasi/cara-mendapatkan-lid.md).
+1. Pastikan nomor kamu sudah terdaftar sebagai nomor owner, [**kalau belum atur itu sekarang juga**](/instalasi/cara-mendapatkan-lid).
 2. Kirim command `/modelcfg add` ke bot nya, formatnya seperti ini
 
 ![model add](/img/slash_model_add.jpg)
@@ -136,7 +136,7 @@ Ketik `/setting` untuk membuka menu seperti ini
 
 ![slash setting](/img/slash_setting.jpg)
 
-kemudian pencet bagian `Change model`, jika kamu melakukan [langkah tadi](/instalasi#5-Menambahkan-model) dengan benar, maka akan keluar hasil seperti ini
+kemudian pencet bagian `Change model`, jika kamu melakukan [langkah tadi](/instalasi#5-menambahkan-model) dengan benar, maka akan keluar hasil seperti ini
 
 ![slash setting model](/img/gpt_model.jpg)
 
