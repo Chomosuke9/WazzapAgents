@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Awaitable, Callable, Dict, Optional, Tuple
 
@@ -72,6 +73,14 @@ class SubAgentWebhookServer:
     # ``_keeper_task`` holds the always-on background task.
     self._shutdown = False
     self._keeper_task: asyncio.Task | None = None
+    _raw = os.getenv("SUBAGENT_WEBHOOK_MAX_BODY_BYTES", str(200 * 1024 * 1024))
+    try:
+      self._client_max_size = int(_raw)
+    except ValueError:
+      raise ValueError(
+        f"SUBAGENT_WEBHOOK_MAX_BODY_BYTES must be a plain integer number of bytes; "
+        f"got {_raw!r}"
+      ) from None
 
   async def start(self) -> None:
     """Start the webhook server once (no auto-restart).
@@ -86,7 +95,7 @@ class SubAgentWebhookServer:
         "server. Install it via `pip install -r requirements.txt` (or "
         "`pip install aiohttp>=3.9.0`)."
       )
-    app = web.Application()
+    app = web.Application(client_max_size=self._client_max_size)
     app.router.add_post("/subagent/callback", self._handle_callback)
     app.router.add_get("/health", self._handle_health)
     self._runner = web.AppRunner(app)
@@ -270,6 +279,14 @@ class SubAgentWebhookServer:
   async def _handle_callback(self, request: web.Request) -> web.Response:
     try:
       data = await request.json()
+    except web.HTTPRequestEntityTooLarge:
+      logger.warning(
+        "SubAgent callback: request body too large (max %d bytes); "
+        "lower SUBAGENT_MAX_INLINE_FILE_BYTES on the SubAgents side "
+        "or raise SUBAGENT_WEBHOOK_MAX_BODY_BYTES on this side",
+        self._client_max_size,
+      )
+      return web.Response(status=413, text="Request body too large")
     except Exception:
       logger.warning("SubAgent callback: invalid JSON received")
       return web.Response(status=400, text="Invalid JSON")

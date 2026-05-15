@@ -320,3 +320,35 @@ async def test_get_chat_for_session_returns_none_after_finalize():
   assert tracker.get_chat_for_session("sess-G") == "chat-gary"
   tracker.finalize("sess-G", {"success": True, "report": "done"})
   assert tracker.get_chat_for_session("sess-G") is None
+
+
+@pytest.mark.asyncio
+async def test_request_entity_too_large_returns_413():
+  """When aiohttp raises HTTPRequestEntityTooLarge (body exceeds client_max_size),
+  _handle_callback must return 413, not 400."""
+  from aiohttp import web as aiohttp_web
+
+  class _TooBigRequest:
+    async def json(self):
+      raise aiohttp_web.HTTPRequestEntityTooLarge(max_size=200 * 1024 * 1024, actual_size=300 * 1024 * 1024)
+
+  tracker = SubTaskTracker()
+  server = SubAgentWebhookServer(tracker, port=0)
+  resp = await server._handle_callback(_TooBigRequest())
+  assert resp.status == 413
+
+
+def test_client_max_size_default_is_200mb(monkeypatch):
+  """Without any env override, _client_max_size defaults to 200 MB."""
+  monkeypatch.delenv("SUBAGENT_WEBHOOK_MAX_BODY_BYTES", raising=False)
+  tracker = SubTaskTracker()
+  server = SubAgentWebhookServer(tracker, port=0)
+  assert server._client_max_size == 200 * 1024 * 1024
+
+
+def test_client_max_size_from_env(monkeypatch):
+  """SUBAGENT_WEBHOOK_MAX_BODY_BYTES env var overrides the default."""
+  monkeypatch.setenv("SUBAGENT_WEBHOOK_MAX_BODY_BYTES", "10485760")
+  tracker = SubTaskTracker()
+  server = SubAgentWebhookServer(tracker, port=0)
+  assert server._client_max_size == 10485760
