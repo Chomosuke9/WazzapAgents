@@ -20,3 +20,4 @@ export { handleCatch } from './catch.js';
 export { handleOwnerContact } from './ownerContact.js';
 export { handleSubagent } from './subagent.js';
 export { handleIdle } from './idle.js';
+export { handleAnnouncement } from './announcement.js';

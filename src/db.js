@@ -449,6 +449,7 @@ function initSettingsTables(db) {
       subagent_enabled INTEGER NOT NULL DEFAULT 0,
       idle_trigger_min INTEGER DEFAULT NULL,
       idle_trigger_max INTEGER DEFAULT NULL,
+      announcement_enabled INTEGER NOT NULL DEFAULT 1,
       updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
@@ -470,6 +471,11 @@ function initSettingsTables(db) {
   if (!chatSettingsCols.has("idle_trigger_max")) {
     db.run(
       "ALTER TABLE chat_settings ADD COLUMN idle_trigger_max INTEGER DEFAULT NULL",
+    );
+  }
+  if (!chatSettingsCols.has("announcement_enabled")) {
+    db.run(
+      "ALTER TABLE chat_settings ADD COLUMN announcement_enabled INTEGER NOT NULL DEFAULT 1",
     );
   }
 
@@ -937,9 +943,9 @@ function ensureChatRow(chatId) {
   runSettingsQuery(
     `INSERT OR IGNORE INTO chat_settings
       (chat_id, prompt, permission, mode, triggers, llm2_model,
-       subagent_enabled, idle_trigger_min, idle_trigger_max, updated_at)
+       subagent_enabled, idle_trigger_min, idle_trigger_max, announcement_enabled, updated_at)
     SELECT ?, prompt, permission, mode, triggers, llm2_model,
-           subagent_enabled, idle_trigger_min, idle_trigger_max, datetime('now')
+           subagent_enabled, idle_trigger_min, idle_trigger_max, announcement_enabled, datetime('now')
     FROM chat_settings WHERE chat_id = ?`,
     chatId,
     GLOBAL_CHAT_ID,
@@ -1362,6 +1368,31 @@ function setGlobalIdleTrigger(min, max) {
   logger.info({ min, max }, "DB set_global_idle_trigger");
 }
 
+function getAnnouncementEnabled(chatId) {
+  const row = getSettingRow(chatId);
+  return row?.announcement_enabled !== 0;
+}
+
+function setAnnouncementEnabled(chatId, enabled) {
+  const value = enabled ? 1 : 0;
+  ensureChatRow(chatId);
+  runSettingsQuery(
+    "UPDATE chat_settings SET announcement_enabled = ?, updated_at = datetime('now') WHERE chat_id = ?",
+    value,
+    chatId,
+  );
+  logger.info({ chatId, enabled: value }, "DB set_announcement_enabled");
+}
+
+function setGlobalAnnouncementEnabled(enabled) {
+  const value = enabled ? 1 : 0;
+  runSettingsQuery(
+    "UPDATE chat_settings SET announcement_enabled = ?, updated_at = datetime('now')",
+    value,
+  );
+  logger.info({ enabled: value }, "DB set_global_announcement_enabled");
+}
+
 function getDbPath() {
   return getSettingsDbPath();
 }
@@ -1405,6 +1436,9 @@ export {
   getIdleTrigger,
   setIdleTrigger,
   setGlobalIdleTrigger,
+  getAnnouncementEnabled,
+  setAnnouncementEnabled,
+  setGlobalAnnouncementEnabled,
   closeAllDbs,
   VALID_MODES,
   DEFAULT_MODE,

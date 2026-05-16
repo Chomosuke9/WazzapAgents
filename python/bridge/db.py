@@ -47,6 +47,7 @@ _permission_cache: dict[str, int] = {}
 _mode_cache: dict[str, str] = {}
 _triggers_cache: dict[str, str] = {}
 _subagent_enabled_cache: dict[str, bool] = {}
+_announcement_enabled_cache: dict[str, bool] = {}
 # Mute cache: {chat_id: {sender_ref: {"muted_at": str, "duration_m": int, "notified": bool}}}
 _mute_cache: dict[str, dict[str, dict]] = {}
 _cache_lock = threading.Lock()
@@ -441,6 +442,7 @@ def _clear_caches_for(db_kind: str) -> None:
       _mode_cache.clear()
       _triggers_cache.clear()
       _subagent_enabled_cache.clear()
+      _announcement_enabled_cache.clear()
       _llm2_model_cache.clear()
       _default_llm2_model_cache = None
     elif db_kind == 'moderation':
@@ -516,6 +518,7 @@ def _ensure_settings_tables(conn: sqlite3.Connection) -> None:
     ('subagent_enabled', 'INTEGER', '0'),
     ('idle_trigger_min', 'INTEGER', 'NULL'),
     ('idle_trigger_max', 'INTEGER', 'NULL'),
+    ('announcement_enabled', 'INTEGER', '1'),
   ]:
     try:
       conn.execute(f'ALTER TABLE chat_settings ADD COLUMN {col} {col_type} DEFAULT {default}')
@@ -649,6 +652,7 @@ def _pop_all_chat_caches(chat_id: str) -> None:
     _triggers_cache.pop(chat_id, None)
     _llm2_model_cache.pop(chat_id, None)
     _subagent_enabled_cache.pop(chat_id, None)
+    _announcement_enabled_cache.pop(chat_id, None)
 
 
 def _ensure_chat_row(chat_id: str) -> None:
@@ -666,9 +670,9 @@ def _ensure_chat_row(chat_id: str) -> None:
     """
     INSERT OR IGNORE INTO chat_settings
       (chat_id, prompt, permission, mode, triggers, llm2_model,
-       subagent_enabled, idle_trigger_min, idle_trigger_max, updated_at)
+       subagent_enabled, idle_trigger_min, idle_trigger_max, announcement_enabled, updated_at)
     SELECT ?, prompt, permission, mode, triggers, llm2_model,
-           subagent_enabled, idle_trigger_min, idle_trigger_max, datetime('now')
+           subagent_enabled, idle_trigger_min, idle_trigger_max, announcement_enabled, datetime('now')
     FROM chat_settings WHERE chat_id = ?
     """,
     (chat_id, GLOBAL_CHAT_ID),
@@ -1060,6 +1064,7 @@ def reset_settings_connection() -> None:
     _triggers_cache.clear()
     _llm2_model_cache.clear()
     _subagent_enabled_cache.clear()
+    _announcement_enabled_cache.clear()
   logger.debug('Settings DB connection reset; caches cleared')
 
 
@@ -1085,6 +1090,7 @@ def invalidate_chat_caches(chat_id: str) -> None:
     _triggers_cache.pop(chat_id, None)
     _llm2_model_cache.pop(chat_id, None)
     _subagent_enabled_cache.pop(chat_id, None)
+    _announcement_enabled_cache.pop(chat_id, None)
   reset_settings_connection()
   logger.debug('Per-chat settings caches invalidated chat_id=%s', chat_id)
 
@@ -1345,6 +1351,45 @@ def set_idle_trigger(chat_id: str, min_val: Optional[int], max_val: Optional[int
   conn.commit()
   _pop_all_chat_caches(chat_id)
   logger.info('DB set_idle_trigger chat_id=%s min=%s max=%s', chat_id, min_val, max_val)
+
+
+# ---------------------------------------------------------------------------
+# Announcement toggle
+# ---------------------------------------------------------------------------
+
+@_db_resilient('settings')
+def get_announcement_enabled(chat_id: str) -> bool:
+  """Return whether the group receives broadcasts. Default True."""
+  with _cache_lock:
+    cached = _announcement_enabled_cache.get(chat_id, _MISSING)
+  if cached is not _MISSING:
+    return cached  # type: ignore[return-value]
+
+  row = _get_setting_row(chat_id)
+  value = bool(row['announcement_enabled']) if row is not None else True
+  # Default is 1 (enabled); treat NULL as enabled too
+  if row is not None and row['announcement_enabled'] is None:
+    value = True
+  with _cache_lock:
+    _announcement_enabled_cache[chat_id] = value
+  return value
+
+
+@_db_resilient('settings')
+def set_announcement_enabled(chat_id: str, enabled: bool) -> None:
+  enabled = bool(enabled)
+  _ensure_split_ready()
+  _ensure_chat_row(chat_id)
+  conn = _get_settings_conn()
+  conn.execute(
+    'UPDATE chat_settings SET announcement_enabled = ?, updated_at = datetime(?) WHERE chat_id = ?',
+    (1 if enabled else 0, 'now', chat_id),
+  )
+  conn.commit()
+  _pop_all_chat_caches(chat_id)
+  with _cache_lock:
+    _announcement_enabled_cache[chat_id] = enabled
+  logger.info('DB set_announcement_enabled chat_id=%s enabled=%s', chat_id, enabled)
 
 
 # ---------------------------------------------------------------------------
