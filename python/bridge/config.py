@@ -106,4 +106,5 @@ REPLY_DEDUP_MIN_CHARS = _parse_non_negative_int(
 ASSISTANT_ECHO_MERGE_WINDOW_MS = _parse_non_negative_int(
   os.getenv("BRIDGE_ASSISTANT_ECHO_MERGE_WINDOW_MS"), 180000
 )
+PROMPT_MAX_CHARS = _parse_positive_int(os.getenv("PROMPT_MAX_CHARS"), 4000)
 

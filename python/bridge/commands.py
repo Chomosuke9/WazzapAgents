@@ -25,6 +25,7 @@ try:
     VALID_TRIGGERS,
   )
   from .log import setup_logging
+  from .config import PROMPT_MAX_CHARS
 except ImportError:
   import sys
   sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -33,16 +34,9 @@ except ImportError:
     get_mode, set_mode, get_triggers, set_triggers, VALID_MODES, VALID_TRIGGERS,
   )
   from bridge.log import setup_logging  # type: ignore
+  from bridge.config import PROMPT_MAX_CHARS  # type: ignore
 
 logger = setup_logging()
-
-
-def _prompt_max_chars() -> int:
-  try:
-    from .config import _parse_positive_int
-  except ImportError:
-    from bridge.config import _parse_positive_int  # type: ignore
-  return _parse_positive_int(os.getenv("PROMPT_MAX_CHARS"), 4000)
 
 # Match "/command" at start of text, optionally followed by arguments.
 _CMD_RE = re.compile(
@@ -188,12 +182,11 @@ def _handle_prompt(
       reply="Custom prompt cleared. Bot will use the default.",
     )
 
-  prompt_max_chars = _prompt_max_chars()
-  if len(args) > prompt_max_chars:
+  if len(args) > PROMPT_MAX_CHARS:
     return CommandResult(
       command="prompt",
       success=False,
-      reply=f"Prompt too long ({len(args)} chars). Maximum is {prompt_max_chars} characters.",
+      reply=f"Prompt too long ({len(args)} chars). Maximum is {PROMPT_MAX_CHARS} characters.",
     )
 
   set_prompt(chat_id, args)
