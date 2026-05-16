@@ -38,6 +38,7 @@ Key fields:
 | `send_presence` | `chatId`, `type` | Send typing/paused indicator |
 | `send_buttons` | `chatId`, `text`, `buttons` | NativeFlow button message |
 | `send_carousel` | `chatId`, `cards[]` | Carousel card message |
+| `run_command` | `chatId`, `command`, `contextMsgId?` | Execute a slash command silently on the gateway (not posted to WhatsApp). Used by `reply_message`'s optional `command` parameter. |
 
 ## Ack/Error responses (Node → Python)
 

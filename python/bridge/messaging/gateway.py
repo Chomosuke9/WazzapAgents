@@ -204,6 +204,51 @@ async def send_kick_member(
   )
 
 
+async def send_run_command(
+  ws,
+  chat_id: str,
+  command_text: str,
+  context_msg_id: str | None,
+  *,
+  request_id: str,
+):
+  """Ask the gateway to silently execute a slash command.
+
+  Unlike :func:`send_message`, this does NOT post the command text to the
+  WhatsApp chat — the gateway parses ``command_text`` with
+  ``parseSlashCommand`` and invokes the same ``handleCommandListener`` that
+  human-typed commands use. ``context_msg_id`` is forwarded as the anchor so
+  commands like ``/sticker`` and ``/catch`` can resolve the quoted media.
+
+  The gateway returns an ``action_ack`` with ``action == "run_command"`` and a
+  ``result.command`` string we can use to log a synthetic
+  ``Command <name> executed successfully`` line into the LLM history.
+  """
+  if not command_text or not isinstance(command_text, str):
+    return
+  normalized_context_msg_id = (
+    _normalize_context_msg_id(context_msg_id) if context_msg_id else None
+  )
+  payload: dict = {
+    "requestId": request_id,
+    "chatId": chat_id,
+    "command": command_text,
+  }
+  if normalized_context_msg_id:
+    payload["contextMsgId"] = normalized_context_msg_id
+  logger.debug(
+    "outbound",
+    extra={
+      "chat_id": chat_id,
+      "action": "run_command",
+      "request_id": request_id,
+      "command_preview": command_text[:80],
+      "context_msg_id": normalized_context_msg_id,
+    },
+  )
+  await ws.send(json.dumps({"type": "run_command", "payload": payload}))
+
+
 async def send_react_message(
   ws,
   chat_id: str,
