@@ -20,6 +20,7 @@ import {
   handleOwnerContact,
   handleSubagent,
   handleIdle,
+  handleAnnouncement,
 } from "./command/index.js";
 
 async function handleCommandListener(msg, context) {
@@ -206,6 +207,16 @@ async function handleCommandListener(msg, context) {
 
     case "idle":
       await handleIdle({ chatId, senderIsOwner, senderIsAdmin, args });
+      return true;
+
+    case "announcement":
+      await handleAnnouncement({
+        chatId,
+        chatType,
+        senderIsAdmin,
+        senderIsOwner,
+        args,
+      });
       return true;
 
     default:

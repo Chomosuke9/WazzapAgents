@@ -3,6 +3,7 @@ import { isOwnerJid } from "../../participants.js";
 import { messageCache } from "../../caches.js";
 import { getSock } from "../connection.js";
 import { sendRichMessage } from "../interactive/index.js";
+import { getAnnouncementEnabled } from "../../db.js";
 
 async function reconstructAndSend(sock, targetJid, cachedMsg) {
   const msg = cachedMsg.message;
@@ -95,7 +96,12 @@ async function handleBroadcastCommand({
 
     let sent = 0;
     let failed = 0;
+    let skipped = 0;
     for (const groupJid of groupJids) {
+      if (!getAnnouncementEnabled(groupJid)) {
+        skipped += 1;
+        continue;
+      }
       try {
         await sendRichMessage(sock, groupJid, {
           text: trimmedText,
@@ -110,14 +116,14 @@ async function handleBroadcastCommand({
     }
 
     try {
-      const summary = `Broadcast complete: ${sent} group${sent !== 1 ? "s" : ""} sent${failed > 0 ? `, ${failed} failed` : ""}.`;
+      const summary = `Broadcast complete: ${sent} group${sent !== 1 ? "s" : ""} sent${failed > 0 ? `, ${failed} failed` : ""}${skipped > 0 ? `, ${skipped} skipped (opted out)` : ""}.`;
       await sock.sendMessage(chatId, { text: summary });
     } catch (err) {
       logger.warn({ err }, "failed sending broadcast confirmation");
     }
 
     logger.info(
-      { sent, failed, total: groupJids.length, chatId, senderId },
+      { sent, failed, skipped, total: groupJids.length, chatId, senderId },
       "broadcast completed",
     );
   } else if (isDebug && !quotedMessageId) {
@@ -168,7 +174,12 @@ async function handleBroadcastCommand({
 
     let sent = 0;
     let failed = 0;
+    let skipped = 0;
     for (const groupJid of groupJids) {
+      if (!getAnnouncementEnabled(groupJid)) {
+        skipped += 1;
+        continue;
+      }
       const result = await reconstructAndSend(sock, groupJid, cachedMsg);
       if (result.ok) {
         sent += 1;
@@ -178,14 +189,14 @@ async function handleBroadcastCommand({
     }
 
     try {
-      const summary = `Broadcast complete: ${sent} group${sent !== 1 ? "s" : ""} sent${failed > 0 ? `, ${failed} failed` : ""}.`;
+      const summary = `Broadcast complete: ${sent} group${sent !== 1 ? "s" : ""} sent${failed > 0 ? `, ${failed} failed` : ""}${skipped > 0 ? `, ${skipped} skipped (opted out)` : ""}.`;
       await sock.sendMessage(chatId, { text: summary });
     } catch (err) {
       logger.warn({ err }, "failed sending broadcast confirmation");
     }
 
     logger.info(
-      { sent, failed, total: groupJids.length, chatId, senderId },
+      { sent, failed, skipped, total: groupJids.length, chatId, senderId },
       "broadcast completed",
     );
   } else {
