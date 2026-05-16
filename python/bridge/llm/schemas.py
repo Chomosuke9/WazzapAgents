@@ -121,7 +121,9 @@ LLM2_REPLY_TOOL = {
       "Use context_msg_id to reply to a specific message, or 'none' to send without quoting. "
       "Inline mentions as @Name (senderRef). "
       "When `command` is provided, it is executed silently on the gateway side "
-      "(NOT sent as a WhatsApp message) using the same context_msg_id as the text reply. "
+      "(NOT sent as a WhatsApp message). The command's anchor message defaults "
+      "to `context_msg_id`, but you can override it via `command_context_msg_id` "
+      "when the command needs to operate on a DIFFERENT message than the reply. "
       "The text reply itself is always delivered to the chat."
     ),
     "parameters": {
@@ -130,8 +132,10 @@ LLM2_REPLY_TOOL = {
         "context_msg_id": {
           "type": "string",
           "description": (
-            "The 6-digit contextMsgId to reply to, or 'none' for a standalone message. "
-            "Also used as the target/anchor for the optional `command`."
+            "The 6-digit contextMsgId to reply to (i.e. the message the bot's "
+            "text reply will be quoting), or 'none' for a standalone message. "
+            "Used as the default anchor for the optional `command` when "
+            "`command_context_msg_id` is null."
           ),
         },
         "text": {
@@ -148,13 +152,39 @@ LLM2_REPLY_TOOL = {
             "Optional slash command to execute alongside the text reply, "
             "e.g. '/sticker', '/help', '/owner-contact', '/group-status some text'. "
             "Must start with '/'. The command runs silently on the gateway "
-            "(it is NOT posted to the WhatsApp chat) and inherits the same "
-            "context_msg_id as the reply (so e.g. '/sticker' targets the same "
-            "quoted media as the reply). Pass null when no command is needed."
+            "(it is NOT posted to the WhatsApp chat). "
+            "Pass null when no command is needed."
+          ),
+        },
+        # Strict mode: must appear in `required`. Pass null to inherit
+        # from `context_msg_id` (the default behaviour). Set this to a
+        # different 6-digit id when the command should target a message
+        # OTHER than the one the bot is replying to — e.g. the user
+        # writes \"please make this a sticker\" while replying to an
+        # image, and the bot replies to the user's instruction message
+        # but `/sticker` must operate on the quoted image instead.
+        "command_context_msg_id": {
+          "type": ["string", "null"],
+          "description": (
+            "Optional 6-digit contextMsgId that overrides which message the "
+            "`command` operates on. Pass null to make the command inherit "
+            "`context_msg_id`. "
+            "Use this when the reply target and the command target are "
+            "DIFFERENT messages — for example: the user replies to an image "
+            "with \"turn this into a sticker\"; the bot's text reply should "
+            "quote the user's instruction (so set `context_msg_id` to the "
+            "instruction's id), but `/sticker` must operate on the original "
+            "image (so set `command_context_msg_id` to the image's id, which "
+            "is shown as REPLYING TO [#NNNNNN] in the user's message)."
           ),
         },
       },
-      "required": ["context_msg_id", "text", "command"],
+      "required": [
+        "context_msg_id",
+        "text",
+        "command",
+        "command_context_msg_id",
+      ],
       "additionalProperties": False,
     },
     "strict": True,

@@ -409,11 +409,17 @@ def _extract_actions_from_tool_calls(
 
       # Optional `command` parameter: dispatched to the Node gateway as a
       # `run_command` action *after* the text reply. The command runs
-      # silently — it is NOT posted as a WhatsApp message — and inherits
-      # the same context_msg_id as the reply (so e.g. `/sticker` targets
-      # the same quoted media). Strict-mode tool calls always populate
-      # `command` (with `null` when unused), so we treat null/empty as
-      # "no command".
+      # silently — it is NOT posted as a WhatsApp message. Strict-mode
+      # tool calls always populate `command` (with `null` when unused),
+      # so we treat null/empty as "no command".
+      #
+      # The command's anchor (which message it operates on, e.g. which
+      # image `/sticker` should turn into a sticker) defaults to the
+      # same message as the text reply (`reply_to`). The model can
+      # override this via `command_context_msg_id` when the reply
+      # target and the command target are DIFFERENT messages — e.g.
+      # the bot replies to the user's instruction "make this a sticker"
+      # but `/sticker` must operate on the image the user was quoting.
       raw_command = args.get("command")
       command_text = str(raw_command or "").strip() if raw_command else ""
       if command_text:
@@ -423,10 +429,21 @@ def _extract_actions_from_tool_calls(
             command_text[:80],
           )
         else:
+          raw_command_ctx = args.get("command_context_msg_id")
+          if raw_command_ctx is None or (
+            isinstance(raw_command_ctx, str) and not raw_command_ctx.strip()
+          ):
+            command_anchor = reply_to
+          else:
+            command_anchor = _resolve_reply_target(
+              raw_command_ctx,
+              fallback_reply_to=reply_to,
+              allowed_context_ids=allowed_context_ids,
+            )
           actions.append({
             "type": "run_command",
             "command": command_text,
-            "contextMsgId": reply_to,
+            "contextMsgId": command_anchor,
           })
 
     elif name == "llm_express":

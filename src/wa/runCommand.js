@@ -43,13 +43,6 @@ import {
  * pull the media via `extendedTextMessage.contextInfo.{stanzaId,quotedMessage}`.
  */
 function buildFakeMessage({ chatId, commandText, senderId, fromMe, contextMsgId }) {
-  const fakeKey = {
-    id: `runcmd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    remoteJid: chatId,
-    fromMe,
-    participant: senderId || undefined,
-  };
-
   let messageBody;
   let stanzaId = null;
   if (contextMsgId) {
@@ -72,6 +65,21 @@ function buildFakeMessage({ chatId, commandText, senderId, fromMe, contextMsgId 
   if (!messageBody) {
     messageBody = { conversation: commandText };
   }
+
+  // When we have a resolved stanzaId from the quoted context, reuse it as the
+  // fake message's id. This is what makes `replyTo: msg.key.id` resolvable in
+  // downstream handlers like /sticker — the synthetic `runcmd_xxx` id is
+  // never registered in the message cache, so `sendOutgoing` would otherwise
+  // throw "reply target not found". Using the real stanzaId means the bot
+  // ends up quoting the original media (which is the natural target anyway).
+  // When there's no quoted context, fall back to a synthetic id; handlers
+  // that don't need replyTo (e.g. /help, /dashboard) still work.
+  const fakeKey = {
+    id: stanzaId || `runcmd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    remoteJid: chatId,
+    fromMe,
+    participant: senderId || undefined,
+  };
 
   return {
     key: fakeKey,
