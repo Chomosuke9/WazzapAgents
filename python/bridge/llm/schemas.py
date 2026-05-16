@@ -117,30 +117,23 @@ LLM2_REPLY_TOOL = {
   "function": {
     "name": "reply_message",
     "description": (
-      "Send a text reply, and optionally trigger a slash command in the same call. "
-      "Use context_msg_id to reply to a specific message, or 'none' to send without quoting. "
-      "Inline mentions as @Name (senderRef). "
-      "When `command` is provided, it is executed silently on the gateway side "
-      "(NOT sent as a WhatsApp message). The command's anchor message defaults "
-      "to `context_msg_id`, but you can override it via `command_context_msg_id` "
-      "when the command needs to operate on a DIFFERENT message than the reply. "
-      "The text reply itself is always delivered to the chat."
+      "Send a text reply and optionally trigger a silent slash command in the same call. "
+      "context_msg_id: message to quote-reply, or 'none'. "
+      "Inline mentions: @Name (senderRef). "
+      "If command is set, command_context_msg_id MUST be explicitly set — "
+      "use context_msg_id's value if the command targets the same message, "
+      "or a different ID if not. Never null when command is non-null."
     ),
     "parameters": {
       "type": "object",
       "properties": {
         "context_msg_id": {
           "type": "string",
-          "description": (
-            "The 6-digit contextMsgId to reply to (i.e. the message the bot's "
-            "text reply will be quoting), or 'none' for a standalone message. "
-            "Used as the default anchor for the optional `command` when "
-            "`command_context_msg_id` is null."
-          ),
+          "description": "6-digit contextMsgId to quote-reply to, or 'none' for standalone.",
         },
         "text": {
           "type": "string",
-          "description": "The reply text shown to the user. Required.",
+          "description": "Reply text shown to the user.",
           "minLength": 1,
         },
         # Strict mode: every property must appear in `required`. To keep
@@ -149,48 +142,31 @@ LLM2_REPLY_TOOL = {
         "command": {
           "type": ["string", "null"],
           "description": (
-            "Optional slash command to execute alongside the text reply, "
-            "e.g. '/sticker', '/help', '/owner-contact', '/group-status some text'. "
-            "Must start with '/'. The command runs silently on the gateway "
-            "(it is NOT posted to the WhatsApp chat). "
-            "Pass null when no command is needed."
+            "Slash command to execute silently alongside the reply, e.g. '/sticker', "
+            "'/help'. Must start with '/'. Pass null if unused."
           ),
         },
-        # Strict mode: must appear in `required`. Pass null to inherit
-        # from `context_msg_id` (the default behaviour). Set this to a
-        # different 6-digit id when the command should target a message
-        # OTHER than the one the bot is replying to — e.g. the user
-        # writes \"please make this a sticker\" while replying to an
-        # image, and the bot replies to the user's instruction message
-        # but `/sticker` must operate on the quoted image instead.
+        # Strict mode: must appear in `required`. Pass null only when command is null.
+        # Set to context_msg_id if both targets are the same message.
+        # Set to a different ID when the command targets a different message —
+        # e.g. user replies to an image with "make this a sticker":
+        # context_msg_id = user's instruction, command_context_msg_id = image's ID
+        # (shown as REPLYING TO [#NNNNNN] in the user's message).
         "command_context_msg_id": {
           "type": ["string", "null"],
           "description": (
-            "Optional 6-digit contextMsgId that overrides which message the "
-            "`command` operates on. Pass null to make the command inherit "
-            "`context_msg_id`. "
-            "Use this when the reply target and the command target are "
-            "DIFFERENT messages — for example: the user replies to an image "
-            "with \"turn this into a sticker\"; the bot's text reply should "
-            "quote the user's instruction (so set `context_msg_id` to the "
-            "instruction's id), but `/sticker` must operate on the original "
-            "image (so set `command_context_msg_id` to the image's id, which "
-            "is shown as REPLYING TO [#NNNNNN] in the user's message)."
+            "6-digit contextMsgId the command operates on. "
+            "REQUIRED (non-null) when command is set. "
+            "Pass null only when command is null."
           ),
         },
       },
-      "required": [
-        "context_msg_id",
-        "text",
-        "command",
-        "command_context_msg_id",
-      ],
+      "required": ["context_msg_id", "text", "command", "command_context_msg_id"],
       "additionalProperties": False,
     },
     "strict": True,
   },
 }
-
 LLM2_EXPRESS_TOOL = {
   "type": "function",
   "function": {
