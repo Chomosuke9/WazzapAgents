@@ -6,8 +6,7 @@ import {
 } from "baileys";
 import logger from "../../logger.js";
 import { getSock } from "../connection.js";
-import { extractContextInfo } from "../../messageParser.js";
-import { findRawMediaContent } from "./groupStatusHelpers.js";
+import { unwrapMessage } from "../../messageParser.js";
 import { downloadMediaToFile, mapMediaKind } from "../../mediaHandler.js";
 import config from "../../config.js";
 import { withTimeout } from "../utils.js";
@@ -220,8 +219,8 @@ async function handleGroupStatus({
         qMsg?.[qType]
       ) {
         mediaResult = await downloadMediaContent(
-          quotedMedia.content,
-          quotedMedia.contentType,
+          qMsg[qType],
+          qType,
           ctx.stanzaId,
         );
       }
