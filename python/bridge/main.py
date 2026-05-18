@@ -847,6 +847,17 @@ async def _deliver_subagent_result(
   subagent_tracker.clear_history_for_chat(chat_id)
 
 
+def _compute_idle_trigger(min_val: int, max_val: int, msg_count: int) -> bool:
+  """Pure logic for idle trigger probability. No DB calls."""
+  if msg_count < min_val:
+    return False
+  if min_val == max_val:
+    return True
+  if msg_count >= max_val:
+    return True
+  return random.random() < (1.0 / (max_val - msg_count + 1))
+
+
 async def handle_socket(ws):
   per_chat: Dict[str, Deque[WhatsAppMessage]] = defaultdict(deque)
   per_chat_lock: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -947,12 +958,7 @@ async def handle_socket(ws):
     if not cfg:
       return False
     min_val, max_val = cfg
-    if msg_count < min_val:
-      return False
-    if min_val == max_val:
-      return True
-    range_size = max_val - min_val
-    return random.random() < (1.0 / (max_val - msg_count + 1))
+    return _compute_idle_trigger(min_val, max_val, msg_count)
 
   async def process_message_batch(payloads: list[dict]):
     if not payloads:
@@ -1573,7 +1579,6 @@ async def handle_socket(ws):
 
         llm2_ms = int((time.perf_counter() - llm2_started) * 1000)
         record_stat(chat_id, "llm2_calls")
-        idle_msg_count[chat_id] = 0
         # Track LLM2 token usage if available
         if reply_msg is not None:
           _usage = getattr(reply_msg, "usage_metadata", None)
@@ -1587,8 +1592,21 @@ async def handle_socket(ws):
         if reply_msg is None:
           record_stat(chat_id, "errors")
           logger.warning("llm2 failed to produce reply", extra={"chat_id": chat_id})
+          idle_msg_count[chat_id] += len(llm1_trigger_payloads)
+          if _should_idle_trigger(chat_id, idle_msg_count[chat_id]):
+            triggered_count = idle_msg_count[chat_id]
+            idle_msg_count[chat_id] = 0
+            logger.info(
+              "idle trigger fired after llm2 failure",
+              extra={"chat_id": chat_id, "idle_count": triggered_count},
+            )
+            # Counter drained: next batch starts fresh. We intentionally do not
+            # retry LLM2 here to avoid an infinite retry loop on persistent errors.
+            # The idle trigger's purpose here is to prevent the counter from
+            # indefinitely accumulating past max_val through a failure storm.
           _log_slow_batch("llm2_none")
           return
+        idle_msg_count[chat_id] = 0
         tool_calls = getattr(reply_msg, 'tool_calls', None) or []
         if tool_calls:
           actions = _extract_actions_from_tool_calls(
