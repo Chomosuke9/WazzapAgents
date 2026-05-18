@@ -1600,7 +1600,10 @@ async def handle_socket(ws):
               "idle trigger fired after llm2 failure",
               extra={"chat_id": chat_id, "idle_count": triggered_count},
             )
-            # Do NOT retry LLM2 here to avoid infinite retry on persistent error
+            # Counter drained: next batch starts fresh. We intentionally do not
+            # retry LLM2 here to avoid an infinite retry loop on persistent errors.
+            # The idle trigger's purpose here is to prevent the counter from
+            # indefinitely accumulating past max_val through a failure storm.
           _log_slow_batch("llm2_none")
           return
         idle_msg_count[chat_id] = 0

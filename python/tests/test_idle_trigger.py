@@ -19,6 +19,11 @@ import unittest
 
 
 def _compute_idle_trigger(min_val: int, max_val: int, msg_count: int) -> bool:
+  # NOTE: This is a copy of bridge.main._compute_idle_trigger. It must be kept
+  # in sync with the production implementation. bridge.main cannot be imported
+  # under Python 3.9 because other parts of the module use str | None union
+  # syntax (requires 3.10+). If the logic changes in bridge/main.py, update
+  # this copy and the tests accordingly.
   """Pure logic for idle trigger probability. Mirrors bridge/main.py exactly."""
   if msg_count < min_val:
     return False
@@ -98,6 +103,39 @@ class TestComputeIdleTriggerProbabilistic(unittest.TestCase):
     # msg_count == min_val but min_val < max_val → probabilistic branch
     result = _compute_idle_trigger(min_val=2, max_val=8, msg_count=2)
     self.assertIsInstance(result, bool)
+
+
+class TestIdleTriggerFailurePathBehavior(unittest.TestCase):
+    """Validates counter behavior that would apply in the LLM2 failure path.
+
+    In the failure path, idle_msg_count[chat_id] += len(llm1_trigger_payloads)
+    on each failure. Once the count reaches max_val, _should_idle_trigger fires
+    and resets the counter to 0, preventing indefinite accumulation.
+    """
+
+    def test_counter_at_max_val_after_accumulation_fires(self) -> None:
+        """After enough failures to reach max_val, trigger must fire."""
+        # Simulate 5 batches of 2 messages each, min=5, max=10
+        count = 0
+        for _ in range(5):
+            count += 2  # += len(llm1_trigger_payloads)
+        self.assertEqual(count, 10)
+        self.assertTrue(_compute_idle_trigger(5, 10, count))
+
+    def test_counter_just_below_max_val_is_probabilistic(self) -> None:
+        """Counter one below max_val is probabilistic, not guaranteed."""
+        # At max_val-1: probability = 1/(max_val-(max_val-1)+1) = 1/2
+        # So it can return either True or False, but never raises an exception
+        result = _compute_idle_trigger(5, 10, 9)
+        self.assertIsInstance(result, bool)
+
+    def test_counter_reset_after_trigger_fire_starts_fresh(self) -> None:
+        """Simulating the counter reset: after trigger fires (returns True),
+        counter goes to 0. Next call with count=0 returns False (below min)."""
+        # Trigger fires at max_val
+        self.assertTrue(_compute_idle_trigger(5, 10, 10))
+        # After reset, count=0 is below min=5
+        self.assertFalse(_compute_idle_trigger(5, 10, 0))
 
 
 if __name__ == "__main__":
